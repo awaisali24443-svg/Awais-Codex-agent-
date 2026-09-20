@@ -1,0 +1,6 @@
+{
+  "name": "Awais Codex",
+  "description": "Manus-style conversational workspace for Awais Codex featuring live real-time thinking, sub-agent execution, collapsible sidebar history, and automated queuing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
