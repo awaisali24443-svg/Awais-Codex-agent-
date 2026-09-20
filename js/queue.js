@@ -684,6 +684,27 @@ export function finishTurn(project, turn, resultData) {
   }
   renderHistoryList(el.searchHistoryInput ? el.searchHistoryInput.value : '');
 
+  // Push reply to WhatsApp gateway if this is a WhatsApp project turn from Web UI
+  if (project.isWhatsApp || project.source === "whatsapp" || (project.id && String(project.id).startsWith("wa_"))) {
+    if (turn.source !== "whatsapp") {
+      const cleanPhone = (project.sender || project.id || "").replace(/[^0-9]/g, "");
+      fetch("/api/whatsapp/send-reply", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("awais_whatsapp_admin_secret") || "wa_admin_secret_change_me_in_prod"}`
+        },
+        body: JSON.stringify({
+          conversationId: project.id,
+          senderPhone: cleanPhone,
+          message: turn.output || turn.prompt
+        })
+      }).catch(err => {
+        console.warn("[WhatsApp Sync] Could not dispatch reply to WhatsApp endpoint:", err);
+      });
+    }
+  }
+
   processNextInQueue();
 }
 

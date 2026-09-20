@@ -59,29 +59,12 @@ export function init() {
 }
 
 export async function checkAndManageWhatsAppPolling() {
-  const hasLocalWaConvs = state.projects.some(p => p.isWhatsApp || p.source === 'whatsapp' || (p.id && String(p.id).startsWith('wa_')));
-  let hasPairedAgents = false;
+  // Always immediately sync conversations on check
+  syncWhatsAppConversations();
 
-  try {
-    const res = await fetchWithWhatsAppAuth('/api/whatsapp/agents');
-    if (res.ok) {
-      const data = await res.json();
-      if (data && Array.isArray(data.agents) && data.agents.length > 0) {
-        hasPairedAgents = true;
-      }
-    }
-  } catch (_) {}
-
-  const shouldPoll = hasLocalWaConvs || hasPairedAgents;
-
-  if (shouldPoll) {
-    syncWhatsAppConversations();
-    if (!whatsappPollTimer) {
-      whatsappPollTimer = setInterval(syncWhatsAppConversations, 3500);
-    }
-  } else if (whatsappPollTimer) {
-    clearInterval(whatsappPollTimer);
-    whatsappPollTimer = null;
+  // Keep WhatsApp polling active so any inbound WhatsApp messages appear in real-time
+  if (!whatsappPollTimer) {
+    whatsappPollTimer = setInterval(syncWhatsAppConversations, 3500);
   }
 }
 
@@ -141,13 +124,22 @@ export async function syncWhatsAppConversations() {
 }
 
 function loadSettings() {
-  state.apiKey = localStorage.getItem(STORAGE_KEYS.API_KEY) || '';
-  state.selectedEngine = localStorage.getItem(STORAGE_KEYS.ENGINE) || 'antigravity-preview-05-2026';
-  state.autoFallback = localStorage.getItem(STORAGE_KEYS.AUTO_FALLBACK) !== 'false';
-  state.pollRateMs = parseInt(localStorage.getItem(STORAGE_KEYS.POLL_RATE) || '4000', 10);
+  state.apiKey = localStorage.getItem(STORAGE_KEYS.API_KEY) || "";
+  state.selectedEngine = localStorage.getItem(STORAGE_KEYS.ENGINE) || "antigravity-preview-05-2026";
+  state.autoFallback = localStorage.getItem(STORAGE_KEYS.AUTO_FALLBACK) !== "false";
+  state.pollRateMs = parseInt(localStorage.getItem(STORAGE_KEYS.POLL_RATE) || "4000", 10);
   state.activeSessionId = localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION) || null;
 
-  fetch('/api/health')
+  // Sync apiKey to server WhatsApp gateway if stored locally
+  if (state.apiKey) {
+    fetchWithWhatsAppAuth("/api/whatsapp/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ geminiApiKey: state.apiKey })
+    }).catch(() => {});
+  }
+
+  fetch("/api/health")
     .then(r => r.json())
     .then(data => {
       if (data.hasApiKey) {
@@ -173,6 +165,13 @@ function saveSettings() {
   if (el.settingApiKey) {
     state.apiKey = el.settingApiKey.value.trim();
     localStorage.setItem(STORAGE_KEYS.API_KEY, state.apiKey);
+    if (state.apiKey) {
+      fetchWithWhatsAppAuth("/api/whatsapp/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ geminiApiKey: state.apiKey })
+      }).catch(() => {});
+    }
   }
   if (el.settingEngine) {
     state.selectedEngine = el.settingEngine.value;
