@@ -12,7 +12,17 @@ import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import type { RunExecutor } from './executor.js';
 import { createRunRoutes } from './routes/runs.js';
-import { claimAccessKey, clearedSessionCookie, requireSession } from './auth.js';
+import {
+  checkAccessKey,
+  claimAccessKey,
+  clearedSessionCookie,
+  createSession,
+  requireSession,
+  sessionCookie,
+} from './auth.js';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 export interface AppDeps {
   config: AppConfig;
@@ -108,6 +118,22 @@ export function createApp(deps: AppDeps): Express {
     });
   });
 
+  // The sign-in screen. Same secret as the ?k= link — one key, three ways to
+  // present it (form, link, header) — so there is only ever one thing to
+  // rotate or get wrong.
+  app.post('/api/auth/login', (req: Request, res: Response) => {
+    const provided = (req.body as { key?: unknown; password?: unknown } | undefined);
+    const value = provided?.key ?? provided?.password;
+
+    if (!checkAccessKey(value, config.accessKey)) {
+      console.warn('[auth] a sign-in attempt used the wrong key');
+      res.status(401).json({ error: 'invalid_key', message: 'That key is not right.' });
+      return;
+    }
+    res.setHeader('Set-Cookie', sessionCookie(createSession(config.sessionSecret), config.isProduction));
+    res.json({ ok: true });
+  });
+
   app.post('/api/auth/logout', (_req: Request, res: Response) => {
     res.setHeader('Set-Cookie', clearedSessionCookie());
     res.json({ ok: true });
@@ -147,6 +173,22 @@ export function createApp(deps: AppDeps): Express {
 
   app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config }));
 
+  // ---- the app itself -----------------------------------------------------
+
+  const webRoot = locateWebRoot();
+  if (webRoot) {
+    app.use(express.static(webRoot, { index: false, maxAge: '1h' }));
+    // Any other GET is the single-page app. /api is excluded so a typo in an
+    // endpoint still returns JSON rather than a page of HTML.
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+      if (req.path.startsWith('/api') || req.path === '/healthz' || req.path === '/readyz') {
+        return next();
+      }
+      res.sendFile(path.join(webRoot, 'index.html'));
+    });
+  }
+
   // ---- fallthrough --------------------------------------------------------
 
   app.use('/api', (_req: Request, res: Response) => {
@@ -166,4 +208,25 @@ export function createApp(deps: AppDeps): Express {
   });
 
   return app;
+}
+
+/**
+ * Find the UI directory.
+ *
+ * Two layouts to satisfy: `tsx server/main.ts` runs from the repo root with
+ * `web/` next to it, while the bundled `dist/server.cjs` runs from `dist/`.
+ * Both are checked rather than assuming one, because guessing wrong produces a
+ * blank page and no obvious error.
+ */
+function locateWebRoot(): string | null {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [
+    path.join(process.cwd(), 'web'),
+    path.join(here, '..', 'web'),
+    path.join(here, 'web'),
+  ]) {
+    if (fs.existsSync(path.join(candidate, 'index.html'))) return candidate;
+  }
+  console.warn('[app] no web/ directory found — serving API only');
+  return null;
 }

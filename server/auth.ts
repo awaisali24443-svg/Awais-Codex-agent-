@@ -37,6 +37,9 @@ export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365; // a year: bookmark onc
 export const PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: 'GET', path: '/healthz' },
   { method: 'GET', path: '/readyz' },
+  // The sign-in screen posts here. It is public for the obvious reason that it
+  // is how you get a session in the first place.
+  { method: 'POST', path: '/api/auth/login' },
 ];
 
 function base64url(input: Buffer | string): string {

@@ -109,8 +109,10 @@ describe('public route list', () => {
   test('only the health checks are public', () => {
     assert.equal(isPublicRoute('GET', '/healthz'), true);
     assert.equal(isPublicRoute('GET', '/readyz'), true);
-    // There is no login endpoint to be public any more.
-    assert.equal(isPublicRoute('POST', '/api/auth/login'), false);
+    // The sign-in screen posts here; it is how a session is obtained.
+    assert.equal(isPublicRoute('POST', '/api/auth/login'), true);
+    // A GET on it is not public — only the exact method that is needed.
+    assert.equal(isPublicRoute('GET', '/api/auth/login'), false);
     // Health is GET-only.
     assert.equal(isPublicRoute('POST', '/healthz'), false);
     // Everything else is denied.
@@ -195,6 +197,25 @@ describe('http surface (deny by default)', () => {
       redirect: 'manual',
     });
     assert.equal(res.status, 200);
+  });
+
+  test('the sign-in form accepts the key and refuses a wrong one', async () => {
+    const good = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: ACCESS_KEY }),
+    });
+    assert.equal(good.status, 200);
+    const cookie = good.headers.get('set-cookie') ?? '';
+    assert.match(cookie, /ac_session=/);
+
+    const bad = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'guessing' }),
+    });
+    assert.equal(bad.status, 401);
+    assert.equal(bad.headers.get('set-cookie'), null);
   });
 
   test('the x-access-key header works without a session', async () => {
