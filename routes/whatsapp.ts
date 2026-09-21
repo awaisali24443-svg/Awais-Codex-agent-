@@ -1299,7 +1299,7 @@ async function executeTask(
           const ai = getGeminiClient(geminiApiKey);
           const genRes = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: contextualPrompt,
+            contents: augmentedPrompt || contextualPrompt,
           });
           const text = (genRes.text || 'Task processed successfully by Awais Codex.').trim();
           clearInterval(progressTimer);
@@ -1409,12 +1409,13 @@ async function executeTask(
         const ai = getGeminiClient(geminiApiKey);
         const genRes = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
-          contents: contextualPrompt,
+          contents: augmentedPrompt || contextualPrompt,
         });
         const text = (genRes.text || 'Task processed successfully by Awais Codex.').trim();
         const durationSec = Math.round((Date.now() - startTime) / 1000);
         const finalMessage = `✅ *Awais Codex Completed (${durationSec}s)*\n━━━━━━━━━━━━━━━━━━━━\n${text}`;
         await recordTurnComplete(convId, turnId, text, [], 'success');
+        extractAndStoreMemories(userPrompt, text, geminiApiKey, 'whatsapp').catch(() => {});
         if (shouldSendOutboundWhatsApp) {
           await sendWhatsAppMessage(senderPhone, finalMessage);
         }

@@ -201,6 +201,7 @@ export function openMemoryModal() {
   const modal = document.getElementById('memory-modal');
   if (modal) {
     modal.style.display = 'flex';
+    modal.classList.add('open');
     refreshMemoryUI();
   }
 }
@@ -209,6 +210,7 @@ export function closeMemoryModal() {
   const modal = document.getElementById('memory-modal');
   if (modal) {
     modal.style.display = 'none';
+    modal.classList.remove('open');
   }
 }
 

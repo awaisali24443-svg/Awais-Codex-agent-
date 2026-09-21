@@ -355,11 +355,13 @@ export function openDownloadModal() {
   if (!el.downloadArtifactsModal) return;
   renderDownloadModal();
   el.downloadArtifactsModal.style.display = 'flex';
+  el.downloadArtifactsModal.classList.add('open');
 }
 
 export function closeDownloadModal() {
   if (!el.downloadArtifactsModal) return;
   el.downloadArtifactsModal.style.display = 'none';
+  el.downloadArtifactsModal.classList.remove('open');
 }
 
 export function renderDownloadModal() {
