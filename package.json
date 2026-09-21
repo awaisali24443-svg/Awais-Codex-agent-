@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "awais-codex-agent",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -38,5 +38,8 @@
     "sharp": "^0.35.4",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
-  }
+  },
+  "description": "Autonomous AI engineering agent and WhatsApp assistant workspace powered by Antigravity and Google Gemini",
+  "author": "Awais Ali (awaisali24443-svg)",
+  "license": "MIT"
 }

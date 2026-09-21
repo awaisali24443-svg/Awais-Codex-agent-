@@ -49,7 +49,7 @@ export function renderHistoryList(filterQuery = '') {
       <div class="history-item-left">
         <span class="history-item-status-dot ${dotClass}"></span>
         ${waBadge}
-        <span class="history-item-title" title="${escapeHtml(project.title || project.prompt)}">${escapeHtml(project.title || project.prompt.slice(0, 32))}</span>
+        <span class="history-item-title" title="${escapeHtml(project.title || project.prompt || 'Conversation')}">${escapeHtml((project.title || project.prompt || 'Conversation').slice(0, 32))}</span>
         <input class="history-item-edit-input" style="display: none;" />
       </div>
       <div class="history-item-actions">
@@ -77,7 +77,7 @@ export function renderHistoryList(filterQuery = '') {
       e.stopPropagation();
       titleSpan.style.display = 'none';
       editInput.style.display = 'block';
-      editInput.value = project.title || project.prompt;
+      editInput.value = project.title || project.prompt || 'Conversation';
       editInput.focus();
       editInput.select();
     });

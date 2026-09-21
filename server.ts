@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 import { PORT } from './config.js';
@@ -51,23 +52,33 @@ async function startServer() {
   // Serve public assets explicitly
   app.use(express.static(path.join(process.cwd(), 'public')));
 
-  // Vite development middleware or static production serving
-  if (process.env.NODE_ENV !== 'production') {
-    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: isHmrDisabled ? false : undefined,
-      },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
+  // Production build serving or Vite development middleware
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+
+  if (process.env.NODE_ENV === 'production' || hasDist) {
     app.use(express.static(distPath));
     app.get('*', (req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+  } else {
+    try {
+      const isHmrDisabled = process.env.DISABLE_HMR === 'true';
+      const vite = await createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: isHmrDisabled ? false : undefined,
+        },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.warn('[Server] Vite middleware fallback to static root:', viteErr);
+      app.use(express.static(process.cwd()));
+      app.get('*', (req: Request, res: Response) => {
+        res.sendFile(path.join(process.cwd(), 'index.html'));
+      });
+    }
   }
 
   app.listen(PORT, '0.0.0.0', () => {

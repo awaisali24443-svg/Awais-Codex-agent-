@@ -147,6 +147,7 @@ export class WhatsAppAgent {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isConnecting: boolean = false;
   private reconnectAttempts: number = 0;
+  private isManualDisconnect: boolean = false;
 
   constructor(config: WhatsAppAgentConfig) {
     this.pairingKey = config.pairingKey.trim();
@@ -159,6 +160,7 @@ export class WhatsAppAgent {
     if (this.isConnecting) return;
 
     this.isConnecting = true;
+    this.isManualDisconnect = false;
     this.status = 'connecting';
 
     const baseUrl = process.env.WHATSAPP_WS_URL || '';
@@ -220,7 +222,7 @@ export class WhatsAppAgent {
           ? `Host unresolvable (${hostName})`
           : (err.message || 'WebSocket connection error');
 
-        this.scheduleReconnect(isDnsError);
+        if (!this.isManualDisconnect) this.scheduleReconnect(isDnsError);
       });
 
       this.ws.on('close', (code: number, reason: Buffer) => {
@@ -232,13 +234,13 @@ export class WhatsAppAgent {
         if (!this.lastError) {
           this.lastError = reasonStr || `Connection closed (code ${code})`;
         }
-        this.scheduleReconnect(false);
+        if (!this.isManualDisconnect) this.scheduleReconnect(false);
       });
     } catch (err: any) {
       this.isConnecting = false;
       this.status = 'error';
       this.lastError = err?.message || 'Connection failed';
-      this.scheduleReconnect(true);
+      if (!this.isManualDisconnect) this.scheduleReconnect(true);
     }
   }
 
@@ -257,6 +259,7 @@ export class WhatsAppAgent {
   }
 
   public disconnect() {
+    this.isManualDisconnect = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
       try { this.ws.close(); } catch (_) {}
@@ -970,6 +973,17 @@ router.post('/test-send', async (req: Request, res: Response) => {
  * Incoming Message Handler
  */
 async function handleIncomingMessage(req: Request, res: Response) {
+  // HMAC-SHA256 signature verification for Meta webhooks if WHATSAPP_APP_SECRET is configured
+  const appSecret = process.env.WHATSAPP_APP_SECRET;
+  const signature = (req.headers['x-hub-signature-256'] || req.headers['x-hub-signature'] || '') as string;
+  if (appSecret && signature && (req as any).rawBody) {
+    const expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update((req as any).rawBody).digest('hex');
+    if (signature !== expected) {
+      console.warn('[WhatsApp Gateway] Webhook rejected: Invalid X-Hub-Signature-256 signature.');
+      return res.status(401).json({ error: 'Invalid webhook signature' });
+    }
+  }
+
   const body = req.body || {};
   const query = (req.query || {}) as Record<string, string>;
 
@@ -1285,7 +1299,7 @@ async function executeTask(
           const ai = getGeminiClient(geminiApiKey);
           const genRes = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: userPrompt,
+            contents: contextualPrompt,
           });
           const text = (genRes.text || 'Task processed successfully by Awais Codex.').trim();
           clearInterval(progressTimer);
@@ -1395,7 +1409,7 @@ async function executeTask(
         const ai = getGeminiClient(geminiApiKey);
         const genRes = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
-          contents: userPrompt,
+          contents: contextualPrompt,
         });
         const text = (genRes.text || 'Task processed successfully by Awais Codex.').trim();
         const durationSec = Math.round((Date.now() - startTime) / 1000);

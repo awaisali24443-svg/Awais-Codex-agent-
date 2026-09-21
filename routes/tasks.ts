@@ -94,10 +94,34 @@ router.get('/download-artifact', async (req: Request, res: Response) => {
     contentType = 'application/json';
   }
 
-  // 1. Check if the file exists on local disk/workspace
+  // 1. Check if the file exists on local disk/workspace (Safe Sandbox Traversal Protection)
   if (requestedPath) {
-    const normalizedPath = path.isAbsolute(requestedPath) ? requestedPath : path.join(process.cwd(), requestedPath);
-    if (fs.existsSync(normalizedPath) && fs.statSync(normalizedPath).isFile()) {
+    if (requestedPath.includes("..") || requestedPath.includes("\0")) {
+      return res.status(403).json({ error: "Forbidden: Invalid file path." });
+    }
+
+    const forbiddenPatterns = [
+      /\/etc\//i, /\/proc\//i, /\/sys\//i, /\/root\//i, /\/var\//i, /\/home\//i,
+      /^\.env/i, /\.env$/i, /\.env\./i,
+      /\.git/i, /\.npmrc/i, /whatsapp-config\.json/i, /whatsapp-agent-keys\.json/i
+    ];
+    if (forbiddenPatterns.some(p => p.test(requestedPath))) {
+      return res.status(403).json({ error: "Forbidden: Access to system configuration files is denied." });
+    }
+
+    const normalizedPath = path.isAbsolute(requestedPath)
+      ? path.resolve(requestedPath)
+      : path.resolve(process.cwd(), requestedPath);
+
+    const allowedWorkspace = path.resolve(process.cwd());
+    const allowedTmp = path.resolve(os.tmpdir());
+
+    const isInsideAllowed = normalizedPath.startsWith(allowedWorkspace) || normalizedPath.startsWith(allowedTmp);
+    if (isInsideAllowed && fs.existsSync(normalizedPath) && fs.statSync(normalizedPath).isFile()) {
+      const base = path.basename(normalizedPath);
+      if (base.startsWith(".env") || base === ".npmrc" || base.includes("secret") || base.includes("keys.json")) {
+        return res.status(403).json({ error: "Forbidden: Protected file." });
+      }
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
       res.setHeader('Content-Type', contentType);
       return res.sendFile(normalizedPath);
