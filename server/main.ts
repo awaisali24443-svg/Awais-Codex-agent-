@@ -45,6 +45,12 @@ async function boot(): Promise<void> {
   const config: AppConfig = loadConfig();
 
   console.log('[boot] Awais Codex v2');
+  if (config.authMode === 'open') {
+    console.warn('[boot] **********************************************************');
+    console.warn('[boot] AUTH_MODE=open — this deployment is PUBLIC.');
+    console.warn('[boot] Anyone with the URL can run missions on your quota.');
+    console.warn('[boot] **********************************************************');
+  }
   console.log(`[boot] env=${config.nodeEnv} port=${config.port} budget=${config.dailyRunBudget}/day`);
 
   const db: Db = await createDb(config.databaseUrl);
@@ -88,6 +94,11 @@ async function boot(): Promise<void> {
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[boot] listening on http://0.0.0.0:${config.port}`);
     console.log(`[boot] health: /healthz   readiness: /readyz   poller: ${poller}`);
+    console.log(
+      config.authMode === 'open'
+        ? '[boot] access: open (no key needed)'
+        : '[boot] access: your saved ?k=... link, or the x-access-key header',
+    );
     if (!config.geminiApiKey) {
       console.warn('[boot] GEMINI_API_KEY is not set — agent runs will be refused until configured');
     }

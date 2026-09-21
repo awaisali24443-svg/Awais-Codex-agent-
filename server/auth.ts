@@ -1,22 +1,42 @@
 /**
- * Single-operator session auth.
+ * Single-operator access control.
  *
- * No dependency: an HMAC-signed cookie carrying an expiry, verified with a
- * timing-safe comparison. Deny-by-default middleware; the public allow-list is
- * declared in one place (`PUBLIC_ROUTES`) so it can be read at a glance.
+ * There is no login screen and no password prompt. You open one link that
+ * carries a key - `https://app/?k=...` - and the server hands back a long-lived
+ * signed cookie and strips the key out of the address bar. Every visit after
+ * that is a plain URL with no typing at all.
+ *
+ * Why a key at all, given this is for one person: the service is on the public
+ * internet and one mission spends one of ~100 daily runs. An open endpoint is
+ * not a privacy problem, it is a "someone else used up my day" problem. The key
+ * costs nothing after the first visit.
+ *
+ * `AUTH_MODE=open` disables the check completely if that trade is ever wanted.
+ * It logs a warning at boot and says so in /api/status, so it can never be on
+ * by accident and forgotten.
  */
 import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import type { AppConfig } from './config.js';
 
 const COOKIE_NAME = 'ac_session';
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+
+/**
+ * Set when this very request presented a correct access key.
+ *
+ * Without it, `?k=` only worked for a browser (which is redirected and comes
+ * back carrying the cookie). A script asking with `?k=` and no cookie jar was
+ * still rejected, which is precisely the case the key exists to serve.
+ */
+export interface KeyClaimedRequest extends Request {
+  accessKeyClaimed?: boolean;
+}
+export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365; // a year: bookmark once, never think again
 
 /** Routes reachable without a session. Everything else under /api is denied. */
 export const PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: 'GET', path: '/healthz' },
   { method: 'GET', path: '/readyz' },
-  { method: 'POST', path: '/api/auth/login' },
 ];
 
 function base64url(input: Buffer | string): string {
@@ -96,13 +116,53 @@ export function isPublicRoute(method: string, path: string): boolean {
 }
 
 /**
+ * Turn `?k=<access key>` into a session.
+ *
+ * Runs on every request, before the guard. A browser navigation is redirected
+ * to the same URL without the key, so the secret does not sit in the address
+ * bar, in history, or in a screenshot. Anything else (curl, fetch) is left
+ * alone and simply carries on with the cookie now set.
+ */
+export function claimAccessKey(config: AppConfig) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (config.authMode === 'open') return next();
+
+    const raw = req.query?.k;
+    const provided = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof provided !== 'string' || provided === '') return next();
+
+    if (!checkAccessKey(provided, config.accessKey)) {
+      console.warn('[auth] a request presented the wrong access key');
+      res.status(401).json({
+        error: 'invalid_key',
+        message: 'That access key is not right. Use the link you saved, or set AUTH_MODE=open.',
+      });
+      return;
+    }
+
+    res.setHeader('Set-Cookie', sessionCookie(createSession(config.sessionSecret), config.isProduction));
+    (req as KeyClaimedRequest).accessKeyClaimed = true;
+
+    const wantsHtml = String(req.headers.accept ?? '').includes('text/html');
+    if (req.method === 'GET' && wantsHtml) {
+      const withoutKey = (req.originalUrl || '/').replace(/([?&])k=[^&]*&?/, '$1').replace(/[?&]$/, '');
+      res.redirect(302, withoutKey || '/');
+      return;
+    }
+    next();
+  };
+}
+
+/**
  * Deny by default. Anything under /api that is not explicitly public needs a
- * valid session cookie or a bearer token equal to the session secret.
+ * valid session cookie, an `x-access-key` header, or a bearer token equal to
+ * the session secret.
  */
 export function requireSession(config: AppConfig) {
-  const bearerToken = config.sessionSecret;
-
   return (req: Request, res: Response, next: NextFunction): void => {
+    // No check at all in open mode. The boot log and /api/status both say so.
+    if (config.authMode === 'open') return next();
+
     // IMPORTANT: inside a middleware mounted with `app.use('/api', ...)`,
     // `req.path` is relative to the mount point ("/status", not "/api/status").
     // Using it here silently disables the entire check — which is exactly how
@@ -112,27 +172,28 @@ export function requireSession(config: AppConfig) {
     if (isPublicRoute(req.method, fullPath)) return next();
     if (!fullPath.startsWith('/api')) return next();
 
+    if ((req as KeyClaimedRequest).accessKeyClaimed) return next();
+
     const cookie = readCookie(req, COOKIE_NAME);
     if (verifySession(cookie, config.sessionSecret)) return next();
 
+    const headerKey = req.headers['x-access-key'];
+    if (typeof headerKey === 'string' && checkAccessKey(headerKey, config.accessKey)) return next();
+
     const header = req.headers.authorization ?? '';
     if (header.startsWith('Bearer ')) {
-      const provided = Buffer.from(header.slice(7).trim());
-      const expected = Buffer.from(bearerToken);
-      if (provided.length === expected.length && crypto.timingSafeEqual(provided, expected)) {
-        return next();
-      }
+      if (checkAccessKey(header.slice(7).trim(), config.sessionSecret)) return next();
     }
 
     res.status(401).json({
       error: 'unauthorized',
-      message: 'Sign in first: POST /api/auth/login',
+      message: 'Open your saved link (it carries ?k=...) once, and this browser stays signed in for a year.',
     });
   };
 }
 
-/** Constant-time password check for the login route. */
-export function checkPassword(provided: unknown, expected: string): boolean {
+/** Constant-time comparison, for access keys and bearer tokens alike. */
+export function checkAccessKey(provided: unknown, expected: string): boolean {
   if (typeof provided !== 'string' || !expected) return false;
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);

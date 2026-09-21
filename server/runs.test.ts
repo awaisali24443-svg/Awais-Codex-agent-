@@ -26,7 +26,7 @@ import { ScriptedEngine, type ScriptStep } from './engine/scripted.js';
 import type { Engine } from './engine/types.js';
 
 const SECRET = 'test-session-secret-that-is-definitely-long-enough';
-const PASSWORD = 'operator-password-for-tests';
+const PASSWORD = 'runs-access-key-for-tests-1234';
 
 /** Instant: a run is over before the test connects, which exercises replay. */
 const INSTANT: ScriptStep[] = [
@@ -91,7 +91,7 @@ before(async () => {
   const config = loadConfig({
     NODE_ENV: 'test',
     SESSION_SECRET: SECRET,
-    OPERATOR_PASSWORD: PASSWORD,
+    ACCESS_KEY: PASSWORD,
   } as NodeJS.ProcessEnv);
 
   const app = createApp({
@@ -107,15 +107,9 @@ before(async () => {
   });
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-  const login = await fetch(`${base}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ password: PASSWORD }),
-  });
-  assert.equal(login.status, 200);
-  const setCookie = login.headers.get('set-cookie') ?? '';
-  cookie = setCookie.match(/ac_session=[^;]+/)?.[0] ?? '';
-  assert.match(cookie, /^ac_session=/);
+  // No login route any more: the access key is presented directly, which is
+  // exactly what a script or the future UI does.
+  cookie = '';
 });
 
 after(async () => {
@@ -146,7 +140,7 @@ async function api(path: string, init: RequestInit = {}): Promise<ApiResult> {
     ...init,
     headers: {
       'content-type': 'application/json',
-      cookie,
+      'x-access-key': PASSWORD,
       ...(init.headers ?? {}),
     },
   });
@@ -203,7 +197,7 @@ function readStream(
       `${base}/api/runs/${runId}/stream${query}`,
       {
         headers: {
-          cookie,
+          'x-access-key': PASSWORD,
           accept: 'text/event-stream',
           ...(lastEventId !== undefined ? { 'Last-Event-ID': String(lastEventId) } : {}),
         },

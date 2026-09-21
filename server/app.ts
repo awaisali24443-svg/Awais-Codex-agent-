@@ -12,13 +12,7 @@ import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import type { RunExecutor } from './executor.js';
 import { createRunRoutes } from './routes/runs.js';
-import {
-  checkPassword,
-  createSession,
-  clearedSessionCookie,
-  requireSession,
-  sessionCookie,
-} from './auth.js';
+import { claimAccessKey, clearedSessionCookie, requireSession } from './auth.js';
 
 export interface AppDeps {
   config: AppConfig;
@@ -47,6 +41,10 @@ export function createApp(deps: AppDeps): Express {
   // point in the build, and attachments get their own limit later.
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+
+  // Turn ?k=<access key> into a year-long session before anything else looks at
+  // the request, so a bookmarked link works on any route.
+  app.use(claimAccessKey(config));
 
   // Security headers (helmet-equivalent, no dependency).
   app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -110,25 +108,19 @@ export function createApp(deps: AppDeps): Express {
     });
   });
 
-  app.post('/api/auth/login', (req: Request, res: Response) => {
-    const password = (req.body as { password?: unknown } | undefined)?.password;
-    if (!checkPassword(password, config.operatorPassword)) {
-      console.warn('[auth] failed login attempt');
-      res.status(401).json({ error: 'invalid_credentials' });
-      return;
-    }
-    res.setHeader('Set-Cookie', sessionCookie(createSession(config.sessionSecret), config.isProduction));
-    res.json({ ok: true });
-  });
-
   app.post('/api/auth/logout', (_req: Request, res: Response) => {
     res.setHeader('Set-Cookie', clearedSessionCookie());
     res.json({ ok: true });
   });
 
   app.get('/api/auth/session', (req: Request, res: Response) => {
-    // requireSession runs first, so reaching here means authenticated.
-    res.json({ authenticated: true, requestId: (req as Request & { id?: string }).id });
+    // requireSession runs first, so reaching here means authenticated (or that
+    // the deployment is in open mode, which the client is told about).
+    res.json({
+      authenticated: true,
+      authMode: config.authMode,
+      requestId: (req as Request & { id?: string }).id,
+    });
   });
 
   // ---- authenticated API --------------------------------------------------
@@ -143,6 +135,8 @@ export function createApp(deps: AppDeps): Express {
       migrationsApplied: status.migrationsApplied,
       poller: status.poller,
       engine: config.engineName,
+      agent: config.antigravityAgent,
+      authMode: config.authMode,
       activeRuns: deps.executor.activeCount,
       openStreams: deps.bus.channelCount,
       dailyRunBudget: config.dailyRunBudget,

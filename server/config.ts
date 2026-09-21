@@ -32,8 +32,13 @@ export interface AppConfig {
 
   /** Only one process may long-poll a WhatsApp agent. */
   pollerEnabled: boolean;
-  /** Password for the single operator account. */
-  operatorPassword: string;
+  /**
+   * 'key'  - the API needs a session, obtained once from a ?k= link.
+   * 'open' - no check at all. Public internet plus a spendable daily quota.
+   */
+  authMode: 'key' | 'open';
+  /** The secret in the access link. Not a password: nothing ever prompts for it. */
+  accessKey: string;
   /** Hard daily cap on agent runs — the free tier allows ~100/day. */
   dailyRunBudget: number;
   /** Days to keep replayable run events (Neon free tier is 0.5 GB). */
@@ -111,7 +116,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push(`DAILY_RUN_BUDGET must be between 1 and 10000 (got ${dailyRunBudget})`);
   }
 
-  const operatorPassword = (env.OPERATOR_PASSWORD ?? '').trim();
   const geminiApiKey = (env.GEMINI_API_KEY ?? '').trim();
   if (isProduction && engineRaw === 'antigravity' && !geminiApiKey) {
     problems.push(
@@ -120,9 +124,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     );
   }
 
-  if (isProduction && operatorPassword.length < 12) {
+  const authRaw = (env.AUTH_MODE ?? 'key').trim().toLowerCase();
+  if (authRaw !== 'key' && authRaw !== 'open') {
+    problems.push(`AUTH_MODE must be "key" or "open" (got "${authRaw}")`);
+  }
+  const authMode: AppConfig['authMode'] = authRaw === 'open' ? 'open' : 'key';
+
+  // ACCESS_KEY is the name that matches what this is now. OPERATOR_PASSWORD is
+  // still read so an environment configured earlier keeps working.
+  const accessKey = ((env.ACCESS_KEY ?? env.OPERATOR_PASSWORD) ?? '').trim();
+  if (isProduction && authMode === 'key' && accessKey.length < 12) {
     problems.push(
-      'OPERATOR_PASSWORD must be at least 12 characters in production (it is the only login)',
+      'ACCESS_KEY must be at least 12 characters in production — it is the only thing between ' +
+        'the public internet and your daily run quota. Generate one with `openssl rand -hex 24`.',
+    );
+  }
+  if (authMode === 'open') {
+    console.warn(
+      '[config] AUTH_MODE=open — anyone who finds this URL can run missions and spend the daily quota',
     );
   }
 
@@ -142,7 +161,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     antigravityApiBase: (env.ANTIGRAVITY_API_BASE ?? '').trim(),
     antigravityMaxTokens: readInt(env.ANTIGRAVITY_MAX_TOKENS, 0),
     pollerEnabled,
-    operatorPassword,
+    authMode,
+    accessKey,
     dailyRunBudget,
     eventRetentionDays: readInt(env.EVENT_RETENTION_DAYS, 14),
     artifactRetentionDays: readInt(env.ARTIFACT_RETENTION_DAYS, 7),

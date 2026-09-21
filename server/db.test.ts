@@ -233,7 +233,7 @@ describe('config validation', () => {
     DATABASE_URL: 'postgresql://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/db?sslmode=require',
     SESSION_SECRET: 'a'.repeat(40),
     MASTER_KEY: 'b'.repeat(64),
-    OPERATOR_PASSWORD: 'a-long-enough-operator-password',
+    ACCESS_KEY: 'an-access-key-long-enough-to-pass',
     GEMINI_API_KEY: 'test-key',
     PORT: '10000',
   };
@@ -281,7 +281,7 @@ describe('config validation', () => {
     assert.match(loadConfig({ ...productionEnv } as NodeJS.ProcessEnv).antigravityAgent, /^antigravity-preview-\d{2}-\d{4}$/);
   });
 
-  test('refuses a weak operator password in production', () => {
+  test('refuses a weak access key in production', () => {
     assert.throws(
       () =>
         loadConfig({
@@ -289,9 +289,27 @@ describe('config validation', () => {
           DATABASE_URL: 'postgresql://u:p@host/db',
           SESSION_SECRET: 'a'.repeat(40),
           MASTER_KEY: 'b'.repeat(64),
-          OPERATOR_PASSWORD: 'short',
+          ACCESS_KEY: 'short',
         } as NodeJS.ProcessEnv),
-      /OPERATOR_PASSWORD must be at least 12 characters/,
+      /ACCESS_KEY must be at least 12 characters/,
+    );
+  });
+
+  test('open mode needs no key at all', () => {
+    const { ACCESS_KEY: _omitted, ...rest } = productionEnv;
+    const config = loadConfig({ ...rest, AUTH_MODE: 'open' } as NodeJS.ProcessEnv);
+    assert.equal(config.authMode, 'open');
+    assert.equal(config.accessKey, '');
+  });
+
+  test('key mode is the default', () => {
+    assert.equal(loadConfig({ ...productionEnv } as NodeJS.ProcessEnv).authMode, 'key');
+  });
+
+  test('an unknown AUTH_MODE is rejected rather than silently guessed', () => {
+    assert.throws(
+      () => loadConfig({ ...productionEnv, AUTH_MODE: 'yolo' } as NodeJS.ProcessEnv),
+      /AUTH_MODE must be "key" or "open"/,
     );
   });
 

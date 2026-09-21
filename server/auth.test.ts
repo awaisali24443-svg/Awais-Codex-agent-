@@ -15,13 +15,20 @@ import { createApp } from './app.js';
 import { createDb, type Db } from './db.js';
 import { migrate } from './migrate.js';
 import { loadConfig } from './config.js';
-import { createSession, verifySession, readCookie, isPublicRoute, checkPassword } from './auth.js';
+import {
+  SESSION_TTL_MS,
+  checkAccessKey,
+  createSession,
+  isPublicRoute,
+  readCookie,
+  verifySession,
+} from './auth.js';
 import { EventBus } from './events.js';
 import { RunExecutor } from './executor.js';
 import { ScriptedEngine } from './engine/scripted.js';
 
 const SECRET = 'test-session-secret-that-is-definitely-long-enough';
-const PASSWORD = 'operator-password-for-tests';
+const ACCESS_KEY = 'access-key-for-tests-123456';
 
 let db: Db;
 let server: Server;
@@ -34,7 +41,7 @@ before(async () => {
   const config = loadConfig({
     NODE_ENV: 'test',
     SESSION_SECRET: SECRET,
-    OPERATOR_PASSWORD: PASSWORD,
+    ACCESS_KEY: ACCESS_KEY,
   } as NodeJS.ProcessEnv);
 
   const app = createApp({
@@ -74,7 +81,9 @@ describe('session tokens', () => {
   });
 
   test('reject an expired token', () => {
-    const token = createSession(SECRET, Date.now() - 1000 * 60 * 60 * 24 * 31);
+    // Derived from the real TTL: a hardcoded 31 days silently stopped testing
+    // expiry the moment the session lifetime changed.
+    const token = createSession(SECRET, Date.now() - SESSION_TTL_MS - 60_000);
     assert.equal(verifySession(token, SECRET), false);
   });
 
@@ -97,10 +106,11 @@ describe('cookie parsing', () => {
 });
 
 describe('public route list', () => {
-  test('only health and login are public', () => {
+  test('only the health checks are public', () => {
     assert.equal(isPublicRoute('GET', '/healthz'), true);
     assert.equal(isPublicRoute('GET', '/readyz'), true);
-    assert.equal(isPublicRoute('POST', '/api/auth/login'), true);
+    // There is no login endpoint to be public any more.
+    assert.equal(isPublicRoute('POST', '/api/auth/login'), false);
     // Health is GET-only.
     assert.equal(isPublicRoute('POST', '/healthz'), false);
     // Everything else is denied.
@@ -111,13 +121,13 @@ describe('public route list', () => {
   });
 });
 
-describe('password check', () => {
-  test('accepts the exact password only', () => {
-    assert.equal(checkPassword(PASSWORD, PASSWORD), true);
-    assert.equal(checkPassword('wrong', PASSWORD), false);
-    assert.equal(checkPassword(undefined, PASSWORD), false);
-    assert.equal(checkPassword(123, PASSWORD), false);
-    assert.equal(checkPassword(PASSWORD, ''), false);
+describe('access key check', () => {
+  test('accepts the exact key only', () => {
+    assert.equal(checkAccessKey(ACCESS_KEY, ACCESS_KEY), true);
+    assert.equal(checkAccessKey('wrong', ACCESS_KEY), false);
+    assert.equal(checkAccessKey(undefined, ACCESS_KEY), false);
+    assert.equal(checkAccessKey(123, ACCESS_KEY), false);
+    assert.equal(checkAccessKey(ACCESS_KEY, ''), false);
   });
 });
 
@@ -144,22 +154,16 @@ describe('http surface (deny by default)', () => {
     assert.equal(res.status, 401);
   });
 
-  test('login rejects a bad password and accepts the real one', async () => {
-    const bad = await fetch(`${base}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: 'wrong' }),
+  test('the ?k= link hands back a session and strips the key', async () => {
+    const claimed = await fetch(`${base}/api/status?k=${ACCESS_KEY}`, {
+      // A browser navigation: the key must not stay in the address bar.
+      headers: { accept: 'text/html,application/xhtml+xml' },
+      redirect: 'manual',
     });
-    assert.equal(bad.status, 401);
+    assert.equal(claimed.status, 302);
+    assert.equal(claimed.headers.get('location'), '/api/status');
 
-    const good = await fetch(`${base}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: PASSWORD }),
-    });
-    assert.equal(good.status, 200);
-
-    const cookie = good.headers.get('set-cookie') ?? '';
+    const cookie = claimed.headers.get('set-cookie') ?? '';
     assert.match(cookie, /ac_session=/);
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Lax/);
@@ -167,11 +171,38 @@ describe('http surface (deny by default)', () => {
     const authed = await fetch(`${base}/api/status`, {
       headers: { cookie: cookie.split(';')[0] },
     });
-    assert.equal(authed.status, 200, 'a valid session must be accepted');
+    assert.equal(authed.status, 200, 'the session from the link must be accepted');
 
     const body = (await authed.json()) as { version: number; dailyRunBudget: number };
     assert.equal(body.version, 2);
     assert.equal(body.dailyRunBudget, 100);
+  });
+
+  test('a wrong key is refused and sets no session', async () => {
+    const res = await fetch(`${base}/api/status?k=not-the-key`, {
+      headers: { accept: 'text/html' },
+      redirect: 'manual',
+    });
+    assert.equal(res.status, 401);
+    assert.equal(res.headers.get('set-cookie'), null, 'a bad key must never mint a session');
+  });
+
+  test('curl-style requests are served directly instead of redirected', async () => {
+    // No text/html in Accept: a script asking with ?k= wants an answer, not a
+    // redirect it has to follow.
+    const res = await fetch(`${base}/api/status?k=${ACCESS_KEY}`, {
+      headers: { accept: '*/*' },
+      redirect: 'manual',
+    });
+    assert.equal(res.status, 200);
+  });
+
+  test('the x-access-key header works without a session', async () => {
+    const ok = await fetch(`${base}/api/status`, { headers: { 'x-access-key': ACCESS_KEY } });
+    assert.equal(ok.status, 200);
+
+    const bad = await fetch(`${base}/api/status`, { headers: { 'x-access-key': 'nope' } });
+    assert.equal(bad.status, 401);
   });
 
   test('a bearer token equal to the session secret is accepted (for scripts)', async () => {
