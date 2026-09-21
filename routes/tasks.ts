@@ -9,18 +9,119 @@ import {
   callAntigravityWithRetry,
   extractOutputTextFromSteps
 } from '../antigravity-client.js';
-import { generateStandaloneApkBuffer } from '../apk-generator.js';
 import { getServerCallBudget, incrementServerCallBudget } from '../call-budget-server.js';
 import { injectMemoryIntoPrompt, extractAndStoreMemories } from '../memory-engine.js';
 
 const router = Router();
 
+export interface NormalizedMissionActivity {
+  phase: 'planning' | 'scaffolding' | 'implementation' | 'build' | 'verification' | 'general';
+  title: string;
+  detail?: string;
+  toolName?: string;
+  status: 'running' | 'completed' | 'failed';
+  artifact?: string;
+}
+
 /**
- * Injects previous conversation turns into the prompt context so that
- * the Antigravity agent maintains continuous conversational memory across turns.
+ * Normalizes low-level Antigravity steps and tool calls into observable, high-level mission activity cards.
  */
-export function buildContextualPrompt(prompt: string, history?: any[]): string {
-  if (!history || !Array.isArray(history) || history.length === 0) {
+export function normalizeMissionActivity(eventData: any, eventType: string): NormalizedMissionActivity | null {
+  const step = eventData.step || {};
+  const delta = eventData.delta || {};
+  const toolCall = step.tool_calls?.[0] || delta.tool_calls?.[0] || null;
+
+  if (toolCall) {
+    const name = toolCall.name || '';
+    const args = toolCall.arguments || {};
+    const targetFile = args.TargetFile || args.path || args.filename || '';
+    const command = args.command || args.cmd || '';
+
+    if (name === 'create_file') {
+      return {
+        phase: 'implementation',
+        title: targetFile ? `Creating ${path.basename(targetFile)}` : 'Creating source file',
+        detail: targetFile || undefined,
+        toolName: name,
+        status: step.status === 'completed' ? 'completed' : 'running'
+      };
+    }
+
+    if (name === 'edit_file' || name === 'replace_file_content') {
+      return {
+        phase: 'implementation',
+        title: targetFile ? `Updating ${path.basename(targetFile)}` : 'Modifying source code',
+        detail: targetFile || undefined,
+        toolName: name,
+        status: step.status === 'completed' ? 'completed' : 'running'
+      };
+    }
+
+    if (name === 'run_command' || name === 'bash') {
+      const isBuild = /gradle|mvn|build|cargo|cmake|assemble/i.test(command);
+      const isTest = /test|pytest|jest|check/i.test(command);
+      const isInstall = /npm i|pip install|apt|yarn add/i.test(command);
+
+      let phase: NormalizedMissionActivity['phase'] = 'implementation';
+      let title = `Executing: ${command.slice(0, 50)}${command.length > 50 ? '...' : ''}`;
+      if (isBuild) {
+        phase = 'build';
+        title = 'Compiling project build...';
+      } else if (isTest) {
+        phase = 'verification';
+        title = 'Running test suite...';
+      } else if (isInstall) {
+        phase = 'scaffolding';
+        title = 'Installing dependencies...';
+      }
+
+      return {
+        phase,
+        title,
+        detail: command || undefined,
+        toolName: name,
+        status: step.status === 'completed' ? 'completed' : 'running'
+      };
+    }
+
+    return {
+      phase: 'implementation',
+      title: `Executing ${name}`,
+      detail: targetFile || command || undefined,
+      toolName: name,
+      status: step.status === 'completed' ? 'completed' : 'running'
+    };
+  }
+
+  if (step.summary) {
+    return {
+      phase: 'general',
+      title: step.summary,
+      status: step.status === 'completed' ? 'completed' : 'running'
+    };
+  }
+
+  if (eventType === 'thought' || delta.type === 'thought') {
+    const thoughtText = delta.thought_summary || delta.thought || step.summary || '';
+    if (thoughtText) {
+      return {
+        phase: 'planning',
+        title: thoughtText.length > 80 ? `${thoughtText.slice(0, 77)}...` : thoughtText,
+        status: 'running'
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Injects previous conversation turns into the prompt context for fresh sessions.
+ * When hasPreviousInteractionId is true, Antigravity's remote interaction session maintains
+ * state natively, so history injection is skipped to optimize token consumption.
+ */
+export function buildContextualPrompt(prompt: string, history?: any[], hasPreviousInteractionId?: boolean): string {
+  if (hasPreviousInteractionId || !history || !Array.isArray(history) || history.length === 0) {
     return prompt;
   }
 
@@ -177,22 +278,11 @@ router.get('/download-artifact', async (req: Request, res: Response) => {
     }
   }
 
-  // 3. Fallback: If it's an APK file, generate a valid standalone Android debug package with valid CRC32
-  if (filename.endsWith('.apk') || requestedPath.toLowerCase().includes('.apk')) {
-    const appTitle = filename.replace(/\.apk$/i, '').replace(/[-_]/g, ' ') || 'Awais Codex App';
-    const apkBuffer = generateStandaloneApkBuffer(appTitle, 'com.awaiscodex.app');
-
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-    res.setHeader('Content-Length', String(apkBuffer.length));
-    return res.send(apkBuffer);
-  }
-
-  // 4. Generic fallback text/json file
-  const fallbackContent = Buffer.from(`Artifact: ${filename}\nPath: ${requestedPath || 'N/A'}\nGenerated by: Awais Codex\nTimestamp: ${new Date().toISOString()}\n`);
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-  res.setHeader('Content-Type', contentType);
-  return res.send(fallbackContent);
+  // 3. Truthful response: If artifact was not produced in the remote sandbox, report truthfully
+  return res.status(404).json({
+    success: false,
+    error: `Artifact "${filename}" was not found in the remote environment sandbox. Ensure build commands (e.g. Gradle, build scripts) completed successfully in the mission.`
+  });
 });
 
 // Real-time SSE streaming endpoint with Persistent Memory & Antigravity Preview Engine
@@ -228,8 +318,9 @@ router.all('/stream-task', async (req: Request, res: Response) => {
     return res.status(400).json({ error: { message: 'Prompt or files required.' } });
   }
 
-  // 1. Inject within-session dialogue memory
-  const contextualPrompt = buildContextualPrompt(rawPrompt, history);
+  const hasPreviousInteractionId = Boolean(previousInteractionId && typeof previousInteractionId === 'string' && previousInteractionId.trim());
+  // 1. Inject within-session dialogue memory only when starting a fresh session
+  const contextualPrompt = buildContextualPrompt(rawPrompt, history, hasPreviousInteractionId);
   // 2. Augment with cross-session persistent agent memory
   const augmentedPrompt = contextualPrompt ? injectMemoryIntoPrompt(contextualPrompt) : '';
 
@@ -406,6 +497,11 @@ router.all('/stream-task', async (req: Request, res: Response) => {
             extractAndStoreMemories(rawPrompt, accumulatedOutput, apiKey, 'web').catch(() => {});
           }
 
+          const activity = normalizeMissionActivity(eventData, eventType);
+          if (activity) {
+            eventData.normalized_activity = activity;
+          }
+
           res.write(`event: ${eventType}\ndata: ${JSON.stringify(eventData)}\n\n`);
           if (typeof (res as any).flush === 'function') (res as any).flush();
           continue;
@@ -456,8 +552,9 @@ router.post('/execute-task', async (req: Request, res: Response) => {
     return res.status(400).json({ error: { message: 'Prompt or files required.' } });
   }
 
-  // 1. Contextual within-session history
-  const contextualPrompt = buildContextualPrompt(rawPrompt, history);
+  const hasPreviousInteractionId = Boolean(previousInteractionId && typeof previousInteractionId === 'string' && previousInteractionId.trim());
+  // 1. Contextual within-session history only if starting fresh
+  const contextualPrompt = buildContextualPrompt(rawPrompt, history, hasPreviousInteractionId);
   // 2. Cross-session persistent memory
   const augmentedPrompt = contextualPrompt ? injectMemoryIntoPrompt(contextualPrompt) : '';
 

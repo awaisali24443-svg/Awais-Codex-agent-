@@ -9,6 +9,7 @@ import { renderConversation, detectStepRole, getRoleLabel } from './execution-ca
 import { renderHistoryList, updateAgentStatusHeader, updateQueueBadge, showWelcomeHero } from './sidebar.js';
 import { updateArtifactsDockForProject } from './artifacts.js';
 import { incrementCallCount } from './call-budget.js';
+import { updateMobileLiveActivity } from './mobile-nav.js';
 
 let openSettingsCallback = null;
 let showToastCallback = null;
@@ -267,6 +268,13 @@ export async function executeTurn(projectId, turnId) {
 
         let eventData;
         try { eventData = JSON.parse(dataStr); } catch (_) { continue; }
+
+        if (eventData.normalized_activity) {
+          turn.currentActivity = eventData.normalized_activity.title;
+          turn.activityDetail = eventData.normalized_activity.detail;
+          turn.activityPhase = eventData.normalized_activity.phase;
+          updateMobileLiveActivity(eventData.normalized_activity);
+        }
 
         const delta = eventData.delta || {};
         const step = eventData.step || {};
@@ -694,6 +702,13 @@ export function finishTurn(project, turn, resultData) {
   }
   renderHistoryList(el.searchHistoryInput ? el.searchHistoryInput.value : '');
 
+  updateMobileLiveActivity({
+    phase: 'completed',
+    title: 'Mission Completed',
+    detail: 'Build outputs and deliverables ready',
+    status: 'completed'
+  });
+
   // Push reply to WhatsApp gateway if this is a WhatsApp project turn from Web UI
   if (project.isWhatsApp || project.source === "whatsapp" || (project.id && String(project.id).startsWith("wa_"))) {
     if (turn.source !== "whatsapp") {
@@ -740,6 +755,13 @@ export function failTurn(project, turn, errorMsg) {
     updateArtifactsDockForProject(project);
   }
   renderHistoryList(el.searchHistoryInput ? el.searchHistoryInput.value : '');
+
+  updateMobileLiveActivity({
+    phase: 'failed',
+    title: 'Mission Failed or Paused',
+    detail: errorMsg || 'Check error logs',
+    status: 'failed'
+  });
 
   processNextInQueue();
 }

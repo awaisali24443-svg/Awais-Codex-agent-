@@ -10,6 +10,7 @@ import { setQueueHandlers, handlePromptSubmission, cancelTask, retryTask } from 
 import { updateCallBudgetUI } from './call-budget.js';
 import { getGitHubToken, setGitHubToken, checkGitHubStatus, testGitHubConnection, setGitHubHandlers } from './github.js';
 import { initMemoryUI, setMemoryHandlers, openMemoryModal } from './memory.js';
+import { initMobileNav } from './mobile-nav.js';
 
 let deferredPwaPrompt = null;
 let whatsappPollTimer = null;
@@ -57,6 +58,7 @@ export function init() {
 
   updateEnginePillDisplay();
   updateQueueBadge();
+  initMobileNav();
 
   // Check if polling is needed and start polling loop only if WhatsApp agent paired or WA conversations exist
   checkAndManageWhatsAppPolling();
@@ -273,7 +275,7 @@ function loadWhatsAppAgents() {
     .catch(() => {});
 }
 
-function openSettings() {
+export function openSettings() {
   if (!el.settingsModal) return;
   if (el.settingApiKey) el.settingApiKey.value = state.apiKey;
   if (el.settingEngine) el.settingEngine.value = state.selectedEngine;
@@ -1197,3 +1199,5 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
+export { openSettings as openSettingsModal };

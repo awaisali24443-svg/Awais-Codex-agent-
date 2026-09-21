@@ -34,7 +34,7 @@
       }, true);
     })();
   </script>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Awais Codex — Autonomous AI Assistant</title>
   <meta name="description" content="Manus-style conversational workspace for Awais Codex featuring real-time thinking, live sub-agent execution, remote Linux sandbox monitoring, and automated queuing." />
   <meta property="og:title" content="Awais Codex — Autonomous AI Assistant" />
@@ -2867,7 +2867,509 @@
       justify-content: center;
       font-size: 12px;
       font-weight: 700;
+    }
+    /* ==================================================
+       MOBILE-FIRST AUTONOMOUS CONTROL CENTER STYLES
+    ================================================== */
+    .mobile-bottom-nav {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: calc(64px + env(safe-area-inset-bottom, 0px));
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      background: rgba(18, 18, 22, 0.94);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid var(--border-subtle);
+      z-index: 1000;
+      align-items: center;
+      justify-content: space-around;
+      box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.4);
+    }
+    .mobile-nav-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      background: transparent;
+      border: none;
+      color: var(--text-subtle);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      min-width: 60px;
+      min-height: 48px;
+      padding: 6px 0;
+      transition: all 0.15s ease;
+      touch-action: manipulation;
+    }
+    .mobile-nav-btn:active {
+      transform: scale(0.94);
+    }
+    .mobile-nav-btn.active {
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .mobile-nav-btn.active svg {
+      stroke: var(--accent);
+      filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.5));
+    }
+    .mobile-nav-btn-create {
+      position: relative;
+      top: -8px;
+    }
+    .create-btn-circle {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 16px rgba(37, 99, 235, 0.5);
+      transition: transform 0.15s ease;
+    }
+    .mobile-nav-btn-create:active .create-btn-circle {
+      transform: scale(0.9);
+    }
+    .btn-mobile-back {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--accent-subtle);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      border-radius: 20px;
+      padding: 5px 12px;
+      cursor: pointer;
+      min-height: 36px;
+    }
+    .btn-mobile-back:active {
+      transform: scale(0.95);
+    }
+    .mobile-screen {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      overflow-y: auto;
+      padding: 16px 16px 90px 16px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .hub-active-mission-card {
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(30, 58, 138, 0.18));
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 20px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.15);
+      transition: all 0.2s ease;
+    }
+    .hub-active-mission-card:active {
+      transform: scale(0.98);
+    }
+    .hub-active-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .hub-active-pulse-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #60a5fa;
+      background: rgba(59, 130, 246, 0.2);
+      padding: 3px 10px;
+      border-radius: 12px;
+      letter-spacing: 0.5px;
+    }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #60a5fa;
+      box-shadow: 0 0 10px #3b82f6;
+      animation: pulse-ring 1.5s infinite;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+    }
+    .hub-active-engine {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .hub-active-card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 8px;
+      line-height: 1.35;
+    }
+    .hub-active-activity-banner {
+      font-size: 12px;
+      font-weight: 500;
+      color: #93c5fd;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .hub-active-card-footer {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
+    .hub-section-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-subtle);
+      margin-bottom: 12px;
+    }
+    .hub-quick-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+    .hub-quick-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 12px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: all 0.15s ease;
+      touch-action: manipulation;
+    }
+    .hub-quick-card:active {
+      transform: scale(0.97);
+      background: var(--bg-surface-hover);
+    }
+    .hub-quick-icon {
+      font-size: 20px;
+    }
+    .hub-quick-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .hub-quick-hint {
+      font-size: 11px;
+      color: var(--text-subtle);
+      line-height: 1.3;
+    }
+    .hub-mission-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background 0.15s ease;
+    }
+    .hub-mission-item:active {
+      background: var(--bg-surface-hover);
+    }
+    .hub-mission-item-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      overflow: hidden;
+    }
+    .hub-status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
       flex-shrink: 0;
+    }
+    .hub-status-dot.success { background: var(--emerald); box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
+    .hub-status-dot.running { background: var(--accent); box-shadow: 0 0 8px rgba(59, 130, 246, 0.6); animation: pulse-dot 1.2s infinite; }
+    .hub-status-dot.failed { background: var(--rose); }
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .hub-mission-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow: hidden;
+    }
+    .hub-mission-item-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .hub-mission-item-meta {
+      font-size: 11px;
+      color: var(--text-subtle);
+    }
+    .hub-mission-item-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-subtle);
+      flex-shrink: 0;
+    }
+    .hub-item-badge.apk {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--emerald);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .hub-empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 40px 20px;
+      gap: 8px;
+    }
+    .hub-empty-icon { font-size: 36px; margin-bottom: 4px; }
+    .hub-empty-title { font-size: 16px; font-weight: 700; color: var(--text-main); }
+    .hub-empty-desc { font-size: 13px; color: var(--text-subtle); max-width: 260px; margin-bottom: 12px; }
+    .btn-hub-new-mission {
+      background: var(--accent);
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* New Mission Screen */
+    .mobile-new-mission-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .mobile-textarea {
+      width: 100%;
+      min-height: 140px;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 12px;
+      color: var(--text-main);
+      font-size: 14px;
+      font-family: inherit;
+      resize: none;
+      line-height: 1.5;
+    }
+    .mobile-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .btn-launch-mission-large {
+      width: 100%;
+      min-height: 48px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 16px rgba(37, 99, 235, 0.4);
+      touch-action: manipulation;
+    }
+    .btn-launch-mission-large:active {
+      transform: scale(0.98);
+    }
+
+    /* Live Mission Cockpit */
+    .cockpit-hero-banner {
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.15), rgba(15, 23, 42, 0.8));
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .cockpit-hero-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #60a5fa;
+      margin-bottom: 4px;
+    }
+    .cockpit-hero-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      line-height: 1.4;
+    }
+    .cockpit-plan-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .cockpit-plan-header {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-subtle);
+      margin-bottom: 10px;
+    }
+    .cockpit-plan-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .cockpit-plan-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .cockpit-plan-item.done {
+      color: var(--emerald);
+      font-weight: 500;
+    }
+    .cockpit-plan-item.active {
+      color: var(--text-main);
+      font-weight: 700;
+    }
+
+    .mobile-screens-container {
+      display: none;
+    }
+
+    @media (min-width: 769px) {
+      .mobile-screens-container {
+        display: none !important;
+      }
+      .mobile-bottom-nav {
+        display: none !important;
+      }
+      .btn-mobile-back {
+        display: none !important;
+      }
+      #mobile-artifacts-toggle-btn {
+        display: none !important;
+      }
+      #screen-mission-control {
+        display: flex !important;
+      }
+      #cockpit-hero-banner {
+        display: none !important;
+      }
+    }
+
+    /* Mobile Media Query Breakpoints */
+    @media (max-width: 768px) {
+      .mobile-screens-container {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        width: 100%;
+        position: relative;
+        overflow: hidden;
+      }
+      .mobile-bottom-nav {
+        display: flex;
+      }
+      .sidebar {
+        display: none !important;
+      }
+      .sidebar-backdrop {
+        display: none !important;
+      }
+      #toggle-sidebar-nav-btn {
+        display: none !important;
+      }
+      .main-workspace {
+        width: 100% !important;
+        margin-left: 0 !important;
+        height: 100dvh !important;
+      }
+      .topbar {
+        padding: 0 14px !important;
+        height: 54px !important;
+      }
+      .btn-topbar span:not(.btn-icon-text) {
+        display: none;
+      }
+      #mobile-artifacts-toggle-btn {
+        display: inline-flex !important;
+      }
+      .artifacts-dock {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        top: auto !important;
+        height: 80dvh !important;
+        width: 100% !important;
+        border-radius: 20px 20px 0 0 !important;
+        z-index: 1200 !important;
+        transform: translateY(100%);
+        transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: 0 -8px 32px rgba(0,0,0,0.6);
+      }
+      .artifacts-dock.open {
+        transform: translateY(0);
+      }
+      .chat-column {
+        height: calc(100dvh - 54px - 64px) !important;
+      }
+      .chat-input-wrapper {
+        bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+        padding: 8px 12px !important;
+      }
+      .welcome-hero {
+        padding: 16px 12px 100px 12px !important;
+      }
+      .quick-prompts-grid {
+        grid-template-columns: 1fr !important;
+      }
     }
   </style>
 </head>
@@ -3027,6 +3529,7 @@
     <!-- Topbar (Manus-style Clean Header) -->
     <header class="topbar">
       <div class="topbar-left">
+        <button id="mobile-header-back-btn" class="btn-mobile-back" style="display: none;" title="Back to Missions Hub">← Hub</button>
         <button id="toggle-sidebar-nav-btn" class="toggle-sidebar-btn" title="Toggle Sidebar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -3040,6 +3543,10 @@
       </div>
 
       <div class="topbar-right">
+        <button id="mobile-artifacts-toggle-btn" class="btn-topbar" style="display: none;" title="View Deliverables & Files">
+          <span style="font-size: 13px;">📦</span>
+          <span id="mobile-artifacts-count">0</span>
+        </button>
         <span id="call-budget-indicator" style="font-size: 12px; font-weight: 500; color: var(--text-muted); background: var(--bg-surface); padding: 4px 10px; border-radius: 20px; border: 1px solid var(--border-subtle);">0/100 today</span>
         <button id="header-memory-btn" class="btn-topbar" title="Agent Persistent Memory">
           <span style="font-size: 13px;">🧠</span>
@@ -3058,9 +3565,101 @@
       </div>
     </header>
 
-    <div class="workspace-layout">
+    <!-- Mobile Screen Containers (Manus Style) -->
+    <div id="mobile-screens-container" class="mobile-screens-container">
+      <!-- Screen 1: Missions Hub -->
+      <div id="screen-hub" class="mobile-screen" style="display: none;">
+        <!-- Active Running Mission Card (Hero) -->
+        <div id="hub-active-mission-card" class="hub-active-mission-card" style="display: none;"></div>
+
+        <!-- Quick Launch Action Cards Grid -->
+        <div class="hub-section-title">Quick Launch</div>
+        <div class="hub-quick-grid">
+          <div class="hub-quick-card quick-prompt-chip" data-prompt="Build a responsive web application in React with Tailwind CSS featuring local storage persistence and clean dark theme UI.">
+            <span class="hub-quick-icon">🌐</span>
+            <span class="hub-quick-name">Web App</span>
+            <span class="hub-quick-hint">Frontend / Full-stack app</span>
+          </div>
+          <div class="hub-quick-card quick-prompt-chip" data-prompt="Research the top emerging AI development trends in 2026, compare key capabilities, and output a detailed Markdown report with a comparison table.">
+            <span class="hub-quick-icon">🔍</span>
+            <span class="hub-quick-name">Deep Research</span>
+            <span class="hub-quick-hint">Synthesize live web data</span>
+          </div>
+          <div class="hub-quick-card quick-prompt-chip" data-prompt="Write a Python script that processes data, calculates statistical summaries, and exports the results to CSV and JSON files.">
+            <span class="hub-quick-icon">📊</span>
+            <span class="hub-quick-name">Python Script</span>
+            <span class="hub-quick-hint">Data & automation script</span>
+          </div>
+          <div class="hub-quick-card quick-prompt-chip" data-prompt="Build an Android task manager app in Jetpack Compose, compile the APK, and provide the downloadable debug build file.">
+            <span class="hub-quick-icon">📦</span>
+            <span class="hub-quick-name">Android APK</span>
+            <span class="hub-quick-hint">Compile native APK</span>
+          </div>
+        </div>
+
+        <!-- Recent Missions List -->
+        <div class="hub-section-title">Recent Missions</div>
+        <div id="hub-recent-missions-list" class="hub-recent-missions-list"></div>
+      </div>
+
+      <!-- Screen 2: New Mission Composer -->
+      <div id="screen-new-mission" class="mobile-screen" style="display: none;">
+        <div class="mobile-new-mission-card">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span style="font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-subtle);">New Autonomous Task</span>
+            <span class="brand-badge">Antigravity 05-2026</span>
+          </div>
+          <textarea
+            id="mobile-mission-prompt"
+            class="mobile-textarea"
+            placeholder="Describe what you want Google Antigravity to build, automate, or research in the cloud sandbox..."
+          ></textarea>
+          <button id="btn-launch-mission-mobile" class="btn-launch-mission-large" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span>Launch Autonomous Mission</span>
+          </button>
+        </div>
+
+        <div style="margin-top: 20px;">
+          <div class="hub-section-title">Suggested Tasks</div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <button type="button" class="hub-quick-card quick-prompt-chip" data-prompt="Create a Node.js REST API with Express, validation, and SQLite database in the sandbox.">
+              <span class="hub-quick-name">⚡ REST API Backend</span>
+              <span class="hub-quick-hint">Express + SQLite backend with automated routes</span>
+            </button>
+            <button type="button" class="hub-quick-card quick-prompt-chip" data-prompt="Audit this codebase for security vulnerabilities, memory leaks, and performance bottlenecks.">
+              <span class="hub-quick-name">🛡️ Codebase Security Audit</span>
+              <span class="hub-quick-hint">Comprehensive static analysis and recommendations</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Screen 4: Projects & Sandboxes -->
+      <div id="screen-projects" class="mobile-screen" style="display: none;">
+        <div id="projects-screen-container"></div>
+      </div>
+
+      <!-- Screen 5: Settings & Brain -->
+      <div id="screen-settings" class="mobile-screen" style="display: none;">
+        <div id="settings-screen-container"></div>
+      </div>
+    </div>
+
+    <!-- Screen 3: Live Mission Control Cockpit & Execution Stream -->
+    <div id="screen-mission-control" class="workspace-layout">
       <!-- Main Chat Column -->
       <div class="chat-column">
+        <!-- Live Cockpit Banner -->
+        <div id="cockpit-hero-banner" class="cockpit-hero-banner" style="display: none; margin: 12px 14px 0 14px;">
+          <div class="cockpit-hero-label">AUTONOMOUS MISSION CONTROL</div>
+          <div id="cockpit-mission-title" class="cockpit-hero-title">Mission Control</div>
+          <div id="cockpit-live-activity-banner" class="hub-active-activity-banner" style="margin-top: 8px; margin-bottom: 0;">
+            ⚡ <span id="cockpit-live-activity-text">Agent standing by</span>
+          </div>
+        </div>
         <!-- Chat Messages Stream -->
         <section id="chat-container" class="chat-container">
           <div id="chat-inner" class="chat-inner">
@@ -3824,6 +4423,43 @@
 
   <!-- In-app Toast Notification Container (Iframe-safe alternative to alert()) -->
   <div id="toast-container" class="toast-container"></div>
+
+  <!-- ==================================================
+       MOBILE BOTTOM NAVIGATION (Manus Style)
+  ================================================== -->
+  <nav id="mobile-bottom-nav" class="mobile-bottom-nav">
+    <button type="button" class="mobile-nav-btn active" data-screen="hub" title="Missions Hub">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+      </svg>
+      <span>Hub</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-screen="projects" title="Projects & Sandboxes">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+        <polyline points="2 17 12 22 22 17"></polyline>
+        <polyline points="2 12 12 17 22 12"></polyline>
+      </svg>
+      <span>Projects</span>
+    </button>
+    <button type="button" class="mobile-nav-btn mobile-nav-btn-create" data-screen="new_mission" title="Launch Mission">
+      <div class="create-btn-circle">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+      </div>
+      <span>Launch</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-screen="settings" title="Control Settings">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+      <span>Settings</span>
+    </button>
+  </nav>
 
   <!-- ==================================================
        APPLICATION LOGIC & SUB-AGENT ENGINE
