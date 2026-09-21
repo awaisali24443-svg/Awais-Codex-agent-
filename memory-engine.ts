@@ -84,7 +84,7 @@ function getDefaultStore(): PersistentMemoryStore {
         id: 'mem_core_init',
         category: 'instruction',
         key: 'core_directive',
-        content: 'Assistant is Awais Codex, powered by Antigravity and Google Gemini engines, with persistent cross-session memory.',
+        content: 'Assistant is Awais Codex, powered exclusively by the Antigravity preview engine, with persistent cross-session memory.',
         source: 'manual',
         tags: ['core', 'identity'],
         createdAt: Date.now(),

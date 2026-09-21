@@ -39,7 +39,7 @@
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
   },
-  "description": "Autonomous AI engineering agent and WhatsApp assistant workspace powered by Antigravity and Google Gemini",
+  "description": "Autonomous AI engineering agent and WhatsApp assistant workspace powered strictly by Google Antigravity Preview",
   "author": "Awais Ali (awaisali24443-svg)",
   "license": "MIT"
 }
