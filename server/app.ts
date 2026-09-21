@@ -9,6 +9,9 @@ import crypto from 'crypto';
 
 import type { AppConfig } from './config.js';
 import type { Db } from './db.js';
+import type { EventBus } from './events.js';
+import type { RunExecutor } from './executor.js';
+import { createRunRoutes } from './routes/runs.js';
 import {
   checkPassword,
   createSession,
@@ -20,6 +23,10 @@ import {
 export interface AppDeps {
   config: AppConfig;
   db: Db;
+  /** In-process event fan-out for the live stream. */
+  bus: EventBus;
+  /** Owns the lifecycle of in-flight runs. */
+  executor: RunExecutor;
   /** Runtime status, filled in by the boot sequence. */
   status: {
     startedAt: number;
@@ -135,11 +142,16 @@ export function createApp(deps: AppDeps): Express {
       startedAt: new Date(status.startedAt).toISOString(),
       migrationsApplied: status.migrationsApplied,
       poller: status.poller,
+      engine: config.engineName,
+      activeRuns: deps.executor.activeCount,
+      openStreams: deps.bus.channelCount,
       dailyRunBudget: config.dailyRunBudget,
       eventRetentionDays: config.eventRetentionDays,
       nodeEnv: config.nodeEnv,
     });
   });
+
+  app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config }));
 
   // ---- fallthrough --------------------------------------------------------
 

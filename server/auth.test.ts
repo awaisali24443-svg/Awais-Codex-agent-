@@ -16,6 +16,9 @@ import { createDb, type Db } from './db.js';
 import { migrate } from './migrate.js';
 import { loadConfig } from './config.js';
 import { createSession, verifySession, readCookie, isPublicRoute, checkPassword } from './auth.js';
+import { EventBus } from './events.js';
+import { RunExecutor } from './executor.js';
+import { ScriptedEngine } from './engine/scripted.js';
 
 const SECRET = 'test-session-secret-that-is-definitely-long-enough';
 const PASSWORD = 'operator-password-for-tests';
@@ -37,6 +40,8 @@ before(async () => {
   const app = createApp({
     config,
     db,
+    bus: new EventBus(),
+    executor: new RunExecutor({ db, bus: new EventBus(), engine: new ScriptedEngine() }),
     status: { startedAt: Date.now(), migrationsApplied: 1, orphanedRuns: 0, poller: 'disabled' },
   });
 

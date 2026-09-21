@@ -21,6 +21,9 @@ export interface AppConfig {
   /** WhatsApp Agent Platform token. Optional: the feature is a limited beta. */
   whatsappToken: string;
 
+  /** Which engine executes runs. 'antigravity' is wired in a later phase. */
+  engineName: 'scripted' | 'antigravity';
+
   /** Only one process may long-poll a WhatsApp agent. */
   pollerEnabled: boolean;
   /** Password for the single operator account. */
@@ -90,6 +93,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push('POLLER_ENABLED=true but WHATSAPP_TOKEN is empty — the poller would spin');
   }
 
+  const engineRaw = (env.ENGINE ?? 'scripted').trim().toLowerCase();
+  if (engineRaw !== 'scripted' && engineRaw !== 'antigravity') {
+    problems.push(`ENGINE must be "scripted" or "antigravity" (got "${engineRaw}")`);
+  }
+
   const dailyRunBudget = readInt(env.DAILY_RUN_BUDGET, 100);
   if (dailyRunBudget < 1 || dailyRunBudget > 10_000) {
     problems.push(`DAILY_RUN_BUDGET must be between 1 and 10000 (got ${dailyRunBudget})`);
@@ -113,6 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     masterKey: masterKey || '0'.repeat(64),
     geminiApiKey: (env.GEMINI_API_KEY ?? '').trim(),
     whatsappToken: (env.WHATSAPP_TOKEN ?? '').trim(),
+    engineName: engineRaw === 'antigravity' ? 'antigravity' : 'scripted',
     pollerEnabled,
     operatorPassword,
     dailyRunBudget,

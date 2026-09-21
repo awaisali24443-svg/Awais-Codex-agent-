@@ -9,6 +9,25 @@ import { loadConfig, type AppConfig } from './config.js';
 import { createDb, markOrphanedRuns, pruneRunEvents, type Db } from './db.js';
 import { migrate } from './migrate.js';
 import { createApp } from './app.js';
+import { EventBus } from './events.js';
+import { RunExecutor } from './executor.js';
+import { ScriptedEngine } from './engine/scripted.js';
+import type { Engine } from './engine/types.js';
+
+/**
+ * Pick the engine. Failing loudly here is deliberate: silently falling back to
+ * the scripted engine in production would look like the agent working while
+ * nothing real ever ran.
+ */
+function createEngine(config: AppConfig): Engine {
+  if (config.engineName === 'antigravity') {
+    throw new Error(
+      'ENGINE=antigravity is not implemented yet — the Antigravity client arrives in the next phase. ' +
+        'Leave ENGINE unset (or ENGINE=scripted) until then.',
+    );
+  }
+  return new ScriptedEngine();
+}
 
 async function boot(): Promise<void> {
   const startedAt = Date.now();
@@ -26,7 +45,11 @@ async function boot(): Promise<void> {
   const pruned = await pruneRunEvents(db, config.eventRetentionDays);
   if (pruned > 0) console.log(`[boot] pruned ${pruned} run event(s) older than ${config.eventRetentionDays}d`);
 
-  const orphaned = await markOrphanedRuns(db);
+  // Every in-flight run at boot is orphaned by definition: the process that
+  // owned it is gone, and a mission cannot be resumed from a different process.
+  // The age window is set to zero so a run left behind seconds ago does not
+  // block new missions for the next hour.
+  const orphaned = await markOrphanedRuns(db, 0);
   if (orphaned > 0) console.log(`[boot] recovered ${orphaned} orphaned run(s)`);
 
   // The poller is deliberately not started here yet: it arrives with the
@@ -39,9 +62,15 @@ async function boot(): Promise<void> {
     throw new Error('POLLER_ENABLED is set without WHATSAPP_TOKEN');
   }
 
+  const bus = new EventBus();
+  const executor = new RunExecutor({ db, bus, engine: createEngine(config) });
+  console.log(`[boot] engine: ${config.engineName}`);
+
   const app = createApp({
     config,
     db,
+    bus,
+    executor,
     status: { startedAt, migrationsApplied: migration.applied.length, orphanedRuns: orphaned, poller },
   });
 
@@ -60,7 +89,20 @@ async function boot(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[shutdown] ${signal} received — draining`);
+
     server.close(() => console.log('[shutdown] http server closed'));
+
+    // Abort runs before closing the pool. Each cancellation writes a terminal
+    // event, which also lets its SSE stream end on its own — otherwise those
+    // connections would hold the server open until Render's kill timer fires,
+    // and the last thing a mission produced would be lost.
+    await executor.shutdown();
+
+    // Give the terminal frames a moment to leave the socket, then stop waiting
+    // on anything still connected (EventSource clients reconnect on their own).
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    server.closeAllConnections?.();
+
     try {
       await db.close();
       console.log('[shutdown] database pool closed');
