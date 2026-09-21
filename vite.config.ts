@@ -97,6 +97,11 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // Accept requests from any host so proxied/sandboxed preview URLs
+      // (e.g. *.e2b.app) are not rejected with "Blocked request" 403s.
+      // `as const` keeps the literal type: Vite's types want `true | string[]`,
+      // and a plain `true` widens to `boolean` inside this returned object.
+      allowedHosts: true as const,
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
