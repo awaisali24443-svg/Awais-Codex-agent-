@@ -233,7 +233,7 @@ function renderWhatsAppAgentsList(agents) {
             Status: <strong style="color: ${statusColor};">${a.status.toUpperCase()}</strong> | Messages processed: ${a.messagesProcessed || 0}
           </div>
         </div>
-        <button type="button" class="btn-remove-pairing-key" data-key="${escapeHtml(a.pairingKey)}" class="btn-modal-secondary" style="font-size: 10px; padding: 3px 8px; color: var(--rose); border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; background: transparent; cursor: pointer;">
+        <button type="button" class="btn-remove-pairing-key btn-modal-secondary" data-key="${escapeHtml(a.pairingKey)}" style="font-size: 10px; padding: 3px 8px; color: var(--rose); border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; background: transparent; cursor: pointer;">
           Disconnect
         </button>
       </div>

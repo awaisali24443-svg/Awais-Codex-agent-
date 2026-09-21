@@ -3,7 +3,7 @@ import { DEFAULT_ENGINE, ENGINE_NAME } from '../config.js';
 
 const router = Router();
 
-// Health check endpoint (Strictly Antigravity Agent & Gemini)
+// Health check endpoint (Strictly Antigravity Preview Engine)
 router.get('/health', (req: Request, res: Response) => {
   const hasEnvKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim());
   res.json({

@@ -1,21 +1,9 @@
 import { Request } from 'express';
-import { GoogleGenAI } from '@google/genai';
 import { ENV_ENDPOINT } from './config.js';
 
 export function getApiKey(req: Request): string {
   const customKey = req.headers['x-gemini-api-key'] as string;
   return (customKey && customKey.trim()) || process.env.GEMINI_API_KEY || '';
-}
-
-export function getGeminiClient(apiKey: string): GoogleGenAI {
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
 }
 
 export async function cleanupOldEnvironments(apiKey: string, maxToKeep = 2): Promise<number> {

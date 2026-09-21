@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { getGeminiClient } from './antigravity-client.js';
 
 export type MemoryCategory = 'preference' | 'fact' | 'project' | 'instruction' | 'learning';
 
@@ -129,6 +128,9 @@ export function saveMemoryStore(store: PersistentMemoryStore) {
     ensureDataDir();
     const tempFile = `${MEMORY_FILE}.tmp.${Date.now()}`;
     fs.writeFileSync(tempFile, JSON.stringify(store, null, 2), 'utf-8');
+    if (fs.existsSync(MEMORY_FILE)) {
+      try { fs.unlinkSync(MEMORY_FILE); } catch (_) {}
+    }
     fs.renameSync(tempFile, MEMORY_FILE);
   } catch (err) {
     console.error('[Memory Engine] Failed to save memory store:', err);
@@ -379,9 +381,9 @@ export async function extractAndStoreMemories(
   // 1. Fast Pattern Matching for direct user declarations
   const lower = trimmedPrompt.toLowerCase();
 
-  // Name extraction
-  const nameMatch = trimmedPrompt.match(/(?:my name is|call me|i am|i'm)\s+([A-Z][a-zA-Z0-9_\s]{1,24})/i);
-  if (nameMatch && !lower.includes('building') && !lower.includes('making') && !lower.includes('trying')) {
+  // Name extraction (strictly explicit name declarations to prevent false positives)
+  const nameMatch = trimmedPrompt.match(/(?:my name is|call me)\s+([A-Z][a-zA-Z]{1,15}(?:\s+[A-Z][a-zA-Z]{1,15})?)\b/i);
+  if (nameMatch) {
     const candidateName = nameMatch[1].trim();
     if (candidateName.length > 1 && candidateName.length < 25) {
       await updateUserProfile({ name: candidateName });
@@ -421,56 +423,5 @@ export async function extractAndStoreMemories(
       source,
       tags: ['preference']
     });
-  }
-
-  // 2. If API Key is available, perform intelligent asynchronous memory distillation
-  if (apiKey) {
-    try {
-      const ai = getGeminiClient(apiKey);
-      const distillationPrompt = `
-You are the memory consolidation subsystem of Awais Codex agent.
-Analyze this user task and the completed solution:
-
-User Prompt: "${trimmedPrompt.slice(0, 400)}"
-Assistant Result Summary: "${trimmedOutput.slice(0, 500)}"
-
-Did the user share any permanent facts about themselves, preferences, project names, technical stack choices, or recurring instructions?
-If YES, respond with a single JSON object matching this schema:
-{
-  "has_memory": true,
-  "category": "preference" | "fact" | "project" | "instruction",
-  "content": "A concise 1-2 sentence statement of the fact/preference/project",
-  "tags": ["tag1", "tag2"]
-}
-If NO permanent knowledge or preference was revealed, respond with:
-{ "has_memory": false }
-
-JSON ONLY. Do not write explanations.
-`;
-      const result = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: distillationPrompt,
-        config: {
-          responseMimeType: 'application/json'
-        }
-      });
-
-      const responseText = result.text?.trim() || '';
-      if (responseText) {
-        const parsed = JSON.parse(responseText);
-        if (parsed && parsed.has_memory && parsed.content) {
-          await addMemoryItem({
-            category: parsed.category || 'fact',
-            content: parsed.content,
-            source,
-            tags: Array.isArray(parsed.tags) ? parsed.tags : ['auto_extracted']
-          });
-          console.log(`[Memory Engine] Learned new memory (${parsed.category}): "${parsed.content}"`);
-        }
-      }
-    } catch (llmErr) {
-      // Background memory distillation failure should never disrupt the application
-      // console.debug('[Memory Engine] Background extraction skipped:', llmErr);
-    }
   }
 }

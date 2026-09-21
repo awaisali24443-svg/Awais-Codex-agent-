@@ -6,7 +6,6 @@ import WebSocket from 'ws';
 import { API_ENDPOINT, DEFAULT_ENGINE } from '../config.js';
 import {
   getApiKey,
-  getGeminiClient,
   callAntigravityWithRetry,
   consumeAntigravityStream,
   extractOutputTextFromSteps
@@ -731,7 +730,7 @@ router.get('/', (req: Request, res: Response) => {
       '10-Second Milestone Updates',
       'Synchronized web history with live conversation rendering',
       'Bidirectional Web UI <-> WhatsApp phone turns',
-      'Autonomous fallback to Google Gemini model when sandbox preview is offline'
+      'Dedicated Antigravity preview model execution with persistent memory'
     ]
   });
 });
@@ -1292,38 +1291,9 @@ async function executeTask(
       const errData = await upstreamRes.json().catch(() => ({}));
       const rawMsg = errData.error?.message || `HTTP ${upstreamRes.status}`;
 
-      // If Antigravity interactions endpoint returns 404, 400, or invalid agent, fallback to Gemini model
-      if (upstreamRes.status === 404 || upstreamRes.status === 400 || rawMsg.toLowerCase().includes('not found') || rawMsg.toLowerCase().includes('invalid')) {
-        console.log(`[WhatsApp Gateway] Antigravity endpoint (${upstreamRes.status}): ${rawMsg}. Executing task with Gemini model...`);
-        try {
-          const ai = getGeminiClient(geminiApiKey);
-          const genRes = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: augmentedPrompt || contextualPrompt,
-          });
-          const text = (genRes.text || 'Task processed successfully by Awais Codex.').trim();
-          clearInterval(progressTimer);
-          session.isProcessing = false;
-          const durationSec = Math.round((Date.now() - startTime) / 1000);
-          const finalMessage = `✅ *Awais Codex Completed (${durationSec}s)*\n━━━━━━━━━━━━━━━━━━━━\n${text}`;
-          await recordTurnComplete(convId, turnId, text, [], 'success');
-          extractAndStoreMemories(userPrompt, text, geminiApiKey, 'whatsapp').catch(() => {});
-          if (shouldSendOutboundWhatsApp) {
-            await sendWhatsAppMessage(senderPhone, finalMessage);
-          }
-          return {
-            finalMessage,
-            cleanResult: text,
-            artifacts: []
-          };
-        } catch (fallbackErr: any) {
-          console.warn('[WhatsApp Gateway] Fallback model error:', fallbackErr?.message);
-        }
-      }
-
       clearInterval(progressTimer);
       session.isProcessing = false;
-      const failMsg = `⚠️ *Awais Codex Execution Error*: ${rawMsg}`;
+      const failMsg = `⚠️ *Awais Codex Antigravity Error (${upstreamRes.status})*: ${rawMsg}`;
       await recordTurnComplete(convId, turnId, failMsg, [], 'failed');
       if (shouldSendOutboundWhatsApp) {
         await sendWhatsAppMessage(senderPhone, failMsg);
@@ -1349,7 +1319,7 @@ async function executeTask(
           } else if (toolName === 'run_command') {
             currentMilestone = `Executing commands & compiling build...`;
           } else {
-            lastMilestoneText(toolName);
+            currentMilestone = lastMilestoneText(toolName);
           }
           await recordTurnProgress(convId, turnId, currentMilestone);
         }
@@ -1401,33 +1371,6 @@ async function executeTask(
   } catch (err: any) {
     clearInterval(progressTimer);
     session.isProcessing = false;
-
-    // Check if we can do a fallback generateContent if not already attempted
-    if (geminiApiKey && (err?.message?.includes('fetch failed') || err?.message?.includes('404') || err?.message?.includes('400'))) {
-      try {
-        console.log('[WhatsApp Gateway] Antigravity call failed, attempting direct Gemini fallback...');
-        const ai = getGeminiClient(geminiApiKey);
-        const genRes = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: augmentedPrompt || contextualPrompt,
-        });
-        const text = (genRes.text || 'Task processed successfully by Awais Codex.').trim();
-        const durationSec = Math.round((Date.now() - startTime) / 1000);
-        const finalMessage = `✅ *Awais Codex Completed (${durationSec}s)*\n━━━━━━━━━━━━━━━━━━━━\n${text}`;
-        await recordTurnComplete(convId, turnId, text, [], 'success');
-        extractAndStoreMemories(userPrompt, text, geminiApiKey, 'whatsapp').catch(() => {});
-        if (shouldSendOutboundWhatsApp) {
-          await sendWhatsAppMessage(senderPhone, finalMessage);
-        }
-        return {
-          finalMessage,
-          cleanResult: text,
-          artifacts: []
-        };
-      } catch (fbErr: any) {
-        console.warn('[WhatsApp Gateway] Fallback also failed:', fbErr?.message);
-      }
-    }
 
     const errText = `❌ *Awais Codex Exception*: ${err?.message || 'Execution error.'}`;
     await recordTurnComplete(convId, turnId, errText, [], 'failed');

@@ -6,7 +6,6 @@ import { execSync } from 'child_process';
 import { API_ENDPOINT, DEFAULT_ENGINE } from '../config.js';
 import {
   getApiKey,
-  getGeminiClient,
   callAntigravityWithRetry,
   extractOutputTextFromSteps
 } from '../antigravity-client.js';
@@ -47,22 +46,8 @@ export function buildContextualPrompt(prompt: string, history?: any[]): string {
   return `${historyBlock}### CURRENT USER REQUEST:\n${prompt}\n\n[Instruction: Maintain complete context and conversational continuity with the dialogue history above. Remember all user details, names, requirements, preferences, and prior work discussed.]`;
 }
 
-// Expose call budget tracker endpoint
-router.get('/call-budget', (req: Request, res: Response) => {
-  const secret = process.env.WHATSAPP_ADMIN_SECRET || 'wa_admin_secret_change_me_in_prod';
-  const authHeader = (req.headers['authorization'] || '') as string;
-  const customHeader = (req.headers['x-whatsapp-admin-secret'] || req.headers['x-admin-secret'] || '') as string;
-  const querySecret = (req.query?.secret || req.query?.admin_secret || '') as string;
-
-  let providedSecret = '';
-  if (authHeader.startsWith('Bearer ')) providedSecret = authHeader.slice(7).trim();
-  else if (customHeader) providedSecret = customHeader.trim();
-  else if (querySecret) providedSecret = querySecret.trim();
-
-  if (secret && providedSecret !== secret) {
-    return res.status(401).json({ success: false, error: 'Unauthorized: Invalid WhatsApp admin secret' });
-  }
-
+// Expose call budget tracker endpoint (open for personal use)
+router.get('/call-budget', (_req: Request, res: Response) => {
   const budget = getServerCallBudget();
   res.json({ success: true, ...budget });
 });
@@ -210,100 +195,7 @@ router.get('/download-artifact', async (req: Request, res: Response) => {
   return res.send(fallbackContent);
 });
 
-// Helper to stream Gemini fallback when Antigravity engine is offline or unavailable
-async function streamGeminiFallback(
-  rawPrompt: string,
-  augmentedPrompt: string,
-  files: any[],
-  apiKey: string,
-  res: Response,
-  abortSignal: AbortSignal
-): Promise<void> {
-  try {
-    const ai = getGeminiClient(apiKey);
-    const stepId = `step_fb_${Date.now()}`;
-    const interactionId = `inter_fb_${Date.now()}`;
-
-    // Send interaction created
-    res.write(`event: interaction.created\ndata: ${JSON.stringify({
-      interaction: { id: interactionId, status: 'in_progress' }
-    })}\n\n`);
-
-    // Send step start
-    res.write(`event: step.start\ndata: ${JSON.stringify({
-      step: { id: stepId, type: 'model_output', summary: 'Generating response with Gemini Engine...' },
-      index: 0
-    })}\n\n`);
-
-    let fullOutput = '';
-    const contentParts: any[] = [];
-    if (augmentedPrompt) contentParts.push({ text: augmentedPrompt });
-
-    if (files && files.length > 0) {
-      files.forEach((f: any) => {
-        if (f.base64 && f.type) {
-          contentParts.push({
-            inlineData: {
-              data: f.base64,
-              mimeType: f.type
-            }
-          });
-        }
-      });
-    }
-
-    const streamResult = await ai.models.generateContentStream({
-      model: 'gemini-2.5-flash',
-      contents: contentParts.length > 0 ? contentParts : augmentedPrompt
-    });
-
-    for await (const chunk of streamResult) {
-      if (abortSignal.aborted) break;
-      const text = chunk.text || '';
-      if (text) {
-        fullOutput += text;
-        res.write(`event: step.delta\ndata: ${JSON.stringify({
-          index: 0,
-          delta: { type: 'text', text }
-        })}\n\n`);
-        if (typeof (res as any).flush === 'function') (res as any).flush();
-      }
-    }
-
-    // Step stop
-    res.write(`event: step.stop\ndata: ${JSON.stringify({
-      index: 0,
-      step: { id: stepId, status: 'completed' }
-    })}\n\n`);
-
-    // Interaction completed
-    res.write(`event: interaction.completed\ndata: ${JSON.stringify({
-      interaction: {
-        id: interactionId,
-        status: 'completed',
-        output_text: fullOutput,
-        steps: [
-          { id: stepId, type: 'model_output', summary: 'Completed', text: fullOutput }
-        ]
-      }
-    })}\n\n`);
-
-    res.write(`event: done\ndata: [DONE]\n\n`);
-    res.end();
-
-    // Trigger persistent memory extraction in background
-    extractAndStoreMemories(rawPrompt, fullOutput, apiKey, 'web').catch(() => {});
-  } catch (err: any) {
-    console.error('Gemini fallback stream error:', err);
-    res.write(`event: error\ndata: ${JSON.stringify({
-      type: 'agent_unavailable',
-      message: `Execution failed: ${err?.message || 'Gemini model error'}`
-    })}\n\n`);
-    res.end();
-  }
-}
-
-// Real-time SSE streaming endpoint with Persistent Memory & Antigravity/Gemini Failover
+// Real-time SSE streaming endpoint with Persistent Memory & Antigravity Preview Engine
 router.all('/stream-task', async (req: Request, res: Response) => {
   const apiKey = getApiKey(req);
   if (!apiKey) {
@@ -406,14 +298,6 @@ router.all('/stream-task', async (req: Request, res: Response) => {
       const statusCode = upstreamRes.status;
       const rawMsg = errData.error?.message || errData.message || `HTTP ${statusCode}`;
 
-      // If Antigravity interactions endpoint returns 404, 400, or model unavailable, seamlessly fallback to Gemini
-      if (statusCode === 404 || statusCode === 400 || rawMsg.toLowerCase().includes('not found') || rawMsg.toLowerCase().includes('invalid')) {
-        console.log(`[Stream Task] Antigravity endpoint returned HTTP ${statusCode}. Falling back to Gemini model with Persistent Memory...`);
-        clearInterval(keepAliveInterval);
-        incrementServerCallBudget('website');
-        return streamGeminiFallback(rawPrompt, augmentedPrompt, files, apiKey, res, abortController.signal);
-      }
-
       clearInterval(keepAliveInterval);
       let errorType = 'unknown_error';
       if (statusCode === 429) {
@@ -426,7 +310,7 @@ router.all('/stream-task', async (req: Request, res: Response) => {
 
       res.write(`event: error\ndata: ${JSON.stringify({
         type: errorType,
-        message: `Antigravity model is not available: ${rawMsg}`,
+        message: `Antigravity model error (${statusCode}): ${rawMsg}`,
         status: statusCode
       })}\n\n`);
       return res.end();
@@ -434,7 +318,11 @@ router.all('/stream-task', async (req: Request, res: Response) => {
 
     if (!upstreamRes.body) {
       clearInterval(keepAliveInterval);
-      return streamGeminiFallback(rawPrompt, augmentedPrompt, files, apiKey, res, abortController.signal);
+      res.write(`event: error\ndata: ${JSON.stringify({
+        type: 'agent_unavailable',
+        message: 'Antigravity stream error: No response body received from Antigravity engine.'
+      })}\n\n`);
+      return res.end();
     }
 
     incrementServerCallBudget('website');
@@ -535,16 +423,12 @@ router.all('/stream-task', async (req: Request, res: Response) => {
   } catch (err: any) {
     clearInterval(keepAliveInterval);
     if (err.name === 'AbortError') return;
-    console.error('Antigravity streaming error, checking fallback:', err);
-    try {
-      return streamGeminiFallback(rawPrompt, augmentedPrompt, files, apiKey, res, abortController.signal);
-    } catch (_) {
-      res.write(`event: error\ndata: ${JSON.stringify({
-        type: 'agent_unavailable',
-        message: `Antigravity model is not available: ${err?.message || 'Stream connection dropped'}`
-      })}\n\n`);
-      res.end();
-    }
+    console.error('Antigravity streaming error:', err);
+    res.write(`event: error\ndata: ${JSON.stringify({
+      type: 'agent_unavailable',
+      message: `Antigravity model error: ${err?.message || 'Stream connection dropped'}`
+    })}\n\n`);
+    res.end();
   }
 });
 
@@ -629,71 +513,20 @@ router.post('/execute-task', async (req: Request, res: Response) => {
     const statusCode = agentRes.status;
     const rawMessage = errData.error?.message || errData.message || `HTTP ${statusCode}`;
 
-    // Fallback to direct Gemini generation if Antigravity endpoint 404/400
-    if (statusCode === 404 || statusCode === 400 || rawMessage.toLowerCase().includes('not found')) {
-      console.log(`[Execute Task] Antigravity unavailable (${statusCode}), executing via Gemini fallback...`);
-      const ai = getGeminiClient(apiKey);
-      const genRes = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: augmentedPrompt || contextualPrompt
-      });
-      const outputText = genRes.text || 'Task processed successfully by Awais Codex.';
-      incrementServerCallBudget('website');
-
-      // Trigger memory extraction in background
-      extractAndStoreMemories(rawPrompt, outputText, apiKey, 'web').catch(() => {});
-
-      return res.json({
-        mode: 'gemini-fallback',
-        engine: 'gemini-2.5-flash',
-        id: `gemini_exec_${Date.now()}`,
-        status: 'completed',
-        output_text: outputText,
-        steps: [
-          { type: 'model_output', text: outputText, summary: 'Generated solution with Gemini' }
-        ]
-      });
-    }
-
     console.warn(`Antigravity model returned error (${statusCode}):`, rawMessage);
     return res.status(statusCode).json({
       error: {
         type: 'antigravity_unavailable',
-        message: `Antigravity model is not available: ${rawMessage}`,
+        message: `Antigravity model error (${statusCode}): ${rawMessage}`,
         status: statusCode
       }
     });
   } catch (err: any) {
-    // Fallback to Gemini if connection failed
-    try {
-      console.log('[Execute Task] Connection failed, attempting Gemini fallback...');
-      const ai = getGeminiClient(apiKey);
-      const genRes = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: augmentedPrompt || contextualPrompt
-      });
-      const outputText = genRes.text || 'Task processed successfully by Awais Codex.';
-      incrementServerCallBudget('website');
-
-      extractAndStoreMemories(rawPrompt, outputText, apiKey, 'web').catch(() => {});
-
-      return res.json({
-        mode: 'gemini-fallback',
-        engine: 'gemini-2.5-flash',
-        id: `gemini_exec_${Date.now()}`,
-        status: 'completed',
-        output_text: outputText,
-        steps: [
-          { type: 'model_output', text: outputText, summary: 'Generated solution with Gemini' }
-        ]
-      });
-    } catch (_) {}
-
     console.error('Failed to connect to Antigravity API:', err);
     return res.status(503).json({
       error: {
         type: 'antigravity_unavailable',
-        message: `Antigravity model is not available: ${err?.message || 'Connection failed'}`,
+        message: `Antigravity model error: ${err?.message || 'Connection failed'}`,
         status: 503
       }
     });

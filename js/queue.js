@@ -677,7 +677,7 @@ export function finishTurn(project, turn, resultData) {
   if (!output && resultData.output_text) {
     output = resultData.output_text;
   }
-  turn.output = output || 'Task completed successfully in sandbox.';
+  turn.output = output || turn.output || 'Task completed successfully in sandbox.';
 
   const hasRunningTurns = project.messages.some(m => m.status === 'running' || m.status === 'queued');
   project.status = hasRunningTurns ? 'running' : 'success';
