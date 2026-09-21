@@ -50,6 +50,7 @@ export function initEl() {
   el.sidebarNavInstall = document.getElementById('sidebar-nav-install');
   el.sidebarNavSplit = document.getElementById('sidebar-nav-split');
   el.sidebarNavDownload = document.getElementById('sidebar-nav-download');
+  el.sidebarNavMemory = document.getElementById('sidebar-nav-memory');
   el.sidebarNavSettings = document.getElementById('sidebar-nav-settings');
   el.sidebarArtifactsBadge = document.getElementById('sidebar-artifacts-badge');
   el.sidebarSplitText = document.getElementById('sidebar-split-text');

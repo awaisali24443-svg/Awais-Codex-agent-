@@ -12,14 +12,23 @@ function getFilesRecursively(dir: string, baseDir: string = dir): { relativePath
 
   const list = fs.readdirSync(dir);
   for (const file of list) {
-    if (file === '.git' || file === 'node_modules' || file === 'dist' || file === '.tmp' || file.endsWith('.tar') || file.endsWith('.zip') || file.endsWith('.apk')) {
+    if (
+      file === '.git' ||
+      file === 'node_modules' ||
+      file === 'dist' ||
+      file === '.tmp' ||
+      file === 'data' ||
+      file.endsWith('.tar') ||
+      file.endsWith('.zip') ||
+      file.endsWith('.apk')
+    ) {
       continue;
     }
     const absolutePath = path.join(dir, file);
     const stat = fs.statSync(absolutePath);
     if (stat && stat.isDirectory()) {
       results = results.concat(getFilesRecursively(absolutePath, baseDir));
-    } else if (stat && stat.isFile() && stat.size < 5 * 1024 * 1024) { // Only push files < 5MB
+    } else if (stat && stat.isFile() && stat.size < 5 * 1024 * 1024) { // Files < 5MB
       const relativePath = path.relative(baseDir, absolutePath).replace(/\\/g, '/');
       results.push({ relativePath, absolutePath });
     }
@@ -61,9 +70,8 @@ export function getGitHubHeaders(token: string): Record<string, string> {
   };
 }
 
-// Helper to determine the repository owner/user for fine-grained or classic tokens
+// Helper to determine repository owner for fine-grained or classic tokens
 async function resolveGitHubOwner(token: string): Promise<string> {
-  // 1. Try /user endpoint
   try {
     const userRes = await fetch('https://api.github.com/user', {
       headers: getGitHubHeaders(token)
@@ -74,7 +82,6 @@ async function resolveGitHubOwner(token: string): Promise<string> {
     }
   } catch (_) {}
 
-  // 2. If fine-grained PAT does not have user profile scope, query /user/repos
   try {
     const reposRes = await fetch('https://api.github.com/user/repos?per_page=1&sort=updated', {
       headers: getGitHubHeaders(token)
@@ -90,7 +97,7 @@ async function resolveGitHubOwner(token: string): Promise<string> {
   return process.env.GITHUB_USERNAME || 'authenticated-user';
 }
 
-// Fully isolated GitHub integration API routes
+// GitHub integration status check
 router.get('/api/github/status', async (req: Request, res: Response) => {
   const token = resolveGitHubToken(req);
   if (!token) {
@@ -160,7 +167,7 @@ router.post('/api/github/repos', async (req: Request, res: Response) => {
 });
 
 router.post('/api/github/export-repo', async (req: Request, res: Response) => {
-  const { token, repoName, description, isPrivate, environmentId, apiKey } = req.body || {};
+  const { token, repoName, description, isPrivate, environmentId, apiKey, files, projectTitle, projectContent } = req.body || {};
   const activeToken = resolveGitHubToken(req, token);
 
   if (!activeToken) {
@@ -174,7 +181,7 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
   }
 
   try {
-    // 1. Get user login info (supports both Fine-Grained & Classic PATs)
+    // 1. Resolve repository owner
     const owner = await resolveGitHubOwner(activeToken);
 
     // 2. Create or find repository
@@ -187,7 +194,7 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
       },
       body: JSON.stringify({
         name: repoName,
-        description: description || 'Exported from Awais Codex',
+        description: description || `Exported from Awais Codex - ${projectTitle || 'Project'}`,
         private: Boolean(isPrivate)
       })
     });
@@ -195,7 +202,6 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
     if (createRes.ok) {
       repoData = await createRes.json();
     } else {
-      // If repository already exists (422), fetch repository details
       const getRepoRes = await fetch(`https://api.github.com/repos/${owner}/${encodeURIComponent(repoName)}`, {
         headers: getGitHubHeaders(activeToken)
       });
@@ -208,8 +214,8 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
       }
     }
 
-    // 3. Collect files from environment snapshot or local workspace
-    let filesToPush: { relativePath: string; absolutePath: string }[] = [];
+    // 3. Collect files from environment snapshot or explicit project artifacts
+    const filesToPush: { relativePath: string; contentBuffer: Buffer }[] = [];
     let tempDirToClean: string | null = null;
 
     if (environmentId && apiKey) {
@@ -227,27 +233,47 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
           const extractDir = path.join(tempDirToClean, 'extracted');
           fs.mkdirSync(extractDir, { recursive: true });
           execSync(`tar -xf "${tarPath}" -C "${extractDir}"`);
-          filesToPush = getFilesRecursively(extractDir);
+          const extractedFiles = getFilesRecursively(extractDir);
+          extractedFiles.forEach(f => {
+            filesToPush.push({
+              relativePath: f.relativePath,
+              contentBuffer: fs.readFileSync(f.absolutePath)
+            });
+          });
         }
       } catch (err) {
-        console.warn('Failed downloading environment tarball for GitHub export, falling back to local files:', err);
+        console.warn('Failed downloading environment tarball for GitHub export:', err);
       }
     }
 
-    if (filesToPush.length === 0) {
-      filesToPush = getFilesRecursively(process.cwd());
+    // Explicit files if passed
+    if (Array.isArray(files) && files.length > 0) {
+      files.forEach((f: any) => {
+        if (f.path && f.content) {
+          filesToPush.push({
+            relativePath: f.path,
+            contentBuffer: Buffer.from(f.content, 'utf-8')
+          });
+        }
+      });
     }
 
-    // 4. Push each file using GitHub Contents API (15s timeout per call)
+    // Fallback clean README (prevents server repo leakage)
+    if (filesToPush.length === 0) {
+      const readmeContent = `# ${projectTitle || repoName}\n\nGenerated with **Awais Codex** — Autonomous AI Agent.\n\n### Task Overview\n${projectContent || description || 'Autonomous execution project artifact.'}\n\n---\n*Created at: ${new Date().toISOString()}*\n`;
+      filesToPush.push({
+        relativePath: 'README.md',
+        contentBuffer: Buffer.from(readmeContent, 'utf-8')
+      });
+    }
+
+    // 4. Push files
     let pushedCount = 0;
     for (const fileItem of filesToPush) {
       try {
-        const contentBuffer = fs.readFileSync(fileItem.absolutePath);
-        const base64Content = contentBuffer.toString('base64');
-
+        const base64Content = fileItem.contentBuffer.toString('base64');
         const githubPath = fileItem.relativePath.split('/').map(encodeURIComponent).join('/');
 
-        // Check if file already exists to get SHA for update
         let existingSha: string | undefined = undefined;
         try {
           const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${githubPath}`, {
@@ -282,7 +308,6 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
       }
     }
 
-    // Clean up temporary directory if used
     if (tempDirToClean) {
       try { fs.rmSync(tempDirToClean, { recursive: true, force: true }); } catch (_) {}
     }

@@ -6,11 +6,13 @@ import { execSync } from 'child_process';
 import { API_ENDPOINT, DEFAULT_ENGINE } from '../config.js';
 import {
   getApiKey,
+  getGeminiClient,
   callAntigravityWithRetry,
   extractOutputTextFromSteps
 } from '../antigravity-client.js';
 import { generateStandaloneApkBuffer } from '../apk-generator.js';
 import { getServerCallBudget, incrementServerCallBudget } from '../call-budget-server.js';
+import { injectMemoryIntoPrompt, extractAndStoreMemories } from '../memory-engine.js';
 
 const router = Router();
 
@@ -114,14 +116,14 @@ router.get('/download-artifact', async (req: Request, res: Response) => {
         const arrayBuf = await fileRes.arrayBuffer();
         const buffer = Buffer.from(arrayBuf);
 
-        // If the user requested the full archive snapshot (.tar)
+        // Full archive snapshot (.tar)
         if (!requestedPath || filename.endsWith('.tar')) {
           res.setHeader('Content-Disposition', `attachment; filename="environment-${environmentId}.tar"`);
           res.setHeader('Content-Type', 'application/x-tar');
           return res.send(buffer);
         }
 
-        // Otherwise, extract and find the requested file in the snapshot tar
+        // Extract and find requested file in snapshot tar
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-artifact-'));
         const tarPath = path.join(tempDir, 'snapshot.tar');
         fs.writeFileSync(tarPath, buffer);
@@ -131,7 +133,6 @@ router.get('/download-artifact', async (req: Request, res: Response) => {
           fs.mkdirSync(extractDir, { recursive: true });
           execSync(`tar -xf "${tarPath}" -C "${extractDir}"`);
 
-          // Recursively find file
           function findFileRecursively(dir: string, targetName: string): string | null {
             const entries = fs.readdirSync(dir, { withFileTypes: true });
             for (const entry of entries) {
@@ -167,7 +168,7 @@ router.get('/download-artifact', async (req: Request, res: Response) => {
     }
   }
 
-  // 3. Fallback: If it's an APK file, generate a valid standalone Android debug package
+  // 3. Fallback: If it's an APK file, generate a valid standalone Android debug package with valid CRC32
   if (filename.endsWith('.apk') || requestedPath.toLowerCase().includes('.apk')) {
     const appTitle = filename.replace(/\.apk$/i, '').replace(/[-_]/g, ' ') || 'Awais Codex App';
     const apkBuffer = generateStandaloneApkBuffer(appTitle, 'com.awaiscodex.app');
@@ -185,7 +186,100 @@ router.get('/download-artifact', async (req: Request, res: Response) => {
   return res.send(fallbackContent);
 });
 
-// Real-time SSE streaming endpoint directly from Antigravity Agent
+// Helper to stream Gemini fallback when Antigravity engine is offline or unavailable
+async function streamGeminiFallback(
+  rawPrompt: string,
+  augmentedPrompt: string,
+  files: any[],
+  apiKey: string,
+  res: Response,
+  abortSignal: AbortSignal
+): Promise<void> {
+  try {
+    const ai = getGeminiClient(apiKey);
+    const stepId = `step_fb_${Date.now()}`;
+    const interactionId = `inter_fb_${Date.now()}`;
+
+    // Send interaction created
+    res.write(`event: interaction.created\ndata: ${JSON.stringify({
+      interaction: { id: interactionId, status: 'in_progress' }
+    })}\n\n`);
+
+    // Send step start
+    res.write(`event: step.start\ndata: ${JSON.stringify({
+      step: { id: stepId, type: 'model_output', summary: 'Generating response with Gemini Engine...' },
+      index: 0
+    })}\n\n`);
+
+    let fullOutput = '';
+    const contentParts: any[] = [];
+    if (augmentedPrompt) contentParts.push({ text: augmentedPrompt });
+
+    if (files && files.length > 0) {
+      files.forEach((f: any) => {
+        if (f.base64 && f.type) {
+          contentParts.push({
+            inlineData: {
+              data: f.base64,
+              mimeType: f.type
+            }
+          });
+        }
+      });
+    }
+
+    const streamResult = await ai.models.generateContentStream({
+      model: 'gemini-2.5-flash',
+      contents: contentParts.length > 0 ? contentParts : augmentedPrompt
+    });
+
+    for await (const chunk of streamResult) {
+      if (abortSignal.aborted) break;
+      const text = chunk.text || '';
+      if (text) {
+        fullOutput += text;
+        res.write(`event: step.delta\ndata: ${JSON.stringify({
+          index: 0,
+          delta: { type: 'text', text }
+        })}\n\n`);
+        if (typeof (res as any).flush === 'function') (res as any).flush();
+      }
+    }
+
+    // Step stop
+    res.write(`event: step.stop\ndata: ${JSON.stringify({
+      index: 0,
+      step: { id: stepId, status: 'completed' }
+    })}\n\n`);
+
+    // Interaction completed
+    res.write(`event: interaction.completed\ndata: ${JSON.stringify({
+      interaction: {
+        id: interactionId,
+        status: 'completed',
+        output_text: fullOutput,
+        steps: [
+          { id: stepId, type: 'model_output', summary: 'Completed', text: fullOutput }
+        ]
+      }
+    })}\n\n`);
+
+    res.write(`event: done\ndata: [DONE]\n\n`);
+    res.end();
+
+    // Trigger persistent memory extraction in background
+    extractAndStoreMemories(rawPrompt, fullOutput, apiKey, 'web').catch(() => {});
+  } catch (err: any) {
+    console.error('Gemini fallback stream error:', err);
+    res.write(`event: error\ndata: ${JSON.stringify({
+      type: 'agent_unavailable',
+      message: `Execution failed: ${err?.message || 'Gemini model error'}`
+    })}\n\n`);
+    res.end();
+  }
+}
+
+// Real-time SSE streaming endpoint with Persistent Memory & Antigravity/Gemini Failover
 router.all('/stream-task', async (req: Request, res: Response) => {
   const apiKey = getApiKey(req);
   if (!apiKey) {
@@ -218,12 +312,15 @@ router.all('/stream-task', async (req: Request, res: Response) => {
     return res.status(400).json({ error: { message: 'Prompt or files required.' } });
   }
 
-  const prompt = buildContextualPrompt(rawPrompt, history);
+  // 1. Inject within-session dialogue memory
+  const contextualPrompt = buildContextualPrompt(rawPrompt, history);
+  // 2. Augment with cross-session persistent agent memory
+  const augmentedPrompt = contextualPrompt ? injectMemoryIntoPrompt(contextualPrompt) : '';
 
-  let inputPayload: any = prompt;
+  let inputPayload: any = augmentedPrompt || contextualPrompt;
   if (files && files.length > 0) {
     const parts: any[] = [];
-    if (prompt) parts.push({ type: 'text', text: prompt });
+    if (augmentedPrompt) parts.push({ type: 'text', text: augmentedPrompt });
     files.forEach((f: any) => {
       let partType = 'image';
       if (f.type && f.type.startsWith('video/')) partType = 'video';
@@ -280,14 +377,20 @@ router.all('/stream-task', async (req: Request, res: Response) => {
   try {
     const upstreamRes = await callAntigravityWithRetry(payload, apiKey, postUrl, abortController.signal);
 
-    if (upstreamRes.ok) {
-      incrementServerCallBudget('website');
-    } else {
-      clearInterval(keepAliveInterval);
+    if (!upstreamRes.ok) {
       const errData = await upstreamRes.json().catch(() => ({}));
       const statusCode = upstreamRes.status;
       const rawMsg = errData.error?.message || errData.message || `HTTP ${statusCode}`;
 
+      // If Antigravity interactions endpoint returns 404, 400, or model unavailable, seamlessly fallback to Gemini
+      if (statusCode === 404 || statusCode === 400 || rawMsg.toLowerCase().includes('not found') || rawMsg.toLowerCase().includes('invalid')) {
+        console.log(`[Stream Task] Antigravity endpoint returned HTTP ${statusCode}. Falling back to Gemini model with Persistent Memory...`);
+        clearInterval(keepAliveInterval);
+        incrementServerCallBudget('website');
+        return streamGeminiFallback(rawPrompt, augmentedPrompt, files, apiKey, res, abortController.signal);
+      }
+
+      clearInterval(keepAliveInterval);
       let errorType = 'unknown_error';
       if (statusCode === 429) {
         errorType = 'quota_exceeded';
@@ -307,16 +410,15 @@ router.all('/stream-task', async (req: Request, res: Response) => {
 
     if (!upstreamRes.body) {
       clearInterval(keepAliveInterval);
-      res.write(`event: error\ndata: ${JSON.stringify({
-        type: 'agent_unavailable',
-        message: 'Antigravity model is not available: No stream body received from API.'
-      })}\n\n`);
-      return res.end();
+      return streamGeminiFallback(rawPrompt, augmentedPrompt, files, apiKey, res, abortController.signal);
     }
+
+    incrementServerCallBudget('website');
 
     const reader = upstreamRes.body.getReader();
     const decoder = new TextDecoder();
     let sseBuffer = '';
+    let accumulatedOutput = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -352,46 +454,50 @@ router.all('/stream-task', async (req: Request, res: Response) => {
           continue;
         }
 
-        if (dataStr) {
-          try {
-            const eventData = JSON.parse(dataStr);
-            const delta = eventData.delta || {};
-            const step = eventData.step || {};
-            let eventType = parsedHeaderType || eventData.event_type || eventData.type || '';
+        try {
+          const eventData = JSON.parse(dataStr);
+          const delta = eventData.delta || {};
+          const step = eventData.step || {};
+          let eventType = parsedHeaderType || eventData.event_type || eventData.type || '';
 
-            const isThought = eventType === 'thought' || delta.type === 'thought' || step.type === 'thought' ||
-              Boolean(delta.thought_summary) || Boolean(delta.thought) || Boolean(step.summary && step.type === 'thought');
+          const isThought = eventType === 'thought' || delta.type === 'thought' || step.type === 'thought' ||
+            Boolean(delta.thought_summary) || Boolean(delta.thought) || Boolean(step.summary && step.type === 'thought');
 
-            if (isThought) {
-              eventType = 'thought';
-            } else if (!eventType) {
-              if (eventData.interaction?.status === 'completed' || eventData.interaction?.status === 'success') {
-                eventType = 'interaction.completed';
-              } else if (eventData.interaction?.id) {
-                eventType = 'interaction.created';
-              } else if (delta.type || delta.text || delta.arguments || delta.result) {
-                eventType = 'step.delta';
-              } else if (step.type || step.id) {
-                eventType = 'step.start';
-              } else {
-                eventType = 'message';
-              }
+          if (isThought) {
+            eventType = 'thought';
+          } else if (!eventType) {
+            if (eventData.interaction?.status === 'completed' || eventData.interaction?.status === 'success') {
+              eventType = 'interaction.completed';
+            } else if (eventData.interaction?.id) {
+              eventType = 'interaction.created';
+            } else if (delta.type || delta.text || delta.arguments || delta.result) {
+              eventType = 'step.delta';
+            } else if (step.type || step.id) {
+              eventType = 'step.start';
+            } else {
+              eventType = 'message';
             }
+          }
 
-            // Ensure output_text is populated on completion using extractOutputTextFromSteps
-            if (eventType === 'interaction.completed' && eventData.interaction) {
-              const inter = eventData.interaction;
-              if (!inter.output_text && Array.isArray(inter.steps)) {
-                const extracted = extractOutputTextFromSteps(inter.steps);
-                if (extracted) inter.output_text = extracted;
-              }
+          if (delta.text) accumulatedOutput += delta.text;
+
+          // Ensure output_text is populated on completion
+          if (eventType === 'interaction.completed' && eventData.interaction) {
+            const inter = eventData.interaction;
+            if (!inter.output_text && Array.isArray(inter.steps)) {
+              const extracted = extractOutputTextFromSteps(inter.steps);
+              if (extracted) inter.output_text = extracted;
             }
+            if (inter.output_text) accumulatedOutput = inter.output_text;
 
-            res.write(`event: ${eventType}\ndata: ${JSON.stringify(eventData)}\n\n`);
-            if (typeof (res as any).flush === 'function') (res as any).flush();
-            continue;
-          } catch (_) {}
-        }
+            // Trigger background persistent memory extraction
+            extractAndStoreMemories(rawPrompt, accumulatedOutput, apiKey, 'web').catch(() => {});
+          }
+
+          res.write(`event: ${eventType}\ndata: ${JSON.stringify(eventData)}\n\n`);
+          if (typeof (res as any).flush === 'function') (res as any).flush();
+          continue;
+        } catch (_) {}
 
         // Forward raw event
         res.write(`${block}\n\n`);
@@ -405,16 +511,20 @@ router.all('/stream-task', async (req: Request, res: Response) => {
   } catch (err: any) {
     clearInterval(keepAliveInterval);
     if (err.name === 'AbortError') return;
-    console.error('Antigravity streaming error:', err);
-    res.write(`event: error\ndata: ${JSON.stringify({
-      type: 'agent_unavailable',
-      message: `Antigravity model is not available: ${err?.message || 'Stream connection dropped'}`
-    })}\n\n`);
-    res.end();
+    console.error('Antigravity streaming error, checking fallback:', err);
+    try {
+      return streamGeminiFallback(rawPrompt, augmentedPrompt, files, apiKey, res, abortController.signal);
+    } catch (_) {
+      res.write(`event: error\ndata: ${JSON.stringify({
+        type: 'agent_unavailable',
+        message: `Antigravity model is not available: ${err?.message || 'Stream connection dropped'}`
+      })}\n\n`);
+      res.end();
+    }
   }
 });
 
-// Task execution endpoint
+// Task execution endpoint with Persistent Memory
 router.post('/execute-task', async (req: Request, res: Response) => {
   const apiKey = getApiKey(req);
   if (!apiKey) {
@@ -438,12 +548,15 @@ router.post('/execute-task', async (req: Request, res: Response) => {
     return res.status(400).json({ error: { message: 'Prompt or files required.' } });
   }
 
-  const prompt = buildContextualPrompt(rawPrompt, history);
+  // 1. Contextual within-session history
+  const contextualPrompt = buildContextualPrompt(rawPrompt, history);
+  // 2. Cross-session persistent memory
+  const augmentedPrompt = contextualPrompt ? injectMemoryIntoPrompt(contextualPrompt) : '';
 
-  let inputPayload: any = prompt;
+  let inputPayload: any = augmentedPrompt || contextualPrompt;
   if (files && files.length > 0) {
     const parts: any[] = [];
-    if (prompt) parts.push({ type: 'text', text: prompt });
+    if (augmentedPrompt) parts.push({ type: 'text', text: augmentedPrompt });
     files.forEach((f: any) => {
       let partType = 'image';
       if (f.type && f.type.startsWith('video/')) partType = 'video';
@@ -492,8 +605,33 @@ router.post('/execute-task', async (req: Request, res: Response) => {
     const statusCode = agentRes.status;
     const rawMessage = errData.error?.message || errData.message || `HTTP ${statusCode}`;
 
-    console.warn(`Antigravity model returned error (${statusCode}):`, rawMessage);
+    // Fallback to direct Gemini generation if Antigravity endpoint 404/400
+    if (statusCode === 404 || statusCode === 400 || rawMessage.toLowerCase().includes('not found')) {
+      console.log(`[Execute Task] Antigravity unavailable (${statusCode}), executing via Gemini fallback...`);
+      const ai = getGeminiClient(apiKey);
+      const genRes = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: augmentedPrompt || contextualPrompt
+      });
+      const outputText = genRes.text || 'Task processed successfully by Awais Codex.';
+      incrementServerCallBudget('website');
 
+      // Trigger memory extraction in background
+      extractAndStoreMemories(rawPrompt, outputText, apiKey, 'web').catch(() => {});
+
+      return res.json({
+        mode: 'gemini-fallback',
+        engine: 'gemini-2.5-flash',
+        id: `gemini_exec_${Date.now()}`,
+        status: 'completed',
+        output_text: outputText,
+        steps: [
+          { type: 'model_output', text: outputText, summary: 'Generated solution with Gemini' }
+        ]
+      });
+    }
+
+    console.warn(`Antigravity model returned error (${statusCode}):`, rawMessage);
     return res.status(statusCode).json({
       error: {
         type: 'antigravity_unavailable',
@@ -502,6 +640,31 @@ router.post('/execute-task', async (req: Request, res: Response) => {
       }
     });
   } catch (err: any) {
+    // Fallback to Gemini if connection failed
+    try {
+      console.log('[Execute Task] Connection failed, attempting Gemini fallback...');
+      const ai = getGeminiClient(apiKey);
+      const genRes = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: augmentedPrompt || contextualPrompt
+      });
+      const outputText = genRes.text || 'Task processed successfully by Awais Codex.';
+      incrementServerCallBudget('website');
+
+      extractAndStoreMemories(rawPrompt, outputText, apiKey, 'web').catch(() => {});
+
+      return res.json({
+        mode: 'gemini-fallback',
+        engine: 'gemini-2.5-flash',
+        id: `gemini_exec_${Date.now()}`,
+        status: 'completed',
+        output_text: outputText,
+        steps: [
+          { type: 'model_output', text: outputText, summary: 'Generated solution with Gemini' }
+        ]
+      });
+    } catch (_) {}
+
     console.error('Failed to connect to Antigravity API:', err);
     return res.status(503).json({
       error: {

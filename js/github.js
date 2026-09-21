@@ -4,12 +4,28 @@
 
 const GITHUB_TOKEN_KEY = 'awais_codex_github_token';
 
+let githubToastCallback = null;
+let githubOpenSettingsCallback = null;
+
+export function setGitHubHandlers(handlers = {}) {
+  if (handlers.showToast) githubToastCallback = handlers.showToast;
+  if (handlers.openSettings) githubOpenSettingsCallback = handlers.openSettings;
+}
+
+function notify(msg, type = 'info') {
+  if (githubToastCallback) {
+    githubToastCallback(msg, type);
+  } else {
+    console.log(`[GitHub] (${type}) ${msg}`);
+  }
+}
+
 export function getGitHubToken() {
   return localStorage.getItem(GITHUB_TOKEN_KEY) || '';
 }
 
 export function setGitHubToken(token) {
-  localStorage.setItem(GITHUB_TOKEN_KEY, token.trim());
+  localStorage.setItem(GITHUB_TOKEN_KEY, (token || '').trim());
 }
 
 export async function checkGitHubStatus() {
@@ -51,12 +67,9 @@ export async function pushTaskToGitHub(project, turn) {
   if (!token) {
     const status = await checkGitHubStatus();
     if (!status.hasToken) {
-      const input = prompt('Enter your GitHub Personal Access Token (or configure GITHUB_TOKEN in your backend environment variables):');
-      if (!input || !input.trim()) {
-        return;
-      }
-      token = input.trim();
-      setGitHubToken(token);
+      notify('GitHub token not configured. Please add your token in Settings.', 'rose');
+      if (githubOpenSettingsCallback) githubOpenSettingsCallback();
+      return;
     }
   }
 
@@ -66,6 +79,8 @@ export async function pushTaskToGitHub(project, turn) {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '') || 'awais-codex-export';
 
+  notify(`Pushing project "${repoName}" to GitHub...`, 'info');
+
   try {
     const res = await fetch('/api/github/export-repo', {
       method: 'POST',
@@ -73,6 +88,8 @@ export async function pushTaskToGitHub(project, turn) {
       body: JSON.stringify({
         token: token || undefined,
         repoName,
+        projectTitle: project?.title || 'Awais Codex Project',
+        projectContent: turn?.output || turn?.prompt || '',
         description: `Exported from Awais Codex project "${project?.title || 'Untitled'}"`,
         isPrivate: false,
         environmentId: project?.environmentId || turn?.environmentId,
@@ -82,17 +99,16 @@ export async function pushTaskToGitHub(project, turn) {
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      alert(`GitHub Push Failed: ${data.error || res.statusText}`);
+      notify(`GitHub Push Failed: ${data.error || res.statusText}`, 'rose');
       return;
     }
 
     if (data.repoUrl) {
-      alert(`Successfully pushed files to GitHub!\nRepository: ${data.repoUrl}`);
+      notify(`✓ Files pushed to GitHub repository: ${data.repoUrl}`, 'info');
     } else {
-      alert('Files pushed to GitHub successfully!');
+      notify('✓ Files pushed to GitHub successfully!', 'info');
     }
   } catch (err) {
-    alert(`GitHub Push Error: ${err.message}`);
+    notify(`GitHub Push Error: ${err.message}`, 'rose');
   }
 }
-

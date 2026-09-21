@@ -12,6 +12,7 @@ import {
   extractOutputTextFromSteps
 } from '../antigravity-client.js';
 import { incrementServerCallBudget } from '../call-budget-server.js';
+import { injectMemoryIntoPrompt, extractAndStoreMemories } from '../memory-engine.js';
 
 const router = Router();
 
@@ -1236,10 +1237,11 @@ async function executeTask(
     contextualPrompt = `${historyBlock}### CURRENT USER REQUEST:\n${userPrompt}\n\n[Instruction: Maintain continuous context with the WhatsApp chat history above. Remember all user details, names, requirements, and previously discussed topics.]`;
   }
 
+  const augmentedPrompt = injectMemoryIntoPrompt(contextualPrompt);
   const postUrl = `${API_ENDPOINT}?key=${encodeURIComponent(geminiApiKey)}`;
   const payload: any = {
     agent: DEFAULT_ENGINE,
-    input: contextualPrompt,
+    input: augmentedPrompt,
     environment: 'remote',
     stream: true
   };
@@ -1291,6 +1293,7 @@ async function executeTask(
           const durationSec = Math.round((Date.now() - startTime) / 1000);
           const finalMessage = `✅ *Awais Codex Completed (${durationSec}s)*\n━━━━━━━━━━━━━━━━━━━━\n${text}`;
           await recordTurnComplete(convId, turnId, text, [], 'success');
+          extractAndStoreMemories(userPrompt, text, geminiApiKey, 'whatsapp').catch(() => {});
           if (shouldSendOutboundWhatsApp) {
             await sendWhatsAppMessage(senderPhone, finalMessage);
           }
@@ -1369,6 +1372,7 @@ async function executeTask(
     const finalMessage = `✅ *Awais Codex Completed (${durationSec}s)*\n━━━━━━━━━━━━━━━━━━━━\n${cleanResult}${artifactSection}`;
 
     await recordTurnComplete(convId, turnId, cleanResult, generatedArtifacts, 'success');
+    extractAndStoreMemories(userPrompt, cleanResult, geminiApiKey, 'whatsapp').catch(() => {});
 
     if (shouldSendOutboundWhatsApp) {
       await sendWhatsAppMessage(senderPhone, finalMessage);

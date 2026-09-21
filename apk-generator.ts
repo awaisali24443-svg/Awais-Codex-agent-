@@ -1,3 +1,21 @@
+// Precomputed CRC-32 Table for standard IEEE 802.3 checksums
+const crc32Table = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let k = 0; k < 8; k++) {
+    c = ((c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1));
+  }
+  crc32Table[i] = c >>> 0;
+}
+
+function calculateCrc32(buf: Buffer): number {
+  let crc = 0 ^ (-1);
+  for (let i = 0; i < buf.length; i++) {
+    crc = (crc >>> 8) ^ crc32Table[(crc ^ buf[i]) & 0xff];
+  }
+  return (crc ^ (-1)) >>> 0;
+}
+
 // Generate a valid minimal signed APK buffer for local simulation fallback
 export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 'com.awaiscodex.app'): Buffer {
   // A minimal valid ZIP archive containing AndroidManifest.xml and DEX headers
@@ -30,9 +48,10 @@ export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 
   ]);
   const metaInfMf = Buffer.from(`Manifest-Version: 1.0\nCreated-By: Awais Codex Antigravity Build Tool\n\nName: AndroidManifest.xml\nSHA-256-Digest: placeholder\n\nName: classes.dex\nSHA-256-Digest: placeholder\n`, 'utf-8');
 
-  // Build a standard single-file or multi-file ZIP container
+  // Build a standard single-file or multi-file ZIP container with valid CRC32
   function createZipEntry(filename: string, content: Buffer, offset: number) {
     const fnBuf = Buffer.from(filename, 'utf-8');
+    const crc = calculateCrc32(content);
     const header = Buffer.alloc(30);
     header.writeUInt32LE(0x04034b50, 0); // Local file header signature
     header.writeUInt16LE(20, 4);        // Version needed to extract
@@ -40,7 +59,7 @@ export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 
     header.writeUInt16LE(0, 8);         // Compression method (0 = store)
     header.writeUInt16LE(0x546b, 10);   // File last mod time
     header.writeUInt16LE(0x5ca9, 12);   // File last mod date
-    header.writeUInt32LE(0, 14);        // CRC-32 (0 for simple store)
+    header.writeUInt32LE(crc, 14);      // Real CRC-32
     header.writeUInt32LE(content.length, 18); // Compressed size
     header.writeUInt32LE(content.length, 22); // Uncompressed size
     header.writeUInt16LE(fnBuf.length, 26);  // Filename length
@@ -54,7 +73,7 @@ export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 
     cdHeader.writeUInt16LE(0, 10);         // Compression method (0 = store)
     cdHeader.writeUInt16LE(0x546b, 12);    // File last mod time
     cdHeader.writeUInt16LE(0x5ca9, 14);    // File last mod date
-    cdHeader.writeUInt32LE(0, 16);         // CRC-32
+    cdHeader.writeUInt32LE(crc, 16);       // Real CRC-32
     cdHeader.writeUInt32LE(content.length, 20); // Compressed size
     cdHeader.writeUInt32LE(content.length, 24); // Uncompressed size
     cdHeader.writeUInt16LE(fnBuf.length, 28);   // Filename length

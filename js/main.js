@@ -8,7 +8,8 @@ import { setSidebarHandlers, renderHistoryList, selectProject, deleteProject, sh
 import { setArtifactsHandlers, updateArtifactsDockForProject, switchArtifactTab, openArtifactsDock, closeArtifactsDock, toggleArtifactsDock, toggleSplitMode, openLightbox, closeLightbox, openDownloadModal, closeDownloadModal, downloadCustomArtifact, downloadWorkspaceArchive } from './artifacts.js';
 import { setQueueHandlers, handlePromptSubmission, cancelTask, retryTask } from './queue.js';
 import { updateCallBudgetUI } from './call-budget.js';
-import { getGitHubToken, setGitHubToken, checkGitHubStatus, testGitHubConnection } from './github.js';
+import { getGitHubToken, setGitHubToken, checkGitHubStatus, testGitHubConnection, setGitHubHandlers } from './github.js';
+import { initMemoryUI, setMemoryHandlers, openMemoryModal } from './memory.js';
 
 let deferredPwaPrompt = null;
 let whatsappPollTimer = null;
@@ -38,6 +39,9 @@ export function init() {
   setSidebarHandlers({ renderConversation, updateArtifactsDockForProject, showConfirmModal, showToast });
   setArtifactsHandlers({ showToast });
   setQueueHandlers({ openSettings, showToast });
+  setGitHubHandlers({ showToast, openSettings });
+  setMemoryHandlers({ showToast });
+  initMemoryUI();
 
   setupEventListeners();
   initPWA();
@@ -142,7 +146,7 @@ function loadSettings() {
   fetch("/api/health")
     .then(r => r.json())
     .then(data => {
-      if (data.hasApiKey) {
+      if (data.hasApiKey || data.hasEnvKey) {
         state.hasEnvKey = true;
       }
       if (el.keyStatusIndicator) {
@@ -434,6 +438,17 @@ function setupEventListeners() {
   if (el.sidebarNavDownload) {
     el.sidebarNavDownload.addEventListener('click', () => {
       openDownloadModal();
+    });
+  }
+  if (el.sidebarNavMemory) {
+    el.sidebarNavMemory.addEventListener('click', () => {
+      openMemoryModal();
+    });
+  }
+  const headerMemoryBtn = document.getElementById('header-memory-btn');
+  if (headerMemoryBtn) {
+    headerMemoryBtn.addEventListener('click', () => {
+      openMemoryModal();
     });
   }
   if (el.sidebarNavSettings) {

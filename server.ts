@@ -8,6 +8,7 @@ import staticRouter from './routes/static.js';
 import tasksRouter from './routes/tasks.js';
 import githubRouter from './routes/github.js';
 import whatsappRouter from './routes/whatsapp.js';
+import memoryRouter from './routes/memory.js';
 
 // Configure global HTTP proxy dispatcher for undici / native fetch in proxy environments
 if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.https_proxy) {
@@ -33,6 +34,7 @@ async function startServer() {
   // API Routes
   app.use('/api', healthRouter);
   app.use('/api', tasksRouter);
+  app.use('/api/memory', memoryRouter);
 
   // WhatsApp Gateway routes & webhook aliases
   app.use('/api/whatsapp', whatsappRouter);
