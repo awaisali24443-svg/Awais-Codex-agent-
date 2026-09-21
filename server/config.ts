@@ -23,6 +23,8 @@ export interface AppConfig {
 
   /** Only one process may long-poll a WhatsApp agent. */
   pollerEnabled: boolean;
+  /** Password for the single operator account. */
+  operatorPassword: string;
   /** Hard daily cap on agent runs — the free tier allows ~100/day. */
   dailyRunBudget: number;
   /** Days to keep replayable run events (Neon free tier is 0.5 GB). */
@@ -93,6 +95,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push(`DAILY_RUN_BUDGET must be between 1 and 10000 (got ${dailyRunBudget})`);
   }
 
+  const operatorPassword = (env.OPERATOR_PASSWORD ?? '').trim();
+  if (isProduction && operatorPassword.length < 12) {
+    problems.push(
+      'OPERATOR_PASSWORD must be at least 12 characters in production (it is the only login)',
+    );
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   return {
@@ -105,6 +114,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     geminiApiKey: (env.GEMINI_API_KEY ?? '').trim(),
     whatsappToken: (env.WHATSAPP_TOKEN ?? '').trim(),
     pollerEnabled,
+    operatorPassword,
     dailyRunBudget,
     eventRetentionDays: readInt(env.EVENT_RETENTION_DAYS, 14),
     artifactRetentionDays: readInt(env.ARTIFACT_RETENTION_DAYS, 7),

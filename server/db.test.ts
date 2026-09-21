@@ -233,11 +233,26 @@ describe('config validation', () => {
       DATABASE_URL: 'postgresql://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/db?sslmode=require',
       SESSION_SECRET: 'a'.repeat(40),
       MASTER_KEY: 'b'.repeat(64),
+      OPERATOR_PASSWORD: 'a-long-enough-operator-password',
       PORT: '10000',
     } as NodeJS.ProcessEnv);
     assert.equal(config.port, 10000);
     assert.equal(config.dailyRunBudget, 100);
     assert.equal(config.pollerEnabled, false);
+  });
+
+  test('refuses a weak operator password in production', () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'production',
+          DATABASE_URL: 'postgresql://u:p@host/db',
+          SESSION_SECRET: 'a'.repeat(40),
+          MASTER_KEY: 'b'.repeat(64),
+          OPERATOR_PASSWORD: 'short',
+        } as NodeJS.ProcessEnv),
+      /OPERATOR_PASSWORD must be at least 12 characters/,
+    );
   });
 
   test('refuses a poller with no token (the "silent spin" trap)', () => {
