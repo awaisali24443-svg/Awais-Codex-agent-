@@ -12,21 +12,32 @@ import { createApp } from './app.js';
 import { EventBus } from './events.js';
 import { RunExecutor } from './executor.js';
 import { ScriptedEngine } from './engine/scripted.js';
+import { AntigravityEngine } from './engine/antigravity.js';
 import type { Engine } from './engine/types.js';
 
 /**
- * Pick the engine. Failing loudly here is deliberate: silently falling back to
- * the scripted engine in production would look like the agent working while
- * nothing real ever ran.
+ * Pick the engine.
+ *
+ * There is no silent fallback in either direction: the operator always knows
+ * which one is running, because the difference between them is the difference
+ * between a real agent and a convincing demo.
  */
 function createEngine(config: AppConfig): Engine {
-  if (config.engineName === 'antigravity') {
-    throw new Error(
-      'ENGINE=antigravity is not implemented yet — the Antigravity client arrives in the next phase. ' +
-        'Leave ENGINE unset (or ENGINE=scripted) until then.',
-    );
+  if (config.engineName === 'scripted') {
+    console.warn('[boot] ENGINE=scripted — missions will not reach the real agent');
+    return new ScriptedEngine();
   }
-  return new ScriptedEngine();
+
+  console.log(`[boot] agent: ${config.antigravityAgent}`);
+  if (config.antigravityMaxTokens > 0) {
+    console.log(`[boot] token ceiling per interaction: ${config.antigravityMaxTokens}`);
+  }
+  return new AntigravityEngine({
+    apiKey: config.geminiApiKey,
+    agent: config.antigravityAgent,
+    apiBase: config.antigravityApiBase || undefined,
+    maxTotalTokens: config.antigravityMaxTokens || undefined,
+  });
 }
 
 async function boot(): Promise<void> {

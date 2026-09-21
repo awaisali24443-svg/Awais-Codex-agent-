@@ -230,6 +230,8 @@ export class RunExecutor {
       const ctx: EngineContext = {
         runId: run.id,
         signal: controller.signal,
+        previousInteractionId: run.previousInteractionId,
+        environmentId: run.environmentId,
 
         text: (chunk) => {
           text.append(chunk);
@@ -272,23 +274,40 @@ export class RunExecutor {
         return;
       }
 
-      const finalText = text.text || result.text || '';
+      // The engine's final answer beats the streamed deltas. Deltas can miss
+      // their tail if the upstream stream is cut, and some engines only produce
+      // the complete text at the end. Whichever is longer is the better record,
+      // and the `final: true` snapshot below overwrites what the client drew.
+      const streamed = text.text;
+      const authoritative = result.text ?? '';
+      const finalText = authoritative.length >= streamed.length ? authoritative : streamed;
       await writer.write('text.snapshot', { text: finalText, final: true });
+      await writer.write('run.environment', {
+        interactionId: result.interactionId ?? null,
+        environmentId: result.environmentId ?? null,
+      });
       const seq = await finishRun(this.deps.db, run.id, {
         status: 'completed',
         text: finalText,
         tokensIn: result.tokensIn ?? null,
         tokensOut: result.tokensOut ?? null,
+        // Stored so a follow-up message resumes this sandbox instead of
+        // starting a new one and losing the agent's workspace.
+        interactionId: result.interactionId ?? null,
+        environmentId: result.environmentId ?? null,
       });
       bus.publish(run.id, { seq, type: 'run.completed', payload: { status: 'completed' } });
       console.log(
         `[run] ${run.id} completed (${finalText.length} chars, ${thinking.text.length} chars thinking)`,
       );
     } catch (err) {
-      const error = err as Error;
+      const error = err as Error & { errorType?: string };
       const aborted = controller.signal.aborted || error instanceof EngineAbortedError;
       const status = aborted ? 'cancelled' : 'failed';
-      const type = aborted ? null : (error.name === 'Error' ? 'engine_error' : error.name);
+      // Engines label their own failures so the run records something the
+      // operator can act on (quota_exceeded vs auth_failed vs engine_error)
+      // rather than a bare stack-trace-shaped string.
+      const type = aborted ? null : error.errorType ?? (error.name === 'Error' ? 'engine_error' : error.name);
       await this.settle(
         run.id,
         status,

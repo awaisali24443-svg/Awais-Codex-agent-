@@ -21,8 +21,14 @@ export interface AppConfig {
   /** WhatsApp Agent Platform token. Optional: the feature is a limited beta. */
   whatsappToken: string;
 
-  /** Which engine executes runs. 'antigravity' is wired in a later phase. */
+  /** Which engine executes runs. */
   engineName: 'scripted' | 'antigravity';
+  /** Antigravity managed-agent id. Date-stamped, so it must be updatable. */
+  antigravityAgent: string;
+  /** Override the API base (tests point this at a local fake). */
+  antigravityApiBase: string;
+  /** Optional hard token ceiling for one interaction. 0 = uncapped. */
+  antigravityMaxTokens: number;
 
   /** Only one process may long-poll a WhatsApp agent. */
   pollerEnabled: boolean;
@@ -93,7 +99,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push('POLLER_ENABLED=true but WHATSAPP_TOKEN is empty — the poller would spin');
   }
 
-  const engineRaw = (env.ENGINE ?? 'scripted').trim().toLowerCase();
+  // The real engine is the default: silently running the scripted one in
+  // production would look like the agent working while nothing real ever ran.
+  const engineRaw = (env.ENGINE ?? 'antigravity').trim().toLowerCase();
   if (engineRaw !== 'scripted' && engineRaw !== 'antigravity') {
     problems.push(`ENGINE must be "scripted" or "antigravity" (got "${engineRaw}")`);
   }
@@ -104,6 +112,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const operatorPassword = (env.OPERATOR_PASSWORD ?? '').trim();
+  const geminiApiKey = (env.GEMINI_API_KEY ?? '').trim();
+  if (isProduction && engineRaw === 'antigravity' && !geminiApiKey) {
+    problems.push(
+      'ENGINE=antigravity needs GEMINI_API_KEY, or every mission will fail with auth_failed. ' +
+        'Set the key, or set ENGINE=scripted to run without one.',
+    );
+  }
+
   if (isProduction && operatorPassword.length < 12) {
     problems.push(
       'OPERATOR_PASSWORD must be at least 12 characters in production (it is the only login)',
@@ -119,9 +135,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl,
     sessionSecret: sessionSecret || 'dev-only-insecure-session-secret-change-me',
     masterKey: masterKey || '0'.repeat(64),
-    geminiApiKey: (env.GEMINI_API_KEY ?? '').trim(),
+    geminiApiKey,
     whatsappToken: (env.WHATSAPP_TOKEN ?? '').trim(),
-    engineName: engineRaw === 'antigravity' ? 'antigravity' : 'scripted',
+    engineName: engineRaw === 'scripted' ? 'scripted' : 'antigravity',
+    antigravityAgent: (env.ANTIGRAVITY_AGENT ?? 'antigravity-preview-09-2026').trim(),
+    antigravityApiBase: (env.ANTIGRAVITY_API_BASE ?? '').trim(),
+    antigravityMaxTokens: readInt(env.ANTIGRAVITY_MAX_TOKENS, 0),
     pollerEnabled,
     operatorPassword,
     dailyRunBudget,

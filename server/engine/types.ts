@@ -17,6 +17,14 @@ export interface EngineContext {
   /** Aborted when the operator cancels, or on shutdown. Engines must honour it. */
   readonly signal: AbortSignal;
 
+  /**
+   * Continuation handles. When set, the engine should resume that sandbox
+   * rather than start a new one, so the agent keeps its workspace and its
+   * memory of the previous mission.
+   */
+  readonly previousInteractionId: string | null;
+  readonly environmentId: string | null;
+
   /** Append to the assistant's visible answer. */
   text(chunk: string): void;
   /** Append to the reasoning trace. Kept separate from the answer. */
@@ -55,5 +63,37 @@ export class EngineAbortedError extends Error {
   constructor() {
     super('Run cancelled by operator');
     this.name = 'EngineAbortedError';
+  }
+}
+
+/** Machine-readable failure kinds, stored on the run as `error_type`. */
+export type EngineErrorType =
+  | 'auth_failed'
+  | 'quota_exceeded'
+  | 'rate_limited'
+  | 'agent_unavailable'
+  | 'invalid_request'
+  | 'upstream_error'
+  | 'network_error'
+  | 'idle_timeout'
+  | 'truncated';
+
+/**
+ * An engine failure that says what went wrong and whether retrying is safe.
+ *
+ * `retryable` is deliberately narrow. A retry re-sends the whole mission, and
+ * on a ~100-run daily quota a wrong retry is a wasted run. Only 429 and 503
+ * qualify, and only before the engine has produced any output — once tokens
+ * have been generated, the run has been paid for and retrying would pay twice.
+ */
+export class EngineError extends Error {
+  constructor(
+    message: string,
+    readonly errorType: EngineErrorType,
+    readonly retryable = false,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'EngineError';
   }
 }

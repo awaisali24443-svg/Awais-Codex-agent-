@@ -28,6 +28,12 @@ export interface Run {
   prompt: string;
   status: RunStatus;
   engine: string;
+  /** Engine-side handles. The whole point of continuation: the agent keeps its
+   *  sandbox and its memory of the mission across separate browser sessions. */
+  interactionId: string | null;
+  environmentId: string | null;
+  /** Set when this mission continues the sandbox of an earlier one. */
+  previousInteractionId: string | null;
   errorType: string | null;
   errorMessage: string | null;
   startedAt: string;
@@ -64,6 +70,9 @@ interface RunRow {
   prompt: string;
   status: RunStatus;
   engine: string;
+  interaction_id: string | null;
+  environment_id: string | null;
+  previous_interaction_id: string | null;
   error_type: string | null;
   error_message: string | null;
   started_at: Date | string;
@@ -83,6 +92,9 @@ function mapRun(row: RunRow): Run {
     prompt: row.prompt,
     status: row.status,
     engine: row.engine,
+    interactionId: row.interaction_id,
+    environmentId: row.environment_id,
+    previousInteractionId: row.previous_interaction_id,
     errorType: row.error_type,
     errorMessage: row.error_message,
     startedAt: toIso(row.started_at) as string,
@@ -91,6 +103,7 @@ function mapRun(row: RunRow): Run {
 }
 
 const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
+                     interaction_id, environment_id, previous_interaction_id,
                      error_type, error_message, started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
@@ -143,11 +156,46 @@ export async function createConversation(
   return id;
 }
 
+export interface Continuation {
+  interactionId: string;
+  environmentId: string | null;
+}
+
+/**
+ * Find the sandbox this mission should continue.
+ *
+ * A follow-up message in the same conversation should reach the same agent with
+ * its workspace and its memory intact — otherwise every message starts a fresh
+ * sandbox and the agent forgets the project it was mid-way through building.
+ *
+ * Only a *completed* run qualifies. Continuing from a failed or cancelled one
+ * would attach the new mission to a half-finished step.
+ */
+export async function resolveContinuation(
+  db: Db,
+  conversationId: string,
+): Promise<Continuation | null> {
+  const rows = await db.query<{ interaction_id: string; environment_id: string | null }>(
+    `SELECT interaction_id, environment_id
+       FROM runs
+      WHERE conversation_id = $1
+        AND status = 'completed'
+        AND interaction_id IS NOT NULL
+      ORDER BY finished_at DESC NULLS LAST, started_at DESC
+      LIMIT 1`,
+    [conversationId],
+  );
+  const row = rows[0];
+  return row ? { interactionId: row.interaction_id, environmentId: row.environment_id } : null;
+}
+
 export interface CreateRunInput {
   prompt: string;
   kind?: RunKind;
   engine: string;
   conversationId?: string | null;
+  /** Skip automatic continuation and start a fresh sandbox. */
+  fresh?: boolean;
 }
 
 /**
@@ -165,13 +213,24 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
     conversationId = await createConversation(db, prompt, kind);
   }
 
+  const continuation = input.fresh ? null : await resolveContinuation(db, conversationId);
+
   const id = newId('run');
   try {
     await db.transaction(async (tx) => {
       await tx.query(
-        `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine)
-         VALUES ($1, $2, $3, $4, 'queued', $5)`,
-        [id, conversationId, kind, prompt, input.engine],
+        `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine,
+                           previous_interaction_id, environment_id)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7)`,
+        [
+          id,
+          conversationId,
+          kind,
+          prompt,
+          input.engine,
+          continuation?.interactionId ?? null,
+          continuation?.environmentId ?? null,
+        ],
       );
       await tx.query(
         `INSERT INTO messages (id, conversation_id, run_id, role, content)
@@ -267,6 +326,9 @@ export interface FinishRunInput {
   errorMessage?: string | null;
   tokensIn?: number | null;
   tokensOut?: number | null;
+  /** Engine handles, stored so the next follow-up can continue this sandbox. */
+  interactionId?: string | null;
+  environmentId?: string | null;
 }
 
 /**
@@ -293,6 +355,8 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
               error_message = $4,
               tokens_in = $5,
               tokens_out = $6,
+              interaction_id = COALESCE($7, interaction_id),
+              environment_id = COALESCE($8, environment_id),
               finished_at = now()
         WHERE id = $1`,
       [
@@ -302,6 +366,8 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
         input.errorMessage ?? null,
         input.tokensIn ?? null,
         input.tokensOut ?? null,
+        input.interactionId ?? null,
+        input.environmentId ?? null,
       ],
     );
 

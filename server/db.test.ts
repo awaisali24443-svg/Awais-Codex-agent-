@@ -227,18 +227,58 @@ describe('config validation', () => {
     );
   });
 
+  /** The minimum a production deployment needs to boot. */
+  const productionEnv = {
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/db?sslmode=require',
+    SESSION_SECRET: 'a'.repeat(40),
+    MASTER_KEY: 'b'.repeat(64),
+    OPERATOR_PASSWORD: 'a-long-enough-operator-password',
+    GEMINI_API_KEY: 'test-key',
+    PORT: '10000',
+  };
+
   test('a valid production environment passes', () => {
-    const config = loadConfig({
-      NODE_ENV: 'production',
-      DATABASE_URL: 'postgresql://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/db?sslmode=require',
-      SESSION_SECRET: 'a'.repeat(40),
-      MASTER_KEY: 'b'.repeat(64),
-      OPERATOR_PASSWORD: 'a-long-enough-operator-password',
-      PORT: '10000',
-    } as NodeJS.ProcessEnv);
+    const config = loadConfig({ ...productionEnv } as NodeJS.ProcessEnv);
     assert.equal(config.port, 10000);
     assert.equal(config.dailyRunBudget, 100);
     assert.equal(config.pollerEnabled, false);
+  });
+
+  test('the real agent is the default engine', () => {
+    // Not scripted: a deployment that silently ran the demo engine would look
+    // like the agent working while nothing real ever ran.
+    assert.equal(loadConfig({ ...productionEnv } as NodeJS.ProcessEnv).engineName, 'antigravity');
+  });
+
+  test('production refuses to boot the real engine without a key', () => {
+    const { GEMINI_API_KEY: _omitted, ...withoutKey } = productionEnv;
+    assert.throws(
+      () => loadConfig({ ...withoutKey } as NodeJS.ProcessEnv),
+      /GEMINI_API_KEY/,
+    );
+  });
+
+  test('but the scripted engine is allowed without a key', () => {
+    const { GEMINI_API_KEY: _omitted, ...withoutKey } = productionEnv;
+    const config = loadConfig({ ...withoutKey, ENGINE: 'scripted' } as NodeJS.ProcessEnv);
+    assert.equal(config.engineName, 'scripted');
+  });
+
+  test('an unknown engine name is rejected rather than ignored', () => {
+    assert.throws(
+      () => loadConfig({ ...productionEnv, ENGINE: 'gpt5' } as NodeJS.ProcessEnv),
+      /ENGINE must be/,
+    );
+  });
+
+  test('the agent id is configurable, because it is date-stamped', () => {
+    const config = loadConfig({
+      ...productionEnv,
+      ANTIGRAVITY_AGENT: 'antigravity-preview-12-2026',
+    } as NodeJS.ProcessEnv);
+    assert.equal(config.antigravityAgent, 'antigravity-preview-12-2026');
+    assert.match(loadConfig({ ...productionEnv } as NodeJS.ProcessEnv).antigravityAgent, /^antigravity-preview-\d{2}-\d{4}$/);
   });
 
   test('refuses a weak operator password in production', () => {
