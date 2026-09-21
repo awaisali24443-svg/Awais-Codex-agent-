@@ -349,6 +349,11 @@ export function initWhatsAppAgentManager() {
     }
   }
 
+  if (!dynamicApiKey) {
+    const effective = getEffectiveWhatsAppApiKey();
+    if (effective) dynamicApiKey = effective;
+  }
+
   savedKeys.forEach(cfg => {
     if (!cfg.pairingKey) return;
     let agent = activeAgents.get(cfg.pairingKey);
@@ -403,6 +408,20 @@ let dynamicApiKey = initialConfig.whatsappApiKey || '';
 let dynamicGeminiApiKey = initialConfig.geminiApiKey || '';
 let lastDetectedPhoneNumberId = initialConfig.phoneNumberId || '';
 let configuredVerifyToken = initialConfig.verifyToken || '';
+
+export function getEffectiveWhatsAppApiKey(): string {
+  if (dynamicApiKey && dynamicApiKey.trim()) return dynamicApiKey.trim();
+  const saved = loadPersistedConfig();
+  if (saved.whatsappApiKey && saved.whatsappApiKey.trim()) return saved.whatsappApiKey.trim();
+  if (process.env.WHATSAPP_API_KEY && process.env.WHATSAPP_API_KEY.trim()) return process.env.WHATSAPP_API_KEY.trim();
+  if (process.env.WHATSAPP_AGENT_KEY && process.env.WHATSAPP_AGENT_KEY.trim()) return process.env.WHATSAPP_AGENT_KEY.trim();
+
+  const savedKeys = loadAgentKeys();
+  if (savedKeys.length > 0 && savedKeys[0].pairingKey) {
+    return savedKeys[0].pairingKey.trim();
+  }
+  return '';
+}
 
 export function getActiveGeminiKey(req?: Request): string {
   const customKey = req?.headers?.['x-gemini-api-key'] as string;
@@ -547,7 +566,7 @@ export async function sendWhatsAppMessage(
   overridePhoneId?: string
 ): Promise<{ success: boolean; error?: string }> {
   const saved = loadPersistedConfig();
-  const apiKey = (dynamicApiKey || saved.whatsappApiKey || process.env.WHATSAPP_API_KEY || '').trim();
+  const apiKey = getEffectiveWhatsAppApiKey();
   const phoneNumberId = (overridePhoneId || lastDetectedPhoneNumberId || saved.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
 
   const cleanTo = recipientPhone.replace(/[^0-9]/g, '');
@@ -556,7 +575,7 @@ export async function sendWhatsAppMessage(
     console.log(`[WhatsApp Gateway (Waiting for Key)] To: ${cleanTo}`);
     return {
       success: false,
-      error: 'WHATSAPP_API_KEY is not configured yet.'
+      error: 'WhatsApp API key is not configured yet (WHATSAPP_API_KEY or WHATSAPP_AGENT_KEY).'
     };
   }
 
@@ -682,7 +701,7 @@ router.get('/', (req: Request, res: Response) => {
     }
   }
 
-  const hasApiKey = Boolean(dynamicApiKey || process.env.WHATSAPP_API_KEY);
+  const hasApiKey = Boolean(getEffectiveWhatsAppApiKey());
   const host = req.get('host') || 'localhost:3000';
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
   const webhookUrl = `${protocol}://${host}/api/whatsapp`;
@@ -765,7 +784,7 @@ router.post('/send-reply', async (req: Request, res: Response) => {
   let sentToWhatsApp = false;
   let sendError: string | undefined;
 
-  const hasWaToken = Boolean(dynamicApiKey || process.env.WHATSAPP_API_KEY);
+  const hasWaToken = Boolean(getEffectiveWhatsAppApiKey());
   if (hasWaToken && cleanPhone) {
     const sendRes = await sendWhatsAppMessage(cleanPhone, message);
     sentToWhatsApp = sendRes.success;
@@ -817,6 +836,15 @@ router.post('/pair', (req: Request, res: Response) => {
   activeAgents.set(cleanKey, agent);
   agent.connect();
 
+  const currentConfig = loadPersistedConfig();
+  if (!currentConfig.whatsappApiKey) {
+    currentConfig.whatsappApiKey = cleanKey;
+    savePersistedConfig(currentConfig);
+  }
+  if (!dynamicApiKey) {
+    dynamicApiKey = cleanKey;
+  }
+
   addWebhookLog({
     type: 'system',
     summary: `Configured agent "${agentName}" with pairing key ${cleanKey.slice(0, 14)}...`,
@@ -859,7 +887,7 @@ router.get('/config', (req: Request, res: Response) => {
   const saved = loadPersistedConfig();
   res.json({
     success: true,
-    hasApiKey: Boolean(dynamicApiKey || saved.whatsappApiKey || process.env.WHATSAPP_API_KEY),
+    hasApiKey: Boolean(getEffectiveWhatsAppApiKey()),
     hasGeminiKey: Boolean(getActiveGeminiKey(req)),
     phoneNumberId: lastDetectedPhoneNumberId || saved.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '',
     verifyToken: configuredVerifyToken || saved.verifyToken || process.env.WHATSAPP_VERIFY_TOKEN || 'Awais Codex'
@@ -899,7 +927,7 @@ router.post('/config', (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    hasApiKey: Boolean(dynamicApiKey || process.env.WHATSAPP_API_KEY),
+    hasApiKey: Boolean(getEffectiveWhatsAppApiKey()),
     hasGeminiKey: Boolean(getActiveGeminiKey(req)),
     phoneNumberId: lastDetectedPhoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '',
     verifyToken: configuredVerifyToken || currentConfig.verifyToken || process.env.WHATSAPP_VERIFY_TOKEN || 'Awais Codex'
@@ -911,7 +939,7 @@ router.get('/logs', (req: Request, res: Response) => {
     success: true,
     logs: webhookLogs,
     totalCount: webhookLogs.length,
-    hasApiKey: Boolean(dynamicApiKey || process.env.WHATSAPP_API_KEY),
+    hasApiKey: Boolean(getEffectiveWhatsAppApiKey()),
     hasGeminiKey: Boolean(getActiveGeminiKey(req)),
     phoneNumberId: lastDetectedPhoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || 'not set'
   });
@@ -941,6 +969,16 @@ async function handleIncomingMessage(req: Request, res: Response) {
   const body = req.body || {};
   const query = (req.query || {}) as Record<string, string>;
 
+  const authHeader = (req.headers.authorization || '') as string;
+  const headerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const customAgentKey = ((req.headers['x-agent-key'] || req.headers['x-api-key'] || '') as string).trim();
+  const bodyAgentKey = (typeof body?.agent_key === 'string' ? body.agent_key : (typeof body?.pairing_key === 'string' ? body.pairing_key : (typeof body?.api_key === 'string' ? body.api_key : ''))).trim();
+
+  const detectedKey = headerToken || customAgentKey || bodyAgentKey;
+  if (detectedKey && !dynamicApiKey) {
+    dynamicApiKey = detectedKey;
+  }
+
   const detectedPhoneId = body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id
     || body?.phone_number_id
     || body?.metadata?.phone_number_id
@@ -963,6 +1001,10 @@ async function handleIncomingMessage(req: Request, res: Response) {
     } else if (msgObj.type === 'audio') {
       messageText = '[Voice note received - Processing transcription]';
     }
+  } else if (body?.entry?.[0]?.messaging?.[0]) {
+    const event = body.entry[0].messaging[0];
+    senderPhone = event.sender?.id || event.sender?.phone || '';
+    messageText = event.message?.text || '';
   } else if (Array.isArray(body?.messages) && body.messages.length > 0) {
     const userMsgs = body.messages.filter((m: any) => m && (m.role === 'user' || !m.role));
     const targetMsg = userMsgs.length > 0 ? userMsgs[userMsgs.length - 1] : body.messages[body.messages.length - 1];
@@ -1072,6 +1114,14 @@ async function handleIncomingMessage(req: Request, res: Response) {
 
     try {
       const result = await executeTask(senderPhone, messageText, session, convId, turnId, req, true);
+
+      const isRealPhone = senderPhone && /^\+?[0-9]{7,16}$/.test(senderPhone);
+      if (isRealPhone && Boolean(getEffectiveWhatsAppApiKey())) {
+        sendWhatsAppMessage(senderPhone, result.finalMessage).catch(err => {
+          console.warn('[WhatsApp Gateway] Background outbound reply to WhatsApp phone failed:', err);
+        });
+      }
+
       return res.status(200).json({
         success: true,
         response: result.finalMessage,
@@ -1130,6 +1180,8 @@ async function executeTask(
   req: Request,
   isThirdPartyAgent: boolean = false
 ): Promise<{ finalMessage: string; cleanResult: string; artifacts: string[] }> {
+  const isRealPhone = senderPhone && /^\+?[0-9]{7,16}$/.test(senderPhone);
+  const shouldSendOutboundWhatsApp = !isThirdPartyAgent || (Boolean(isRealPhone) && Boolean(getEffectiveWhatsAppApiKey()));
   const normalized = userPrompt.trim().toLowerCase();
   const isGreeting = /^(hi|hello|hey|hola|salam|assalam|aoa|help|start|ping|test|info)(\s.*)?$/i.test(normalized) && normalized.length < 30;
 
@@ -1138,7 +1190,7 @@ async function executeTask(
     const greetingMsg = `👋 *Hello from Awais Codex!*\n━━━━━━━━━━━━━━━━━━━━\nI am your autonomous AI engineering assistant powered by the Google Cloud Antigravity Engine.\n\n🚀 *What you can do from WhatsApp:*\n• 📱 *Android Development:* "Build a modern calculator app and give me the APK"\n• 💻 *Web & Full-Stack:* "Create a responsive portfolio site with dark mode"\n• ⚙️ *Linux & Scripts:* "Write a Python script to automate file backups"\n• 🐞 *Bug Fixes & Audit:* "Review and debug this JavaScript code..."\n\nTo begin, simply type your project requirement or task description right here!`;
 
     await recordTurnComplete(convId, turnId, greetingMsg, [], 'success');
-    if (!isThirdPartyAgent) {
+    if (shouldSendOutboundWhatsApp) {
       await sendWhatsAppMessage(senderPhone, greetingMsg);
     }
     return {
@@ -1154,7 +1206,7 @@ async function executeTask(
     session.isProcessing = false;
     const errorMsg = '❌ *Awais Codex Error*: No Google Gemini API Key configured. Please add your key in the Awais Codex web settings or configure it in the WhatsApp Gateway.';
     await recordTurnComplete(convId, turnId, errorMsg, [], 'failed');
-    if (!isThirdPartyAgent) {
+    if (shouldSendOutboundWhatsApp) {
       await sendWhatsAppMessage(senderPhone, errorMsg);
     }
     throw new Error('GEMINI_API_KEY is missing');
@@ -1187,7 +1239,7 @@ async function executeTask(
       const progressMessage = `⚙️ *Awais Codex Update [${elapsedSeconds}s]*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Phase:* ${currentMilestone}\n📊 *Steps processed:* ${stepsCompleted}`;
       
       await recordTurnProgress(convId, turnId, currentMilestone);
-      if (!isThirdPartyAgent) {
+      if (shouldSendOutboundWhatsApp) {
         await sendWhatsAppMessage(senderPhone, progressMessage);
       }
     }
@@ -1215,7 +1267,7 @@ async function executeTask(
           const durationSec = Math.round((Date.now() - startTime) / 1000);
           const finalMessage = `✅ *Awais Codex Completed (${durationSec}s)*\n━━━━━━━━━━━━━━━━━━━━\n${text}`;
           await recordTurnComplete(convId, turnId, text, [], 'success');
-          if (!isThirdPartyAgent) {
+          if (shouldSendOutboundWhatsApp) {
             await sendWhatsAppMessage(senderPhone, finalMessage);
           }
           return {
@@ -1232,7 +1284,7 @@ async function executeTask(
       session.isProcessing = false;
       const failMsg = `⚠️ *Awais Codex Execution Error*: ${rawMsg}`;
       await recordTurnComplete(convId, turnId, failMsg, [], 'failed');
-      if (!isThirdPartyAgent) {
+      if (shouldSendOutboundWhatsApp) {
         await sendWhatsAppMessage(senderPhone, failMsg);
       }
       throw new Error(rawMsg);
@@ -1294,7 +1346,7 @@ async function executeTask(
 
     await recordTurnComplete(convId, turnId, cleanResult, generatedArtifacts, 'success');
 
-    if (!isThirdPartyAgent) {
+    if (shouldSendOutboundWhatsApp) {
       await sendWhatsAppMessage(senderPhone, finalMessage);
     }
 
@@ -1321,7 +1373,7 @@ async function executeTask(
         const durationSec = Math.round((Date.now() - startTime) / 1000);
         const finalMessage = `✅ *Awais Codex Completed (${durationSec}s)*\n━━━━━━━━━━━━━━━━━━━━\n${text}`;
         await recordTurnComplete(convId, turnId, text, [], 'success');
-        if (!isThirdPartyAgent) {
+        if (shouldSendOutboundWhatsApp) {
           await sendWhatsAppMessage(senderPhone, finalMessage);
         }
         return {
@@ -1336,7 +1388,7 @@ async function executeTask(
 
     const errText = `❌ *Awais Codex Exception*: ${err?.message || 'Execution error.'}`;
     await recordTurnComplete(convId, turnId, errText, [], 'failed');
-    if (!isThirdPartyAgent) {
+    if (shouldSendOutboundWhatsApp) {
       await sendWhatsAppMessage(senderPhone, errText);
     }
     throw err;
