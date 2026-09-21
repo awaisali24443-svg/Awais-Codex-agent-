@@ -131,8 +131,6 @@ export function updateArtifactsDockForProject(project) {
   if (el.artifactsBadge) el.artifactsBadge.textContent = String(artifacts.length);
   if (el.sidebarArtifactsBadge) el.sidebarArtifactsBadge.textContent = String(artifacts.length);
   if (el.artifactsCountPill) el.artifactsCountPill.textContent = `${artifacts.length} file${artifacts.length === 1 ? '' : 's'}`;
-  const mobileArtifactsCount = document.getElementById('mobile-artifacts-count');
-  if (mobileArtifactsCount) mobileArtifactsCount.textContent = String(artifacts.length);
 
   if (el.artifactsFileList) {
     el.artifactsFileList.innerHTML = '';
