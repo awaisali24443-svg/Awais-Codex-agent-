@@ -37,11 +37,10 @@ import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { EventBus, StreamEvent } from '../events.js';
 import type { RunExecutor } from '../executor.js';
-import { BudgetExceededError, budgetSnapshot, consumeRunBudget } from '../budget.js';
+import { budgetSnapshot } from '../budget.js';
+import { BUCKET_FOR_KIND, acceptRun } from '../accept.js';
 import {
-  RunConflictError,
   TERMINAL_STATUSES,
-  createRun,
   getActiveRun,
   getRun,
   listConversations,
@@ -68,12 +67,6 @@ const TRANSIENT_BACKPRESSURE_BYTES = 512 * 1024;
 const HEARTBEAT_MS = 15_000;
 
 const TERMINAL_EVENT_TYPES = new Set(['run.completed', 'run.failed', 'run.cancelled']);
-
-const BUCKET_FOR_KIND: Record<RunKind, 'web' | 'whatsapp' | 'api'> = {
-  chat: 'web',
-  whatsapp: 'whatsapp',
-  api: 'api',
-};
 
 function sseFrame(event: StreamEvent): string {
   // `id` is omitted for transient events on purpose: Last-Event-ID must only
@@ -123,70 +116,41 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
 
     const kind: RunKind =
       body.kind === 'whatsapp' || body.kind === 'api' || body.kind === 'chat' ? body.kind : 'chat';
-    const bucket = BUCKET_FOR_KIND[kind];
 
-    // The active-run check is an optimisation for a good error message. The
-    // real enforcement is the partial unique index, which cannot be raced.
-    const active = await getActiveRun(db);
-    if (active) {
+    // Same rules as the phone: one task at a time, one budget, one code path.
+    const result = await acceptRun(
+      { db, executor, config },
+      {
+        prompt,
+        kind,
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+      },
+    );
+
+    if (!result.ok && result.reason === 'in_progress') {
       res.status(409).json({
         error: 'run_in_progress',
-        message: `"${active.prompt.slice(0, 80)}" is already running`,
-        activeRunId: active.id,
+        message: `"${result.active.prompt.slice(0, 80)}" is already running`,
+        activeRunId: result.active.id,
       });
       return;
     }
 
-    let run;
-    try {
-      run = await createRun(db, {
-        prompt,
-        kind,
-        engine: config.engineName,
-        conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+    if (!result.ok) {
+      res.status(429).json({
+        error: 'daily_budget_exceeded',
+        message: result.message,
+        used: result.used,
+        limit: result.limit,
+        resetsAt: result.resetsAt,
       });
-    } catch (err) {
-      if (err instanceof RunConflictError) {
-        res.status(409).json({
-          error: 'run_in_progress',
-          message: err.message,
-          activeRunId: err.activeRunId,
-        });
-        return;
-      }
-      throw err;
+      return;
     }
 
-    // Spend only once the run exists. If the budget refuses it the run is
-    // closed immediately and the engine never sees the prompt, so a refused
-    // mission cannot cost anything.
-    let remaining: number;
-    try {
-      const used = await consumeRunBudget(db, bucket, config.dailyRunBudget);
-      remaining = Math.max(0, config.dailyRunBudget - used);
-    } catch (err) {
-      if (err instanceof BudgetExceededError) {
-        await setRunStatus(db, run.id, 'failed', {
-          errorType: 'budget_exceeded',
-          errorMessage: err.message,
-        });
-        res.status(429).json({
-          error: 'daily_budget_exceeded',
-          message: err.message,
-          used: err.used,
-          limit: err.limit,
-          // The budget window is UTC midnight; the engine's own quota resets
-          // separately, so this is the honest answer for our own guard.
-          resetsAt: `${new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}T00:00:00Z`,
-        });
-        return;
-      }
-      throw err;
-    }
-
-    executor.start(run);
-    console.log(`[run] ${run.id} queued (${kind}, ${remaining} left today)`);
-    res.status(201).json({ run, budget: { bucket, remaining, limit: config.dailyRunBudget } });
+    res.status(201).json({
+      run: result.run,
+      budget: { bucket: result.bucket, remaining: result.remaining, limit: config.dailyRunBudget },
+    });
   });
 
   // ---- read ---------------------------------------------------------------

@@ -6,6 +6,7 @@
  * and no one-off jobs, so schema setup must happen here on every boot.
  */
 import { loadConfig, type AppConfig } from './config.js';
+import { DISABLED_HEALTH } from './whatsapp/poller.js';
 import { createDb, markOrphanedRuns, pruneRunEvents, type Db } from './db.js';
 import { migrate } from './migrate.js';
 import { createApp } from './app.js';
@@ -14,6 +15,10 @@ import { RunExecutor } from './executor.js';
 import { ScriptedEngine } from './engine/scripted.js';
 import { AntigravityEngine } from './engine/antigravity.js';
 import type { Engine } from './engine/types.js';
+import { acceptRun } from './accept.js';
+import { WhatsAppClient } from './whatsapp/api.js';
+import { WhatsAppPoller } from './whatsapp/poller.js';
+import { WhatsAppSender } from './whatsapp/sender.js';
 
 /**
  * Pick the engine.
@@ -69,31 +74,65 @@ async function boot(): Promise<void> {
   const orphaned = await markOrphanedRuns(db, 0);
   if (orphaned > 0) console.log(`[boot] recovered ${orphaned} orphaned run(s)`);
 
-  // The poller is deliberately not started here yet: it arrives with the
-  // WhatsApp platform adapter. The flag is validated now so a misconfigured
-  // deployment fails at boot rather than silently spinning.
-  const poller: 'disabled' | 'running' | 'error' =
-    config.pollerEnabled && config.whatsappToken ? 'running' : 'disabled';
-  if (config.pollerEnabled && !config.whatsappToken) {
-    // loadConfig already rejects this, but keep the runtime honest.
-    throw new Error('POLLER_ENABLED is set without WHATSAPP_TOKEN');
-  }
-
   const bus = new EventBus();
   const executor = new RunExecutor({ db, bus, engine: createEngine(config) });
   console.log(`[boot] engine: ${config.engineName}`);
+
+  // ---- WhatsApp -----------------------------------------------------------
+  // One long-poll loop talks to the phone; the same acceptance path the web UI
+  // uses decides whether a task may run. The flag was already validated above
+  // so a misconfigured deployment fails here, at boot, rather than at 3am.
+  let poller: WhatsAppPoller | null = null;
+  if (config.pollerEnabled && config.whatsappToken) {
+    const client = new WhatsAppClient({
+      token: config.whatsappToken,
+      baseUrl: config.whatsappApiBase || undefined,
+    });
+    poller = new WhatsAppPoller({
+      db,
+      bus,
+      client,
+      executor,
+      config,
+      sender: new WhatsAppSender(client, (message, level) =>
+        level === 'error' ? console.error(`[wa] ${message}`) : console.log(`[wa] ${message}`),
+      ),
+      accept: (input) => acceptRun({ db, executor, config }, input),
+      log: (message, level) =>
+        level === 'error' ? console.error(message) : console.log(message),
+    });
+  } else if (config.pollerEnabled) {
+    throw new Error('POLLER_ENABLED is set without WHATSAPP_TOKEN');
+  }
 
   const app = createApp({
     config,
     db,
     bus,
     executor,
-    status: { startedAt, migrationsApplied: migration.applied.length, orphanedRuns: orphaned, poller },
+    status: {
+      startedAt,
+      migrationsApplied: migration.applied.length,
+      orphanedRuns: orphaned,
+      poller: () => poller?.health() ?? DISABLED_HEALTH,
+    },
   });
+
+  if (poller) {
+    try {
+      const resumed = await poller.reconcile();
+      if (resumed > 0) console.log(`[boot] whatsapp: resumed ${resumed} unfinished message(s)`);
+    } catch (err) {
+      // A broken reconcile must not stop the server: the web app still works,
+      // and the rows stay queued for the next boot.
+      console.error('[boot] whatsapp reconcile failed:', (err as Error).message);
+    }
+    poller.start();
+  }
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[boot] listening on http://0.0.0.0:${config.port}`);
-    console.log(`[boot] health: /healthz   readiness: /readyz   poller: ${poller}`);
+    console.log(`[boot] health: /healthz   readiness: /readyz   poller: ${poller ? 'running' : 'disabled'}`);
     console.log(
       config.authMode === 'open'
         ? '[boot] access: open (no key needed)'
@@ -113,6 +152,11 @@ async function boot(): Promise<void> {
     console.log(`[shutdown] ${signal} received — draining`);
 
     server.close(() => console.log('[shutdown] http server closed'));
+
+    // Stop the long poll first: it holds a request open for up to 25 seconds,
+    // and a message arriving during shutdown belongs to the next boot's
+    // reconcile rather than to a half-dead process.
+    if (poller) await poller.stop();
 
     // Abort runs before closing the pool. Each cancellation writes a terminal
     // event, which also lets its SSE stream end on its own — otherwise those

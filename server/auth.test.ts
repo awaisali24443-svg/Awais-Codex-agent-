@@ -49,7 +49,7 @@ before(async () => {
     db,
     bus: new EventBus(),
     executor: new RunExecutor({ db, bus: new EventBus(), engine: new ScriptedEngine() }),
-    status: { startedAt: Date.now(), migrationsApplied: 1, orphanedRuns: 0, poller: 'disabled' },
+    status: { startedAt: Date.now(), migrationsApplied: 1, orphanedRuns: 0 },
   });
 
   await new Promise<void>((resolve) => {

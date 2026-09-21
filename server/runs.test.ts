@@ -99,7 +99,7 @@ before(async () => {
     db,
     bus,
     executor,
-    status: { startedAt: Date.now(), migrationsApplied: 1, orphanedRuns: 0, poller: 'disabled' },
+    status: { startedAt: Date.now(), migrationsApplied: 1, orphanedRuns: 0 },
   });
 
   await new Promise<void>((resolve) => {

@@ -20,6 +20,8 @@ export interface AppConfig {
   geminiApiKey: string;
   /** WhatsApp Agent Platform token. Optional: the feature is a limited beta. */
   whatsappToken: string;
+  /** Override the WhatsApp Agent Platform base (tests point this at a fake). */
+  whatsappApiBase: string;
 
   /** Which engine executes runs. */
   engineName: 'scripted' | 'antigravity';
@@ -156,6 +158,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     masterKey: masterKey || '0'.repeat(64),
     geminiApiKey,
     whatsappToken: (env.WHATSAPP_TOKEN ?? '').trim(),
+    whatsappApiBase: (env.WHATSAPP_API_BASE ?? '').trim(),
     engineName: engineRaw === 'scripted' ? 'scripted' : 'antigravity',
     antigravityAgent: (env.ANTIGRAVITY_AGENT ?? 'antigravity-preview-09-2026').trim(),
     antigravityApiBase: (env.ANTIGRAVITY_API_BASE ?? '').trim(),
