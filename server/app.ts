@@ -8,9 +8,11 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import crypto from 'crypto';
 
 import type { AppConfig } from './config.js';
+import { findDir } from './paths.js';
 import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import type { RunExecutor } from './executor.js';
+import { DISABLED_HEALTH, type PollerHealth } from './whatsapp/poller.js';
 import { createRunRoutes } from './routes/runs.js';
 import {
   checkAccessKey,
@@ -21,8 +23,6 @@ import {
   sessionCookie,
 } from './auth.js';
 import path from 'node:path';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 export interface AppDeps {
   config: AppConfig;
@@ -36,12 +36,18 @@ export interface AppDeps {
     startedAt: number;
     migrationsApplied: number;
     orphanedRuns: number;
-    poller: 'disabled' | 'running' | 'error';
+    /**
+     * Read at request time, not captured at boot: whether the WhatsApp poller
+     * is healthy is exactly the thing an operator checks when messages stop
+     * being answered, so a value frozen at startup would be worse than useless.
+     */
+    poller?: () => PollerHealth;
   };
 }
 
 export function createApp(deps: AppDeps): Express {
   const { config, db, status } = deps;
+  const pollerHealth = (): PollerHealth => status.poller?.() ?? DISABLED_HEALTH;
   const app = express();
 
   app.disable('x-powered-by');
@@ -107,7 +113,7 @@ export function createApp(deps: AppDeps): Express {
       ready = false;
     }
 
-    checks.poller = status.poller;
+    checks.poller = pollerHealth().state;
     checks.engine = config.geminiApiKey ? 'key present' : 'no key configured';
 
     res.status(ready ? 200 : 503).json({
@@ -159,7 +165,7 @@ export function createApp(deps: AppDeps): Express {
       version: 2,
       startedAt: new Date(status.startedAt).toISOString(),
       migrationsApplied: status.migrationsApplied,
-      poller: status.poller,
+      poller: pollerHealth(),
       engine: config.engineName,
       agent: config.antigravityAgent,
       authMode: config.authMode,
@@ -219,14 +225,5 @@ export function createApp(deps: AppDeps): Express {
  * blank page and no obvious error.
  */
 function locateWebRoot(): string | null {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  for (const candidate of [
-    path.join(process.cwd(), 'web'),
-    path.join(here, '..', 'web'),
-    path.join(here, 'web'),
-  ]) {
-    if (fs.existsSync(path.join(candidate, 'index.html'))) return candidate;
-  }
-  console.warn('[app] no web/ directory found — serving API only');
-  return null;
+  return findDir(['web'], 'index.html');
 }

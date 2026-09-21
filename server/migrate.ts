@@ -9,6 +9,7 @@
  * boot from `npm start` — applying migrations is idempotent and cheap.
  */
 import fs from 'fs';
+import { findDir } from './paths.js';
 import path from 'path';
 import type { Db } from './db.js';
 
@@ -23,19 +24,19 @@ interface Migration {
   file: string;
 }
 
-/** Locate the migrations directory in dev, in the bundle, and in a container. */
+/**
+ * Locate the migrations directory.
+ *
+ * `server/migrations` is where it lives in the repo; `migrations` covers a
+ * container or bundle that copied it next to the compiled output.
+ */
 export function resolveMigrationsDir(): string {
-  const candidates = [
-    path.join(process.cwd(), 'server', 'migrations'),
-    path.join(process.cwd(), 'dist', 'migrations'),
-    path.join(path.dirname(new URL(import.meta.url).pathname), 'migrations'),
-  ];
-  for (const dir of candidates) {
-    if (fs.existsSync(dir)) return dir;
+  const found = findDir(['server/migrations', 'migrations'], '001_init.sql')
+    ?? findDir(['server/migrations', 'migrations']);
+  if (!found) {
+    throw new Error('Could not find the migrations directory — see the [paths] warning above.');
   }
-  throw new Error(
-    `Could not find the migrations directory. Looked in:\n  ${candidates.join('\n  ')}`,
-  );
+  return found;
 }
 
 export function loadMigrations(dir = resolveMigrationsDir()): Migration[] {
