@@ -12,3 +12,5 @@ services:
         sync: false
       - key: WHATSAPP_VERIFY_TOKEN
         value: awais_codex_verify_token
+      - key: GITHUB_TOKEN
+        sync: false

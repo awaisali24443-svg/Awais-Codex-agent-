@@ -590,7 +590,10 @@ export async function sendWhatsAppMessage(
       chunks.push(remaining);
       break;
     }
-    let breakIdx = remaining.lastIndexOf('\\n\\n', maxChunk);
+    let breakIdx = remaining.lastIndexOf('\n\n', maxChunk);
+    if (breakIdx === -1 || breakIdx < 1000) {
+      breakIdx = remaining.lastIndexOf('\n', maxChunk);
+    }
     if (breakIdx === -1 || breakIdx < 1000) {
       breakIdx = remaining.lastIndexOf('\\n', maxChunk);
     }
@@ -1212,10 +1215,31 @@ async function executeTask(
     throw new Error('GEMINI_API_KEY is missing');
   }
 
+  // Retrieve prior dialogue in this WhatsApp conversation for continuous memory
+  const convs = loadPersistedConversations();
+  const conv = convs.find((c: any) => c.id === convId);
+  const previousTurns = (conv?.messages || [])
+    .filter((m: any) => m.id !== turnId && m.status === 'success' && m.prompt)
+    .slice(-6);
+
+  let contextualPrompt = userPrompt;
+  if (previousTurns.length > 0) {
+    let historyBlock = '### WHATSAPP CHAT MEMORY (Previous Messages in this Conversation):\n';
+    previousTurns.forEach((m: any, idx: number) => {
+      historyBlock += `User [Turn ${idx + 1}]: ${m.prompt}\n`;
+      if (m.output) {
+        const shortOut = m.output.length > 800 ? m.output.slice(0, 797) + '...' : m.output;
+        historyBlock += `Awais Codex [Turn ${idx + 1}]: ${shortOut}\n`;
+      }
+    });
+    historyBlock += '### END CHAT MEMORY\n\n';
+    contextualPrompt = `${historyBlock}### CURRENT USER REQUEST:\n${userPrompt}\n\n[Instruction: Maintain continuous context with the WhatsApp chat history above. Remember all user details, names, requirements, and previously discussed topics.]`;
+  }
+
   const postUrl = `${API_ENDPOINT}?key=${encodeURIComponent(geminiApiKey)}`;
   const payload: any = {
     agent: DEFAULT_ENGINE,
-    input: userPrompt,
+    input: contextualPrompt,
     environment: 'remote',
     stream: true
   };

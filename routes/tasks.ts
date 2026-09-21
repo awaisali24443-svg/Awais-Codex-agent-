@@ -14,6 +14,37 @@ import { getServerCallBudget, incrementServerCallBudget } from '../call-budget-s
 
 const router = Router();
 
+/**
+ * Injects previous conversation turns into the prompt context so that
+ * the Antigravity agent maintains continuous conversational memory across turns.
+ */
+export function buildContextualPrompt(prompt: string, history?: any[]): string {
+  if (!history || !Array.isArray(history) || history.length === 0) {
+    return prompt;
+  }
+
+  const validHistory = history.filter(h => h && (h.prompt || h.user || h.content));
+  if (validHistory.length === 0) return prompt;
+
+  let historyBlock = '### CONVERSATION MEMORY (Previous Dialogue in this Session):\n';
+  validHistory.forEach((turn: any, index: number) => {
+    const userText = (turn.prompt || turn.user || turn.content || '').trim();
+    let assistantText = (turn.output || turn.assistant || turn.model || turn.reply || '').trim();
+    if (userText) {
+      historyBlock += `User [Turn ${index + 1}]: ${userText}\n`;
+    }
+    if (assistantText) {
+      if (assistantText.length > 1200) {
+        assistantText = assistantText.slice(0, 1197) + '...';
+      }
+      historyBlock += `Assistant [Turn ${index + 1}]: ${assistantText}\n`;
+    }
+  });
+  historyBlock += '### END CONVERSATION MEMORY\n\n';
+
+  return `${historyBlock}### CURRENT USER REQUEST:\n${prompt}\n\n[Instruction: Maintain complete context and conversational continuity with the dialogue history above. Remember all user details, names, requirements, preferences, and prior work discussed.]`;
+}
+
 // Expose call budget tracker endpoint
 router.get('/call-budget', (req: Request, res: Response) => {
   const secret = process.env.WHATSAPP_ADMIN_SECRET || 'wa_admin_secret_change_me_in_prod';
@@ -172,12 +203,13 @@ router.all('/stream-task', async (req: Request, res: Response) => {
   }
 
   const bodyOrQuery = req.method === 'GET' ? req.query : req.body;
-  const prompt = bodyOrQuery?.prompt || '';
+  const rawPrompt = bodyOrQuery?.prompt || '';
   const files = bodyOrQuery?.files || [];
   const previousInteractionId = bodyOrQuery?.previousInteractionId;
   const environmentId = bodyOrQuery?.environmentId;
+  const history = bodyOrQuery?.history || [];
 
-  if (!prompt && (!files || files.length === 0)) {
+  if (!rawPrompt && (!files || files.length === 0)) {
     if (req.method === 'GET') {
       res.setHeader('Content-Type', 'text/event-stream');
       res.write(`event: error\ndata: ${JSON.stringify({ type: 'invalid_request', message: 'Prompt or files required.' })}\n\n`);
@@ -185,6 +217,8 @@ router.all('/stream-task', async (req: Request, res: Response) => {
     }
     return res.status(400).json({ error: { message: 'Prompt or files required.' } });
   }
+
+  const prompt = buildContextualPrompt(rawPrompt, history);
 
   let inputPayload: any = prompt;
   if (files && files.length > 0) {
@@ -393,15 +427,18 @@ router.post('/execute-task', async (req: Request, res: Response) => {
   }
 
   const {
-    prompt,
+    prompt: rawPrompt,
     files = [],
     previousInteractionId,
-    environmentId
+    environmentId,
+    history = []
   } = req.body;
 
-  if (!prompt && (!files || files.length === 0)) {
+  if (!rawPrompt && (!files || files.length === 0)) {
     return res.status(400).json({ error: { message: 'Prompt or files required.' } });
   }
+
+  const prompt = buildContextualPrompt(rawPrompt, history);
 
   let inputPayload: any = prompt;
   if (files && files.length > 0) {

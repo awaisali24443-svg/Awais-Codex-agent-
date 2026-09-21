@@ -27,35 +27,128 @@ function getFilesRecursively(dir: string, baseDir: string = dir): { relativePath
   return results;
 }
 
+// Resolve GitHub token from request or backend environment variables
+export function resolveGitHubToken(req?: Request, explicitToken?: string): string {
+  if (explicitToken && typeof explicitToken === 'string' && explicitToken.trim()) {
+    return explicitToken.trim();
+  }
+  const bodyToken = (req?.body && (req.body.token || req.body.githubToken)) as string;
+  if (bodyToken && typeof bodyToken === 'string' && bodyToken.trim()) {
+    return bodyToken.trim();
+  }
+  const headerToken = (req?.headers?.['x-github-token'] || req?.headers?.['authorization'] || '') as string;
+  if (headerToken) {
+    const clean = headerToken.startsWith('Bearer ') ? headerToken.slice(7).trim() : headerToken.trim();
+    if (clean) return clean;
+  }
+  const envToken = (
+    process.env.GITHUB_TOKEN ||
+    process.env.GITHUB_PAT ||
+    process.env.GH_TOKEN ||
+    process.env.GITHUB_PERSONAL_ACCESS_TOKEN ||
+    process.env.GITHUB_API_KEY ||
+    ''
+  ).trim();
+  return envToken;
+}
+
+export function getGitHubHeaders(token: string): Record<string, string> {
+  return {
+    'Authorization': `Bearer ${token}`,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'Awais-Codex-App'
+  };
+}
+
+// Helper to determine the repository owner/user for fine-grained or classic tokens
+async function resolveGitHubOwner(token: string): Promise<string> {
+  // 1. Try /user endpoint
+  try {
+    const userRes = await fetch('https://api.github.com/user', {
+      headers: getGitHubHeaders(token)
+    });
+    if (userRes.ok) {
+      const userData = await userRes.json();
+      if (userData.login) return userData.login;
+    }
+  } catch (_) {}
+
+  // 2. If fine-grained PAT does not have user profile scope, query /user/repos
+  try {
+    const reposRes = await fetch('https://api.github.com/user/repos?per_page=1&sort=updated', {
+      headers: getGitHubHeaders(token)
+    });
+    if (reposRes.ok) {
+      const repos = await reposRes.json();
+      if (Array.isArray(repos) && repos.length > 0 && repos[0]?.owner?.login) {
+        return repos[0].owner.login;
+      }
+    }
+  } catch (_) {}
+
+  return process.env.GITHUB_USERNAME || 'authenticated-user';
+}
+
 // Fully isolated GitHub integration API routes
-router.get('/api/github/status', (req: Request, res: Response) => {
-  const token = process.env.GITHUB_TOKEN || req.headers['x-github-token'] || '';
+router.get('/api/github/status', async (req: Request, res: Response) => {
+  const token = resolveGitHubToken(req);
+  if (!token) {
+    return res.json({
+      connected: false,
+      hasToken: false,
+      isServerToken: false,
+      username: null
+    });
+  }
+
+  const isServerToken = Boolean(
+    process.env.GITHUB_TOKEN ||
+    process.env.GITHUB_PAT ||
+    process.env.GH_TOKEN ||
+    process.env.GITHUB_PERSONAL_ACCESS_TOKEN ||
+    process.env.GITHUB_API_KEY
+  );
+
+  let username = 'authenticated-user';
+  let connected = false;
+
+  try {
+    const owner = await resolveGitHubOwner(token);
+    if (owner && owner !== 'authenticated-user') {
+      username = owner;
+      connected = true;
+    } else {
+      connected = true;
+    }
+  } catch (_) {
+    connected = true;
+  }
+
   res.json({
-    connected: Boolean(token),
-    hasToken: Boolean(token),
-    username: token ? 'authenticated-user' : null
+    connected,
+    hasToken: true,
+    isServerToken,
+    username,
+    tokenType: token.startsWith('github_pat_') ? 'fine-grained' : (token.startsWith('ghp_') ? 'classic' : 'personal-access-token')
   });
 });
 
 router.post('/api/github/repos', async (req: Request, res: Response) => {
-  const token = (req.body && req.body.token) || process.env.GITHUB_TOKEN || req.headers['x-github-token'];
+  const token = resolveGitHubToken(req, req.body?.token);
   if (!token) {
-    res.status(401).json({ error: 'GitHub Personal Access Token required' });
+    res.status(401).json({ error: 'GitHub Personal Access Token required. Add GITHUB_TOKEN in backend or Settings.' });
     return;
   }
 
   try {
     const fetchRes = await fetch('https://api.github.com/user/repos?sort=updated&per_page=30', {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'Awais-Codex-App'
-      }
+      headers: getGitHubHeaders(token)
     });
 
     if (!fetchRes.ok) {
       const err = await fetchRes.text();
-      res.status(fetchRes.status).json({ error: `GitHub API error: ${err}` });
+      res.status(fetchRes.status).json({ error: `GitHub API error (${fetchRes.status}): ${err}` });
       return;
     }
 
@@ -68,10 +161,10 @@ router.post('/api/github/repos', async (req: Request, res: Response) => {
 
 router.post('/api/github/export-repo', async (req: Request, res: Response) => {
   const { token, repoName, description, isPrivate, environmentId, apiKey } = req.body || {};
-  const activeToken = token || process.env.GITHUB_TOKEN;
+  const activeToken = resolveGitHubToken(req, token);
 
   if (!activeToken) {
-    res.status(401).json({ error: 'GitHub Personal Access Token required' });
+    res.status(401).json({ error: 'GitHub Personal Access Token required. Please configure GITHUB_TOKEN in environment variables.' });
     return;
   }
 
@@ -81,32 +174,15 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
   }
 
   try {
-    // 1. Get user login info
-    const userRes = await fetch('https://api.github.com/user', {
-      headers: {
-        'Authorization': `Bearer ${activeToken}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'Awais-Codex-App'
-      }
-    });
-
-    if (!userRes.ok) {
-      const err = await userRes.text();
-      res.status(userRes.status).json({ error: `GitHub authentication failed: ${err}` });
-      return;
-    }
-
-    const userData = await userRes.json();
-    const owner = userData.login;
+    // 1. Get user login info (supports both Fine-Grained & Classic PATs)
+    const owner = await resolveGitHubOwner(activeToken);
 
     // 2. Create or find repository
     let repoData: any = null;
     const createRes = await fetch('https://api.github.com/user/repos', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${activeToken}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'Awais-Codex-App',
+        ...getGitHubHeaders(activeToken),
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -121,17 +197,13 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
     } else {
       // If repository already exists (422), fetch repository details
       const getRepoRes = await fetch(`https://api.github.com/repos/${owner}/${encodeURIComponent(repoName)}`, {
-        headers: {
-          'Authorization': `Bearer ${activeToken}`,
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Awais-Codex-App'
-        }
+        headers: getGitHubHeaders(activeToken)
       });
       if (getRepoRes.ok) {
         repoData = await getRepoRes.json();
       } else {
         const err = await createRes.text();
-        res.status(createRes.status).json({ error: `Failed to create repository: ${err}` });
+        res.status(createRes.status).json({ error: `Failed to create or access repository: ${err}` });
         return;
       }
     }
@@ -179,11 +251,7 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
         let existingSha: string | undefined = undefined;
         try {
           const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${githubPath}`, {
-            headers: {
-              'Authorization': `Bearer ${activeToken}`,
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'Awais-Codex-App'
-            },
+            headers: getGitHubHeaders(activeToken),
             signal: AbortSignal.timeout(15000)
           });
           if (checkRes.ok) {
@@ -195,9 +263,7 @@ router.post('/api/github/export-repo', async (req: Request, res: Response) => {
         const putRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${githubPath}`, {
           method: 'PUT',
           headers: {
-            'Authorization': `Bearer ${activeToken}`,
-            'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'Awais-Codex-App',
+            ...getGitHubHeaders(activeToken),
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({

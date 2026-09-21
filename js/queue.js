@@ -143,12 +143,22 @@ export async function executeTurn(projectId, turnId) {
       }
     }
 
+    // Extract prior completed conversation turns for continuous session memory
+    const history = (project.messages || [])
+      .filter(m => m.id !== turn.id && (m.status === 'completed' || m.status === 'success') && m.prompt)
+      .slice(-8)
+      .map(m => ({
+        prompt: m.prompt,
+        output: m.output || (m.steps && m.steps.length > 0 ? 'Action completed' : '')
+      }));
+
     const payload = {
       prompt: turn.prompt,
       files: turn.files || [],
       engine: 'antigravity-preview-05-2026',
       previousInteractionId: previousInteractionId,
-      environmentId: environmentId
+      environmentId: environmentId,
+      history: history
     };
 
     const headers = { 'Content-Type': 'application/json' };

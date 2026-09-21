@@ -29,12 +29,11 @@ export async function checkGitHubStatus() {
 
 export async function testGitHubConnection(token) {
   const t = (token || getGitHubToken()).trim();
-  if (!t) throw new Error('Please enter a GitHub Personal Access Token');
   
   const res = await fetch('/api/github/repos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: t })
+    body: JSON.stringify(t ? { token: t } : {})
   });
 
   if (!res.ok) {
@@ -43,19 +42,22 @@ export async function testGitHubConnection(token) {
   }
 
   const data = await res.json();
-  setGitHubToken(t);
+  if (t) setGitHubToken(t);
   return data.repos || [];
 }
 
 export async function pushTaskToGitHub(project, turn) {
   let token = getGitHubToken();
   if (!token) {
-    const input = prompt('Enter your GitHub Personal Access Token (repo scope required):');
-    if (!input || !input.trim()) {
-      return;
+    const status = await checkGitHubStatus();
+    if (!status.hasToken) {
+      const input = prompt('Enter your GitHub Personal Access Token (or configure GITHUB_TOKEN in your backend environment variables):');
+      if (!input || !input.trim()) {
+        return;
+      }
+      token = input.trim();
+      setGitHubToken(token);
     }
-    token = input.trim();
-    setGitHubToken(token);
   }
 
   const repoName = (project?.title || 'awais-codex-export')
@@ -69,7 +71,7 @@ export async function pushTaskToGitHub(project, turn) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        token,
+        token: token || undefined,
         repoName,
         description: `Exported from Awais Codex project "${project?.title || 'Untitled'}"`,
         isPrivate: false,

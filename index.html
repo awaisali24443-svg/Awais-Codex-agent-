@@ -2,6 +2,38 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
+  <script>
+    // Suppress benign Vite HMR websocket reconnection notices in AI Studio preview iframe
+    (function() {
+      const _origErr = console.error;
+      const _origWarn = console.warn;
+      console.error = function(...args) {
+        if (typeof args[0] === 'string' && (args[0].includes('[vite]') || args[0].includes('websocket'))) {
+          return;
+        }
+        _origErr.apply(console, args);
+      };
+      console.warn = function(...args) {
+        if (typeof args[0] === 'string' && (args[0].includes('[vite]') || args[0].includes('websocket'))) {
+          return;
+        }
+        _origWarn.apply(console, args);
+      };
+      window.addEventListener('error', function(e) {
+        if (e && (e.message?.includes('[vite]') || e.filename?.includes('@vite'))) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(e) {
+        const reason = e?.reason;
+        if (typeof reason === 'string' && (reason.includes('[vite]') || reason.includes('websocket'))) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      }, true);
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Awais Codex — Autonomous AI Assistant</title>
   <meta name="description" content="Manus-style conversational workspace for Awais Codex featuring real-time thinking, live sub-agent execution, remote Linux sandbox monitoring, and automated queuing." />
