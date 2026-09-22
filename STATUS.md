@@ -232,7 +232,9 @@ Everything in §6's blocker list and the first four items of §7 are addressed. 
 | **Docs described v1** | `README.md` rewritten for v2 (architecture, API, WhatsApp setup, deployment, security notes, legacy map); `.env.example` and the boot log updated |
 | **Dead config fields** | `ARTIFACT_RETENTION_DAYS` now prunes artifacts and their cached bytes at boot; `APP_URL` prints a real clickable `?k=` link at boot |
 
-Still open, deliberately: **GitHub export** (item 5 of the original plan), secret encryption *and* a settings API (the `secrets`/`settings` tables are still empty — `MASTER_KEY` is validated but unused), WhatsApp media, and deleting the legacy v1 tree rather than documenting it.
+Also settled: **the branch is on GitHub** ([PR #1](https://github.com/awaisali24443-svg/Awais-Codex-agent-/pull/1), 10 commits ahead of `main`, CI green), the PWA icons are generated from `web/icon.svg` by `scripts/make-icons.mjs` instead of hand-copied, and **`apk-generator.ts` no longer lies**. It used to write `SHA-256-Digest: placeholder` into `META-INF/MANIFEST.MF` of an APK it called "signed"; it now computes each entry's real base64 SHA-256, and the doc comment states plainly that there is no signature block so Android will refuse to install it. Verified by unzipping the output: both digests match the entries, `unzip -t` is clean, no `placeholder` text remains. Nothing calls it — it is kept as v1 reference, not as a build path.
+
+Still open, deliberately: secret encryption *and* a settings API (the `secrets`/`settings` tables are still empty — `MASTER_KEY` is validated but unused), WhatsApp media, and deleting the legacy v1 tree rather than documenting it.
 
 ### Verified after the continuation pass
 
