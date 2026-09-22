@@ -24,7 +24,7 @@ import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
 import { RunExecutor } from './executor.js';
 import { ScriptedEngine, type ScriptStep } from './engine/scripted.js';
-import type { Engine } from './engine/types.js';
+import type { Engine, EngineContext, EngineResult } from './engine/types.js';
 
 const SECRET = 'test-session-secret-that-is-definitely-long-enough';
 const PASSWORD = 'runs-access-key-for-tests-1234';
@@ -396,6 +396,131 @@ describe('run lifecycle', () => {
     const again = await api(`/api/runs/${id}/cancel`, { method: 'POST' });
     assert.equal(again.status, 200);
     assert.equal(again.body.alreadyFinished, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deep research
+// ---------------------------------------------------------------------------
+
+/** Records every engine call so the chaining can be asserted pass by pass. */
+class RecordingEngine implements Engine {
+  readonly name = 'recording';
+  calls: Array<{
+    prompt: string;
+    previousInteractionId: string | null;
+    environmentId: string | null;
+  }> = [];
+
+  async run(prompt: string, ctx: EngineContext): Promise<EngineResult> {
+    const n = this.calls.length + 1;
+    this.calls.push({
+      prompt,
+      previousInteractionId: ctx.previousInteractionId,
+      environmentId: ctx.environmentId,
+    });
+    ctx.text(`pass ${n} findings. `);
+    return { text: `pass ${n} findings. `, interactionId: `ix_${n}`, environmentId: 'env_1' };
+  }
+}
+
+async function startDeepRun(extra: Record<string, unknown>) {
+  runCounter += 1;
+  return api('/api/runs', {
+    method: 'POST',
+    body: JSON.stringify({ prompt: `deep research #${runCounter}`, ...extra }),
+  });
+}
+
+async function waitForTerminal(id: string, timeoutMs = 15_000) {
+  return waitFor(async () => {
+    const { body } = await api(`/api/runs/${id}`);
+    return ['completed', 'failed', 'cancelled'].includes(body.run.status) ? body.run : null;
+  }, timeoutMs);
+}
+
+describe('deep research', () => {
+  test('the option and budget are stored on the run', async () => {
+    const created = await startDeepRun({ deepResearch: true, researchBudgetMinutes: 60 });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.run.deepResearch, true);
+    assert.equal(created.body.run.researchBudgetMinutes, 60);
+
+    const finished = await waitForTerminal(created.body.run.id);
+    assert.equal(finished.status, 'completed');
+  });
+
+  test('no budget means the 15-minute default', async () => {
+    const created = await startDeepRun({ deepResearch: true });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.run.deepResearch, true);
+    assert.equal(created.body.run.researchBudgetMinutes, 15);
+
+    const finished = await waitForTerminal(created.body.run.id);
+    assert.equal(finished.status, 'completed');
+  });
+
+  test('an out-of-range budget is rejected before anything is spent', async () => {
+    for (const researchBudgetMinutes of [3, 0, -15, 15.5, 999, 'an hour']) {
+      const res = await startDeepRun({ deepResearch: true, researchBudgetMinutes });
+      assert.equal(res.status, 400, `budget ${researchBudgetMinutes} should be rejected`);
+      assert.equal(res.body.error, 'invalid_research_budget');
+    }
+  });
+
+  test('the executor chains passes on the same mission until the pass cap', async () => {
+    const engine = new RecordingEngine();
+    useEngine(engine);
+
+    const created = await startDeepRun({ deepResearch: true, researchBudgetMinutes: 5 });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const id = created.body.run.id as string;
+
+    const finished = await waitForTerminal(id);
+    assert.equal(finished.status, 'completed');
+    assert.equal(engine.calls.length, 8, 'instant passes run to the pass cap, not the clock');
+
+    // The first pass frames the mission as a deep, multi-pass investigation.
+    assert.match(engine.calls[0].prompt, /Deep-research mode/);
+    assert.match(engine.calls[0].prompt, /up to 5 minutes/);
+
+    // Later passes continue the same sandbox via the previous interaction —
+    // one logical mission, not N separate runs.
+    assert.equal(engine.calls[1].previousInteractionId, 'ix_1');
+    assert.equal(engine.calls[1].environmentId, 'env_1');
+    assert.equal(engine.calls[7].previousInteractionId, 'ix_7');
+
+    // Continuation prompts build on prior findings instead of repeating them.
+    assert.match(engine.calls[1].prompt, /Build on your prior findings/);
+    assert.match(engine.calls[1].prompt, /do NOT repeat/);
+
+    // The last pass is spent synthesising the final report.
+    assert.match(engine.calls[7].prompt, /final synthesized report/);
+
+    // The final pass's handles are stored, so a follow-up message continues
+    // the research sandbox instead of starting a new one.
+    assert.equal(finished.interactionId, 'ix_8');
+    assert.equal(finished.environmentId, 'env_1');
+
+    // One mission in the log: the answer accumulates across passes, and each
+    // pass boundary is a durable, replayable event.
+    const { body } = await api(`/api/runs/${id}`);
+    const passes = body.events.filter((e: { type: string }) => e.type === 'research.pass');
+    assert.equal(passes.length, 8);
+    assert.equal(passes[7].payload.lastChance, true);
+    assert.ok(
+      body.events.some((e: { type: string }) => e.type === 'research.started'),
+      'research.started must be in the log',
+    );
+  });
+
+  test('a normal run still makes exactly one engine call', async () => {
+    const engine = new RecordingEngine();
+    useEngine(engine);
+
+    const { run } = await runToCompletion('one-shot check');
+    assert.equal(run.status, 'completed');
+    assert.equal(engine.calls.length, 1, 'deep research must be opt-in');
   });
 });
 

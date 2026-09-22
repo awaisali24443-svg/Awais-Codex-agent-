@@ -69,6 +69,36 @@ const HEARTBEAT_MS = 15_000;
 
 const TERMINAL_EVENT_TYPES = new Set(['run.completed', 'run.failed', 'run.cancelled']);
 
+/** Deep-research presets: 15 minutes, 1 hour, or a custom whole-minutes budget. */
+const RESEARCH_BUDGET_DEFAULT_MIN = 15;
+const RESEARCH_BUDGET_MIN_MIN = 5;
+const RESEARCH_BUDGET_MAX_MIN = 480;
+
+/**
+ * Parse and validate the deep-research option. Returns the budget in minutes,
+ * or null when deep-research is off. Throws a plain Error with a client-safe
+ * message when the budget is invalid — the caller turns it into a 400.
+ */
+function parseResearchBudget(body: {
+  deepResearch?: unknown;
+  researchBudgetMinutes?: unknown;
+}): { deepResearch: boolean; researchBudgetMinutes: number | null } {
+  const deepResearch = body.deepResearch === true;
+  if (!deepResearch) return { deepResearch: false, researchBudgetMinutes: null };
+
+  const raw = body.researchBudgetMinutes;
+  if (raw === undefined || raw === null || raw === '') {
+    return { deepResearch: true, researchBudgetMinutes: RESEARCH_BUDGET_DEFAULT_MIN };
+  }
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < RESEARCH_BUDGET_MIN_MIN || minutes > RESEARCH_BUDGET_MAX_MIN) {
+    throw new Error(
+      `researchBudgetMinutes must be a whole number of minutes between ${RESEARCH_BUDGET_MIN_MIN} and ${RESEARCH_BUDGET_MAX_MIN}`,
+    );
+  }
+  return { deepResearch: true, researchBudgetMinutes: minutes };
+}
+
 function sseFrame(event: StreamEvent): string {
   // `id` is omitted for transient events on purpose: Last-Event-ID must only
   // ever point at a durable position, or a reconnect would replay from a
@@ -133,6 +163,8 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       kind?: unknown;
       conversationId?: unknown;
       notifyWhatsapp?: unknown;
+      deepResearch?: unknown;
+      researchBudgetMinutes?: unknown;
     };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
 
@@ -151,6 +183,14 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     const kind: RunKind =
       body.kind === 'whatsapp' || body.kind === 'api' || body.kind === 'chat' ? body.kind : 'chat';
 
+    let research: { deepResearch: boolean; researchBudgetMinutes: number | null };
+    try {
+      research = parseResearchBudget(body);
+    } catch (err) {
+      res.status(400).json({ error: 'invalid_research_budget', message: (err as Error).message });
+      return;
+    }
+
     // Same rules as the phone: one task at a time, one budget, one code path.
     const result = await acceptRun(
       { db, executor, config },
@@ -161,6 +201,8 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         // Opt-in WhatsApp "done" ping for this run. Strictly boolean: anything
         // else is not an opt-in.
         notifyWhatsapp: body.notifyWhatsapp === true,
+        deepResearch: research.deepResearch,
+        researchBudgetMinutes: research.researchBudgetMinutes,
       },
     );
 
@@ -257,6 +299,10 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         prompt: run.prompt,
         kind: run.kind,
         conversationId: run.conversationId,
+        // A retried deep-research run is the same mission, so it keeps the
+        // same mode and budget rather than silently becoming a one-shot.
+        deepResearch: run.deepResearch,
+        researchBudgetMinutes: run.researchBudgetMinutes,
       },
     );
     sendAccepted(res, result, config);

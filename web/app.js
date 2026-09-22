@@ -56,6 +56,10 @@ const el = {
   note: $('composer-note'),
   pingToggle: $('ping-wrap'),
   pingCheck: $('ping-check'),
+  researchWrap: $('research-wrap'),
+  researchCheck: $('research-check'),
+  researchMinutes: $('research-minutes'),
+  researchCustom: $('research-custom'),
 };
 
 const state = {
@@ -467,6 +471,14 @@ function handleEvent(card, event, data) {
     case 'run.started':
       note('');
       card.prompt = typeof data.prompt === 'string' ? data.prompt : '';
+      // The definitive budget line arrives on 'research.started' below; this
+      // early mark means a replay that starts mid-run still shows the mode.
+      if (data.deepResearch) {
+        addStep(card, 'research', {
+          name: `Deep research — up to ${Number(data.researchBudgetMinutes) || 15} min budget`,
+          icon: 'search',
+        });
+      }
       break;
 
     case 'log':
@@ -527,6 +539,23 @@ function handleEvent(card, event, data) {
           done: true,
         });
       }
+      break;
+
+    case 'research.started':
+      addStep(card, 'research', {
+        name: `Deep research — up to ${data.budgetMinutes} min`,
+        detail: 'Chaining passes until the budget is spent',
+        icon: 'search',
+      });
+      break;
+
+    case 'research.pass':
+      addStep(card, 'research', {
+        name: data.lastChance
+          ? 'Deep research — final pass: synthesising the report'
+          : `Deep research — pass ${data.pass}, ~${data.remainingMinutes} min left`,
+        icon: 'search',
+      });
       break;
 
     case 'artifact':
@@ -827,6 +856,7 @@ function attach(runId, after = 0) {
     'run.started', 'log', 'tool.call', 'tool.result',
     'thinking.snapshot', 'text.snapshot', 'run.environment',
     'artifact', 'memory.recall', 'plan.milestone',
+    'research.started', 'research.pass',
     'run.completed', 'run.failed', 'run.cancelled',
   ];
   for (const name of durable) {
@@ -913,17 +943,56 @@ for (const chip of /** @type {NodeListOf<HTMLButtonElement>} */ (document.queryS
   });
 }
 
+/* Deep research: a time-boxed mode for long investigations. The select and
+   the number input sit inside the label, so their clicks must not toggle the
+   checkbox — stop them there instead of restructuring the pill. */
+el.researchMinutes.addEventListener('click', (event) => event.stopPropagation());
+el.researchCustom.addEventListener('click', (event) => event.stopPropagation());
+
+function researchBudgetMinutes() {
+  if (!el.researchCheck.checked) return null;
+  if (el.researchMinutes.value === 'custom') {
+    const n = Math.floor(Number(el.researchCustom.value));
+    // The server validates 5–480; clamp here so the note never promises
+    // something the server will reject.
+    return Number.isFinite(n) ? Math.min(480, Math.max(5, n)) : 30;
+  }
+  return Number(el.researchMinutes.value) || 15;
+}
+
+function refreshResearchPicker() {
+  const on = el.researchCheck.checked;
+  el.researchMinutes.hidden = !on;
+  el.researchCustom.hidden = !on || el.researchMinutes.value !== 'custom';
+  if (on) {
+    const mins = researchBudgetMinutes();
+    el.note.textContent = `Deep research: the agent keeps digging for up to ${mins} minute${mins === 1 ? '' : 's'}.`;
+  } else if (!el.pingCheck.checked) {
+    el.note.textContent = '';
+  }
+}
+
+el.researchCheck.addEventListener('change', refreshResearchPicker);
+el.researchMinutes.addEventListener('change', refreshResearchPicker);
+el.researchCustom.addEventListener('input', refreshResearchPicker);
+
 el.composer.addEventListener('submit', async (event) => {
   event.preventDefault();
   const prompt = el.prompt.value.trim();
   if (!prompt || state.running) return;
   const notifyWhatsapp = el.pingCheck.checked;
+  // Read before the reset below clears the picker.
+  const deepResearch = el.researchCheck.checked;
+  const budgetMinutes = researchBudgetMinutes();
 
   el.prompt.value = '';
   autoGrow();
   el.send.disabled = true;
-  // The ping is per task, not a sticky preference: reset it with the composer.
+  // The ping and the research mode are per task, not sticky preferences:
+  // reset them with the composer.
   el.pingCheck.checked = false;
+  el.researchCheck.checked = false;
+  refreshResearchPicker();
   el.note.textContent = '';
   showHero(false);
   renderAsk(prompt);
@@ -936,6 +1005,7 @@ el.composer.addEventListener('submit', async (event) => {
         prompt,
         conversationId: state.conversationId,
         notifyWhatsapp,
+        ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: budgetMinutes } : {}),
       }),
     });
     state.conversationId = run.conversationId;
@@ -963,9 +1033,12 @@ el.composer.addEventListener('submit', async (event) => {
 });
 
 el.pingCheck.addEventListener('change', () => {
-  el.note.textContent = el.pingCheck.checked
-    ? 'You’ll get a WhatsApp ping when this finishes.'
-    : '';
+  if (el.pingCheck.checked) {
+    el.note.textContent = 'You’ll get a WhatsApp ping when this finishes.';
+  } else {
+    // The research picker owns the note otherwise.
+    refreshResearchPicker();
+  }
 });
 
 /* --------------------------------------------------------------- budget -- */

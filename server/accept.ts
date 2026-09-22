@@ -44,6 +44,10 @@ export interface AcceptInput {
   fresh?: boolean;
   /** Opt-in: one WhatsApp "done" ping when a web-started run finishes. */
   notifyWhatsapp?: boolean;
+  /** Deep-research mode: chain engine passes until the time budget is spent. */
+  deepResearch?: boolean;
+  /** Whole minutes of wall-clock research budget. */
+  researchBudgetMinutes?: number | null;
 }
 
 export type AcceptResult =
@@ -96,6 +100,8 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       conversationId: input.conversationId ?? null,
       fresh: input.fresh ?? false,
       notifyWhatsapp: input.notifyWhatsapp ?? false,
+      deepResearch: input.deepResearch === true,
+      researchBudgetMinutes: input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
     });
   } catch (err) {
     if (err instanceof RunConflictError) {

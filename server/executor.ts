@@ -27,7 +27,7 @@
  */
 import type { Db } from './db.js';
 import type { EventBus } from './events.js';
-import { EngineAbortedError, type Engine, type EngineContext, type LogLevel } from './engine/types.js';
+import { EngineAbortedError, EngineError, type Engine, type EngineContext, type EngineResult, type LogLevel } from './engine/types.js';
 import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type Run, type TerminalStatus } from './runs.js';
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
@@ -35,6 +35,56 @@ import { parseMilestone, withPlanning } from './planning.js';
 
 /** How often the full text so far is written to Postgres while streaming. */
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
+
+/**
+ * Deep-research mode: one logical mission, several engine passes, one
+ * wall-clock budget. The engine already waits out TPM rate limits patiently
+ * inside each pass — the executor only decides when to send the next pass and
+ * when to ask for the final report. No retry logic around the engine: a pass
+ * that throws is a failed run, exactly like a one-shot mission.
+ */
+const MAX_RESEARCH_PASSES = 8;
+/** The last pass inside this window is spent synthesising, not digging. */
+const FINAL_SYNTHESIS_MS = 3 * 60_000;
+
+function deepResearchFirstPrompt(mission: string, budgetMinutes: number): string {
+  return (
+    `[Deep-research mode — up to ${budgetMinutes} minutes of wall-clock time. ` +
+    `I will send follow-up passes until the budget is spent, then ask for the final report.]\n\n` +
+    `Work this mission exhaustively, in depth:\n` +
+    `- explore broadly first, then drill into the most promising leads\n` +
+    `- verify key claims against independent sources before asserting them\n` +
+    `- prefer primary sources over summaries; mark where evidence is thin\n` +
+    `- keep a running record of findings, sources and open questions — each follow-up pass ` +
+    `continues this same mission and builds on your notes\n\n` +
+    `Do NOT write the final report yet. End this pass with: (1) what you found, ` +
+    `(2) what is still unverified, (3) where you would dig next.\n\n` +
+    `Mission:\n${mission}`
+  );
+}
+
+function researchContinuationPrompt(pass: number, remainingMinutes: number): string {
+  return (
+    `[Deep-research, pass ${pass} — about ${remainingMinutes} minute(s) left. ` +
+    `This is the SAME mission: you still have your notes, findings and sandbox from the earlier passes.]\n\n` +
+    `Build on your prior findings — do NOT repeat research you already did or re-verify settled claims.\n` +
+    `Go deeper and wider: verify the uncertain claims with independent sources, ` +
+    `chase the most promising open leads, expand thin sections, close contradictions.\n\n` +
+    `End this pass with: (1) new findings, (2) still-open questions, ` +
+    `(3) where to dig next if time allows. Do NOT write the final report yet.`
+  );
+}
+
+function researchSynthesisPrompt(remainingMinutes: number): string {
+  return (
+    `[Deep-research, final pass — about ${remainingMinutes} minute(s) left. No more digging after this.]\n\n` +
+    `Write the final synthesized report now:\n` +
+    `- the question and the bottom-line answer up front\n` +
+    `- findings organised by theme with clear headings\n` +
+    `- confidence on key claims: verified / single-source / uncertain\n` +
+    `- the sources that matter, then open questions and recommended next steps`
+  );
+}
 
 /**
  * Which profile fields the memory block actually carried.
@@ -266,6 +316,8 @@ export class RunExecutor {
         engine: engine.name,
         prompt: run.prompt,
         conversationId: run.conversationId,
+        deepResearch: run.deepResearch,
+        researchBudgetMinutes: run.researchBudgetMinutes,
       });
 
       if (memory.applied) {
@@ -346,7 +398,11 @@ export class RunExecutor {
         // The planning contract rides on the wire only: the stored prompt
         // stays exactly what the operator wrote, and simple questions never
         // see the preamble.
-        result = await engine.run(withPlanning(memory.prompt), ctx);
+        const mission = withPlanning(memory.prompt);
+        result =
+          run.deepResearch && (run.researchBudgetMinutes ?? 0) > 0
+            ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking)
+            : await engine.run(mission, ctx);
       } finally {
         // Runs even on failure: whatever the engine produced is still worth
         // keeping, and the closing event must not overtake it.
@@ -410,6 +466,98 @@ export class RunExecutor {
       void extractAndStoreMemories(this.deps.db, run.prompt, sourceForKind(run.kind));
       this.active.delete(run.id);
     }
+  }
+
+  /**
+   * Deep-research mode: one logical mission, several engine passes, one
+   * wall-clock budget.
+   *
+   * The first pass starts from the run's own continuation handles (so a
+   * follow-up in the same conversation keeps its sandbox); every later pass
+   * continues via the previous pass's interactionId/environmentId, which is
+   * what keeps the agent's workspace and memory on the same mission instead
+   * of starting a fresh sandbox each time. Each continuation prompt tells the
+   * agent to build on prior findings, never repeat them, so the budget is not
+   * burned on duplicates.
+   *
+   * The engine's patient 429 handling stretches wall-clock inside a pass —
+   * that is expected and absorbed; the deadline is only checked between
+   * passes. No retry logic around the engine: a throwing pass fails the run
+   * exactly like a one-shot mission.
+   *
+   * Everything lands in the same text/thinking buffers, so the run's event
+   * log, stream and final message read as one mission, not N runs.
+   */
+  private async runDeepResearch(
+    run: Run,
+    mission: string,
+    ctx: EngineContext,
+    controller: AbortController,
+    writer: DurableWriter,
+    text: FieldBuffer,
+    thinking: FieldBuffer,
+  ): Promise<EngineResult> {
+    const engine = this.deps.engine;
+    const budgetMinutes = run.researchBudgetMinutes ?? 15;
+    const deadline = Date.now() + budgetMinutes * 60_000;
+
+    // The conversation's own continuation rides on pass one; later passes
+    // chain off whatever the previous pass returned.
+    let previousInteractionId = run.previousInteractionId;
+    let environmentId = run.environmentId;
+    let result: EngineResult | null = null;
+
+    await writer.write('research.started', {
+      budgetMinutes,
+      deadlineAt: new Date(deadline).toISOString(),
+    });
+    ctx.log(
+      `Deep research: up to ${budgetMinutes} minute(s) — chaining passes until the budget is spent.`,
+    );
+
+    for (let pass = 1; pass <= MAX_RESEARCH_PASSES; pass++) {
+      if (controller.signal.aborted) throw new EngineAbortedError();
+
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        ctx.log('Research budget spent — finalising with what was gathered.', 'warn');
+        break;
+      }
+      const remainingMinutes = Math.max(1, Math.round(remainingMs / 60_000));
+      const lastChance = pass === MAX_RESEARCH_PASSES || remainingMs <= FINAL_SYNTHESIS_MS;
+
+      const prompt =
+        pass === 1
+          ? deepResearchFirstPrompt(mission, budgetMinutes)
+          : lastChance
+            ? researchSynthesisPrompt(remainingMinutes)
+            : researchContinuationPrompt(pass, remainingMinutes);
+
+      // A fresh context per pass carrying the continuation handles — the
+      // streaming callbacks stay shared, so output keeps accumulating.
+      const passCtx: EngineContext = { ...ctx, previousInteractionId, environmentId };
+      await writer.write('research.pass', { pass, lastChance, remainingMinutes });
+      result = await engine.run(prompt, passCtx);
+
+      // Flush between passes: the browser and the database see each pass land
+      // instead of one giant dump at the end.
+      await text.final();
+      await thinking.final();
+      await writer.idle();
+
+      previousInteractionId = result.interactionId ?? previousInteractionId;
+      environmentId = result.environmentId ?? environmentId;
+
+      if (lastChance) break;
+      // An empty pass produced nothing to build on — another pass would only
+      // burn budget re-asking.
+      if (!result.text.trim() && !text.text.trim()) break;
+    }
+
+    if (!result) {
+      throw new EngineError('The research mission produced no output.', 'truncated');
+    }
+    return result;
   }
 
   /**

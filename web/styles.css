@@ -340,6 +340,26 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .ping-toggle:has(input:checked) { color: #25d366; border-color: #25d36655; background: #25d36614; }
 .ping-toggle:has(input:focus-visible) { outline: 2px solid var(--accent); }
 
+/* Deep-research mode picker: same pill language as the ping toggle, plus a
+   duration select that only appears while the mode is on. */
+.research-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 4px; padding: 6px 8px; border-radius: 999px;
+  color: var(--muted); font-size: 12px; cursor: pointer;
+  border: 1px solid transparent; user-select: none;
+}
+.research-toggle svg { width: 18px; height: 18px; }
+.research-toggle input[type="checkbox"] { position: absolute; opacity: 0; pointer-events: none; }
+.research-toggle:has(input[type="checkbox"]:checked) { color: var(--ok); border-color: #2e7d5255; background: #2e7d5214; }
+.research-toggle:has(input[type="checkbox"]:focus-visible) { outline: 2px solid var(--ok); }
+.research-toggle select,
+.research-toggle input[type="number"] {
+  font: inherit; color: inherit; background: transparent;
+  border: 1px solid var(--line); border-radius: 8px; padding: 2px 4px;
+  max-width: 76px;
+}
+.research-toggle select option { color: initial; }
+
 /* Plan checklist for complex missions. Compact rows above the step timeline;
    a finished step gets the check and fades, the rest stay actionable. */
 .plan {

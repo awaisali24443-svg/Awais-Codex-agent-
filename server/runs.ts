@@ -38,6 +38,13 @@ export interface Run {
   errorMessage: string | null;
   /** Opt-in: send one WhatsApp "done" ping when a web-started run finishes. */
   notifyWhatsapp: boolean;
+  /**
+   * Deep-research mode: the executor chains engine passes on this same mission
+   * until the wall-clock budget below is spent, then synthesises the report.
+   * researchBudgetMinutes is null unless deepResearch is on.
+   */
+  deepResearch: boolean;
+  researchBudgetMinutes: number | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -78,6 +85,8 @@ interface RunRow {
   error_type: string | null;
   error_message: string | null;
   notify_whatsapp: boolean | null;
+  deep_research: boolean | null;
+  research_budget_minutes: number | null;
   started_at: Date | string;
   finished_at: Date | string | null;
 }
@@ -101,6 +110,8 @@ function mapRun(row: RunRow): Run {
     errorType: row.error_type,
     errorMessage: row.error_message,
     notifyWhatsapp: row.notify_whatsapp ?? false,
+    deepResearch: row.deep_research ?? false,
+    researchBudgetMinutes: row.research_budget_minutes ?? null,
     startedAt: toIso(row.started_at) as string,
     finishedAt: toIso(row.finished_at),
   };
@@ -109,6 +120,7 @@ function mapRun(row: RunRow): Run {
 const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
                      interaction_id, environment_id, previous_interaction_id,
                      error_type, error_message, notify_whatsapp,
+                     deep_research, research_budget_minutes,
                      started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
@@ -203,6 +215,12 @@ export interface CreateRunInput {
   fresh?: boolean;
   /** Opt-in: one WhatsApp "done" ping when a web-started run finishes. */
   notifyWhatsapp?: boolean;
+  /**
+   * Deep-research mode: chain engine passes until the budget below is spent.
+   * researchBudgetMinutes is whole minutes; null means the default applies.
+   */
+  deepResearch?: boolean;
+  researchBudgetMinutes?: number | null;
 }
 
 /**
@@ -227,8 +245,9 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
     await db.transaction(async (tx) => {
       await tx.query(
         `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine,
-                           previous_interaction_id, environment_id, notify_whatsapp)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8)`,
+                           previous_interaction_id, environment_id, notify_whatsapp,
+                           deep_research, research_budget_minutes)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10)`,
         [
           id,
           conversationId,
@@ -238,6 +257,8 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
           continuation?.interactionId ?? null,
           continuation?.environmentId ?? null,
           input.notifyWhatsapp === true,
+          input.deepResearch === true,
+          input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
         ],
       );
       await tx.query(
