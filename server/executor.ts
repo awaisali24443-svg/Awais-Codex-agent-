@@ -29,13 +29,9 @@ import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import { EngineAbortedError, type Engine, type EngineContext, type LogLevel } from './engine/types.js';
 import { emitEvent, finishRun, setRunStatus, type Run, type TerminalStatus } from './runs.js';
-import {
-  applyMemory,
-  extractAndStoreMemories,
-  sourceForKind,
-  type MemoryProfile,
-} from './memory.js';
+import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
+import { parseMilestone, withPlanning } from './planning.js';
 
 /** How often the full text so far is written to Postgres while streaming. */
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
@@ -305,6 +301,13 @@ export class RunExecutor {
 
         log: (message, level: LogLevel = 'info') => {
           void writer.write('log', { message, level });
+          // A progress line in the planning protocol becomes a durable
+          // milestone the PWA renders as a checklist. Anything else is just a
+          // log line, as before.
+          const milestone = parseMilestone(message);
+          if (milestone) {
+            void writer.write('plan.milestone', { ...milestone });
+          }
         },
 
         /**
@@ -331,7 +334,10 @@ export class RunExecutor {
 
       let result;
       try {
-        result = await engine.run(memory.prompt, ctx);
+        // The planning contract rides on the wire only: the stored prompt
+        // stays exactly what the operator wrote, and simple questions never
+        // see the preamble.
+        result = await engine.run(withPlanning(memory.prompt), ctx);
       } finally {
         // Runs even on failure: whatever the engine produced is still worth
         // keeping, and the closing event must not overtake it.

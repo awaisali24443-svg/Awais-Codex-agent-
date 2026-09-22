@@ -313,6 +313,13 @@ function createRunCard(runId = null) {
   const steps = document.createElement('div');
   steps.className = 'steps';
 
+  // The plan checklist: one row per announced milestone, updated in place as
+  // `plan.milestone` events arrive. Hidden until the first milestone lands, so
+  // missions without a plan look exactly as before.
+  const plan = document.createElement('div');
+  plan.className = 'plan';
+  plan.hidden = true;
+
   const answer = document.createElement('div');
   answer.className = 'answer';
 
@@ -321,7 +328,7 @@ function createRunCard(runId = null) {
   const files = document.createElement('div');
   files.className = 'files';
 
-  card.append(thinking, steps, answer, files);
+  card.append(thinking, plan, steps, answer, files);
   el.thread.append(card);
   scrollToEnd();
 
@@ -329,6 +336,8 @@ function createRunCard(runId = null) {
     card,
     files,
     runId,
+    plan,
+    planIndex: new Map(),
     thinking,
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
@@ -356,6 +365,38 @@ function drawThinking(card) {
 function drawAnswer(card, streaming) {
   const text = card.answerText + card.answerTail;
   card.answer.innerHTML = markdown(text) + (streaming ? '<span class="caret"></span>' : '');
+}
+
+/* ------------------------------------------------------------ plan view -- */
+
+/**
+ * The plan checklist. Rows are keyed by step index so a re-announced step
+ * updates in place and a replay renders the same list in order. A "done"
+ * announcement only ever upgrades a row; a later plan line for the same step
+ * never un-checks it.
+ */
+function updatePlan(card, data) {
+  const index = Number(data.index);
+  const total = Number(data.total);
+  if (!Number.isFinite(index) || !Number.isFinite(total) || index < 1) return;
+
+  card.plan.hidden = false;
+  let row = card.planIndex.get(index);
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'plan-row';
+    row.innerHTML = '<span class="plan-check"></span><span class="plan-num"></span><span class="plan-label"></span>';
+    card.planIndex.set(index, row);
+    // Insert in numeric order.
+    const keys = [...card.planIndex.keys()].sort((a, b) => a - b);
+    const next = keys[keys.indexOf(index) + 1];
+    card.plan.insertBefore(row, next !== undefined ? card.planIndex.get(next) : null);
+  }
+
+  row.querySelector('.plan-num').textContent = `${index}/${total}`;
+  if (data.label) row.querySelector('.plan-label').textContent = String(data.label);
+  if (data.done) row.classList.add('done');
+  scrollToEnd();
 }
 
 function addStep(card, key, { name, detail = '', icon = 'dot', done = false }) {
@@ -432,6 +473,10 @@ function handleEvent(card, event, data) {
         icon: data.level === 'error' ? 'warn' : data.level === 'warn' ? 'warn' : 'info',
         done: true,
       });
+      break;
+
+    case 'plan.milestone':
+      updatePlan(card, data);
       break;
 
     case 'tool.call':
@@ -644,7 +689,7 @@ function attach(runId, after = 0) {
   const durable = [
     'run.started', 'log', 'tool.call', 'tool.result',
     'thinking.snapshot', 'text.snapshot', 'run.environment',
-    'artifact', 'memory.recall',
+    'artifact', 'memory.recall', 'plan.milestone',
     'run.completed', 'run.failed', 'run.cancelled',
   ];
   for (const name of durable) {

@@ -332,13 +332,42 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .ping-toggle {
   display: inline-flex; align-items: center; gap: 4px;
   margin-left: 4px; padding: 6px 8px; border-radius: 999px;
-  color: var(--text-2); font-size: 12px; cursor: pointer;
+  color: var(--muted); font-size: 12px; cursor: pointer;
   border: 1px solid transparent; user-select: none;
 }
 .ping-toggle svg { width: 18px; height: 18px; }
 .ping-toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .ping-toggle:has(input:checked) { color: #25d366; border-color: #25d36655; background: #25d36614; }
 .ping-toggle:has(input:focus-visible) { outline: 2px solid var(--accent); }
+
+/* Plan checklist for complex missions. Compact rows above the step timeline;
+   a finished step gets the check and fades, the rest stay actionable. */
+.plan {
+  margin: 10px 0 2px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 6px 10px;
+  background: var(--surface);
+}
+.plan-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 0; font-size: 13px;
+  border-bottom: 1px dashed var(--line);
+}
+.plan-row:last-child { border-bottom: none; }
+.plan-check {
+  width: 16px; height: 16px; flex: none; align-self: center;
+  border: 1.5px solid var(--muted); border-radius: 50%;
+}
+.plan-row.done .plan-check { border-color: #25d366; background: #25d36622; }
+.plan-row.done .plan-check::after {
+  content: ''; display: block;
+  width: 4px; height: 8px; margin: 2px 0 0 4.5px;
+  border: solid #25d366; border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.plan-num { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; flex: none; }
+.plan-row.done .plan-label { color: var(--muted); text-decoration: line-through; }
 .send {
   margin-left: auto;
   display: grid; place-items: center;
