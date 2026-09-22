@@ -38,7 +38,7 @@ on:
       prompt:
         description: Prompt for the smoke-test mission
         type: string
-        default: Reply with the single word: ready
+        default: 'Reply with the single word: ready'
 
 permissions:
   contents: read
