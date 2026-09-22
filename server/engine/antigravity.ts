@@ -318,90 +318,6 @@ export class AntigravityEngine implements Engine {
     // summary across frames — only a change is new reasoning worth showing.
     let lastSummary: string | undefined;
 
-    // ---- live step polling -------------------------------------------------
-    // The upstream SSE stream is sparse mid-run: it rarely carries step.summary
-    // frames while the agent is actually working. The stored interaction
-    // (store: true) can be re-read by id, and its partial steps are the agent's
-    // real activity — poll it and narrate newly seen steps through the normal
-    // thinking/tool channels so the Thinking panel updates live. Bounded to
-    // protect the daily budget: 5s interval, 20 polls max, stops the moment
-    // the answer starts streaming or the run reaches a terminal state.
-    const seenStepIds = new Set<string>();
-    let pollActive = true;
-    let pollsDone = 0;
-    const POLL_MAX = 20;
-
-    const narratePolledStep = (step: unknown, index: number): void => {
-      if (!step || typeof step !== 'object') return;
-      const s = step as Record<string, unknown>;
-      const sid = String(s.id ?? s.step_id ?? `idx:${index}`);
-      if (seenStepIds.has(sid)) return;
-      seenStepIds.add(sid);
-      const summary = typeof s.summary === 'string' ? s.summary.trim()
-        : typeof s.thought === 'string' ? s.thought.trim() : '';
-      if (summary && summary !== lastSummary) {
-        lastSummary = summary;
-        emit.thinking(`${summary}\n`);
-      }
-      const calls = Array.isArray(s.tool_calls) ? s.tool_calls
-        : s.function_call && typeof s.function_call === 'object'
-          ? [s.function_call as { name?: string; arguments?: unknown }]
-          : [];
-      for (const call of calls) {
-        const c = call as { name?: string; arguments?: unknown };
-        if (!c?.name) continue;
-        emit.tool(c.name, (c.arguments ?? {}) as Record<string, unknown>);
-      }
-    };
-
-    const pollOnce = async (): Promise<void> => {
-      // Nothing to poll yet, or the run already reached a terminal state.
-      // Note: we keep polling even while answer text streams, because the
-      // agent may still be doing tool work (and narratable steps) mid-stream.
-      if (!interactionId || sawTerminal || !pollActive) return;
-      pollsDone++;
-      try {
-        const res = await this.fetchImpl(
-          `${this.apiBase}/interactions/${encodeURIComponent(interactionId)}`,
-          { headers: { 'x-goog-api-key': this.apiKey }, signal: controller.signal },
-        );
-        if (!res.ok) {
-          emit.log(`[think-poll] poll #${pollsDone}: http ${res.status}`);
-          return;
-        }
-        const data = (await res.json()) as {
-          steps?: unknown[]; status?: string; output_text?: string;
-        };
-        const steps = Array.isArray(data?.steps) ? data.steps : [];
-        if (pollsDone === 1 && steps.length > 0 && steps[0] && typeof steps[0] === 'object') {
-          emit.log(`[think-poll] step keys: ${Object.keys(steps[0] as object).join(',')}`);
-        }
-        emit.log(`[think-poll] poll #${pollsDone}: steps=${steps.length} status=${data?.status ?? '?'}`);
-        steps.forEach((s, i) => narratePolledStep(s, i));
-        const st = data?.status;
-        if (st === 'completed' || st === 'failed' || st === 'success') pollActive = false;
-      } catch {
-        // Transient — the next tick retries. The loop is bounded.
-      }
-    };
-
-    const pollLoop = (async (): Promise<void> => {
-      // Wait for the first interaction id before polling.
-      emit.log('[think-poll] starting, waiting for interaction id');
-      while (pollActive && !interactionId && !controller.signal.aborted) {
-        await this.sleep(2000, controller.signal).catch(() => undefined);
-      }
-      if (interactionId) emit.log(`[think-poll] polling ${interactionId.slice(0, 12)}…`);
-      else emit.log('[think-poll] no interaction id, polling disabled');
-      while (pollActive && pollsDone < POLL_MAX && !controller.signal.aborted) {
-        await this.sleep(5000, controller.signal).catch(() => undefined);
-        if (!pollActive || controller.signal.aborted) break;
-        await pollOnce();
-      }
-      emit.log(`[think-poll] done, ${pollsDone} polls, ${seenStepIds.size} steps seen`);
-    })();
-    // ---- end live step polling ---------------------------------------------
-
     if (!response.body) {
       throw new EngineError('The agent returned no stream body', 'upstream_error');
     }
@@ -519,8 +435,6 @@ export class AntigravityEngine implements Engine {
         !interactionId,
       );
     } finally {
-      pollActive = false;
-      await pollLoop.catch(() => undefined);
       reader.releaseLock?.();
     }
 
