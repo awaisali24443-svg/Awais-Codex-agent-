@@ -36,6 +36,7 @@ const el = {
   composer: $('composer'),
   prompt: $('prompt'),
   send: $('btn-send'),
+  stop: $('btn-stop'),
 
   drawer: $('drawer'),
   scrim: $('scrim'),
@@ -672,9 +673,27 @@ function attach(runId, after = 0) {
 function setRunning(on) {
   state.running = on;
   el.statusDot.hidden = !on;
+  el.stop.hidden = !on;
+  el.stop.disabled = false;
   el.topbarTitle.textContent = on ? 'Working…' : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'Codex');
   el.send.disabled = on || !el.prompt.value.trim();
 }
+
+/* A runaway task blocks every new one (the server answers 409 while one is
+   active), so the stop button is part of the core loop, not a nicety. The
+   cancelled event arrives on the stream and finishCard() resets the UI. */
+el.stop.addEventListener('click', async () => {
+  if (!state.runId || !state.running) return;
+  el.stop.disabled = true;
+  note('Stopping…');
+  try {
+    await api(`/api/runs/${state.runId}/cancel`, { method: 'POST' });
+  } catch (err) {
+    note('');
+    toast(err.message || 'Could not stop the task.');
+    el.stop.disabled = false;
+  }
+});
 
 el.prompt.addEventListener('input', () => {
   autoGrow();

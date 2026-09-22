@@ -92,7 +92,7 @@ interface StreamPayload {
     summary?: string;
     tool_calls?: Array<{ name?: string; arguments?: Record<string, unknown> }>;
   };
-  delta?: { text?: string };
+  delta?: { text?: string; [key: string]: unknown };
   error?: { message?: string; code?: number | string };
 }
 
@@ -314,6 +314,9 @@ export class AntigravityEngine implements Engine {
     let tokensOut: number | undefined;
     let sawTerminal = false;
     const artifacts = new Set<string>();
+    // The upstream stream sends one summary per step, but may repeat the same
+    // summary across frames — only a change is new reasoning worth showing.
+    let lastSummary: string | undefined;
 
     if (!response.body) {
       throw new EngineError('The agent returned no stream body', 'upstream_error');
@@ -362,8 +365,19 @@ export class AntigravityEngine implements Engine {
             tokensOut = usage.tokensOut ?? tokensOut;
           }
 
+          // The step summary is the agent's own narration of what it is doing —
+          // the closest thing this stream gives us to a reasoning trace. It
+          // feeds the Thinking panel as well as the step timeline, so the
+          // browser shows a live narrative even though the API exposes no
+          // dedicated thinking channel.
           const summary = data.step?.summary;
-          if (summary) emit.log(summary);
+          if (summary) {
+            emit.log(summary);
+            if (summary !== lastSummary) {
+              lastSummary = summary;
+              emit.thinking(`${summary}\n`);
+            }
+          }
 
           for (const call of data.step?.tool_calls ?? []) {
             if (!call?.name) continue;
@@ -378,9 +392,18 @@ export class AntigravityEngine implements Engine {
             }
           }
 
-          if (data.delta?.text) {
-            streamed += data.delta.text;
-            emit.text(data.delta.text);
+          if (data.delta) {
+            if (typeof data.delta.text === 'string' && data.delta.text) {
+              streamed += data.delta.text;
+              emit.text(data.delta.text);
+            }
+            // Forward any other string fields the API may use for reasoning
+            // (e.g. a future `reasoning` delta) into the Thinking panel.
+            // Unknown non-string fields are ignored.
+            for (const [key, value] of Object.entries(data.delta)) {
+              if (key === 'text' || typeof value !== 'string' || !value) continue;
+              emit.thinking(value);
+            }
           }
         }
       }

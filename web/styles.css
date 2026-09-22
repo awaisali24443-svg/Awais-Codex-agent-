@@ -160,6 +160,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .icon-btn svg { width: 21px; height: 21px; }
 .icon-btn:disabled { opacity: .35; cursor: default; }
 
+/* stop button: only visible while a task is running */
+#btn-stop { color: var(--danger); }
+
 /* --------------------------------------------------------------- stream --- */
 
 .stream {
@@ -212,6 +215,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-family: var(--mono); font-size: 12.5px; line-height: 1.62;
   color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere;
   max-height: 44vh; overflow-y: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
 .spinner {
   width: 13px; height: 13px; flex: none; border-radius: 50%;
@@ -414,7 +418,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .file svg { width: 15px; height: 15px; fill: none; stroke: var(--ink-soft); stroke-width: 1.9; }
 .file.busy { opacity: .55; pointer-events: none; }
 
-.convos { flex: 1; overflow-y: auto; margin: 12px -6px 0; }
+.convos {
+  flex: 1; min-height: 0; overflow-y: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  margin: 12px -6px 0;
+}
 .convo {
   display: block; width: 100%; text-align: left;
   padding: 11px 12px; margin-bottom: 2px;
