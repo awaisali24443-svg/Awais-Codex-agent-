@@ -21,6 +21,9 @@
  *   3. **WhatsApp** — a read-only long poll (`getUpdates`, zero-second timeout)
  *      proves the token authenticates; an optional send puts a message in the
  *      agent's chat, which is the one recipient this platform allows.
+ *   4. **GitHub** — resolving the token's owner proves the PAT the integration
+ *      runs on is accepted, including fine-grained PATs that cannot read
+ *      `/user`.
  *
  * Every failure is classified rather than thrown, because "it did not work" is
  * not a useful thing to tell someone at midnight: the difference between a bad
@@ -30,6 +33,7 @@
 import { AntigravityEngine } from './engine/antigravity.js';
 import { EngineAbortedError, EngineError, type EngineContext, type EngineErrorType } from './engine/types.js';
 import { WhatsAppClient, WhatsAppError } from './whatsapp/api.js';
+import { classifyGitHubToken, resolveGitHubOwner } from './github.js';
 import { fingerprintOf, maskSecret } from './crypto.js';
 
 export const DEFAULT_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -53,7 +57,7 @@ export type Verdict =
 
 export interface CheckResult {
   /** Which credential or capability was checked. */
-  check: 'gemini_key' | 'agent' | 'whatsapp_token' | 'whatsapp_send';
+  check: 'gemini_key' | 'agent' | 'whatsapp_token' | 'whatsapp_send' | 'github_token';
   verdict: Verdict;
   /** One sentence a human can act on. */
   summary: string;
@@ -510,9 +514,67 @@ export async function sendWhatsAppTestMessage(
 }
 
 // ---------------------------------------------------------------------------
-// reporting
+// 4. GitHub
 // ---------------------------------------------------------------------------
 
+export interface GitHubCheckOptions {
+  token: string;
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}
+
+/**
+ * Is the PAT the integration runs on accepted?
+ *
+ * Resolving the token's owner is the cheapest proof: it works for classic
+ * PATs and for fine-grained ones that cannot read `/user` (the repos
+ * fallback inside `resolveGitHubOwner` covers those). A null owner with a
+ * token present means the token is rejected, not merely absent.
+ */
+export async function checkGitHubToken(options: GitHubCheckOptions): Promise<CheckResult> {
+  const startedAt = Date.now();
+  const token = options.token.trim();
+  if (!token) {
+    return {
+      check: 'github_token',
+      verdict: 'not_configured',
+      summary: 'No GitHub token was provided (GITHUB_TOKEN, or store a PAT in Settings as github_pat).',
+    };
+  }
+
+  try {
+    const owner = await resolveGitHubOwner(token, options.fetchImpl ?? fetch);
+    const ms = Date.now() - startedAt;
+    if (owner) {
+      return {
+        check: 'github_token',
+        verdict: OK,
+        summary: `Token accepted — GitHub user "${owner}" (${classifyGitHubToken(token)}).`,
+        evidence: { login: owner, tokenType: classifyGitHubToken(token), fingerprint: fingerprintOf(token) },
+        ms,
+      };
+    }
+    return {
+      check: 'github_token',
+      verdict: 'auth_failed',
+      summary: 'GitHub rejected this token. Generate a new PAT (classic or fine-grained with repo scope) and replace it.',
+      evidence: { fingerprint: fingerprintOf(token) },
+      ms,
+    };
+  } catch (err) {
+    return {
+      check: 'github_token',
+      verdict: isNetworkFailure(err) ? 'network' : 'upstream_error',
+      summary: `Could not reach api.github.com — ${(err as Error).message}. This check needs outbound internet.`,
+      evidence: { fingerprint: fingerprintOf(token) },
+      ms: Date.now() - startedAt,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// reporting
+// ---------------------------------------------------------------------------
 const MARK: Record<Verdict, string> = {
   ok: 'PASS',
   not_configured: 'SKIP',

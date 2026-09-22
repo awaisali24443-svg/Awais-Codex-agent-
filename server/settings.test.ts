@@ -456,7 +456,7 @@ describe('settings routes', () => {
 
     assert.deepEqual(
       body.secrets.map((s) => s.name),
-      ['gemini_api_key', 'whatsapp_token', 'whatsapp_to'],
+      ['gemini_api_key', 'whatsapp_token', 'whatsapp_to', 'github_pat'],
     );
     assert.equal(body.secrets[0].source, 'missing');
     assert.equal(body.encryption.available, true);
@@ -561,18 +561,18 @@ describe('settings routes', () => {
   });
 
   test('unknown credential names are refused rather than stored', async () => {
-    const res = await fetch(`${base}/api/settings/secrets/github_pat`, {
+    const res = await fetch(`${base}/api/settings/secrets/slack_token`, {
       method: 'PUT',
       headers: auth(),
-      body: JSON.stringify({ value: 'ghp_something' }),
+      body: JSON.stringify({ value: 'xoxb_something' }),
     });
     assert.equal(res.status, 404);
     const body = (await res.json()) as { error: string; message: string };
     assert.equal(body.error, 'unknown_secret');
-    assert.match(body.message, /gemini_api_key, whatsapp_token/);
+    assert.match(body.message, /gemini_api_key, whatsapp_token, whatsapp_to, github_pat/);
 
     // And nothing was written.
-    const rows = await db.query('SELECT name FROM secrets WHERE name = $1', ['github_pat']);
+    const rows = await db.query('SELECT name FROM secrets WHERE name = $1', ['slack_token']);
     assert.equal(rows.length, 0);
   });
 

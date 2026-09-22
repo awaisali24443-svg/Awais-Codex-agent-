@@ -19,6 +19,7 @@ import { createBriefingRoutes } from './routes/briefing.js';
 import { createMemoryRoutes } from './routes/memory.js';
 import { createArtifactRoutes } from './routes/artifacts.js';
 import { createSettingsRoutes } from './routes/settings.js';
+import { createGitHubRoutes } from './routes/github.js';
 import type { SecretsStore, SettingsStore } from './settings.js';
 import {
   checkAccessKey,
@@ -212,6 +213,10 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api', createBriefingRoutes({ db }));
   app.use('/api', createMemoryRoutes({ db }));
   app.use('/api', createArtifactRoutes({ db, config }));
+  // GitHub export, rebuilt for v2 on the secrets store. Mounted behind
+  // requireSession like the rest of /api — v1 left these routes
+  // unauthenticated, which let anyone push to the operator's GitHub.
+  app.use('/api', createGitHubRoutes({ secrets: deps.secrets }));
   app.use(
     '/api',
     createSettingsRoutes({

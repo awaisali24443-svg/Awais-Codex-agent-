@@ -100,7 +100,7 @@ export function isSettingKey(value: unknown): value is SettingKey {
 // secrets
 // ---------------------------------------------------------------------------
 
-export const SECRET_NAMES = ['gemini_api_key', 'whatsapp_token', 'whatsapp_to'] as const;
+export const SECRET_NAMES = ['gemini_api_key', 'whatsapp_token', 'whatsapp_to', 'github_pat'] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
 
 export interface SecretSpec {
@@ -132,6 +132,13 @@ export const KNOWN_SECRETS: Record<SecretName, SecretSpec> = {
     description: 'Normally auto-learned from your first WhatsApp message to the agent. Set manually only if you know the agent\u2019s user:<id> \u2014 a phone number will not work.',
     envVar: 'WHATSAPP_TO',
     usedBy: 'server/whatsapp/doneping.ts',
+  },
+  github_pat: {
+    name: 'github_pat',
+    label: 'GitHub personal access token',
+    description: 'Connects the GitHub integration: validating the token, listing repos, and exporting generated code to a new repo. A classic or fine-grained PAT with repo scope.',
+    envVar: 'GITHUB_TOKEN',
+    usedBy: 'server/routes/github.ts',
   },
 };
 
@@ -334,6 +341,7 @@ export function createStores(db: Db, config: AppConfig): {
       gemini_api_key: config.geminiApiKey,
       whatsapp_token: config.whatsappToken,
       whatsapp_to: config.whatsappTo,
+      github_pat: config.githubToken,
     }),
   };
 }

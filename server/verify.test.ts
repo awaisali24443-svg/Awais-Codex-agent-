@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import {
   checkAgent,
   checkGeminiKey,
+  checkGitHubToken,
   checkWhatsAppToken,
   formatReport,
   hasFailure,
@@ -161,6 +162,41 @@ describe('agent check', () => {
     assert.equal(result.verdict, 'upstream_error');
     assert.ok(result.evidence?.errorType);
     assert.equal(EngineError.name, 'EngineError');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub
+// ---------------------------------------------------------------------------
+
+describe('github token check', () => {
+  const PAT = 'github_pat_test-do-not-use-0123456789abcdef';
+
+  test('without a token the check is skipped rather than attempted', async () => {
+    const result = await checkGitHubToken({ token: '' });
+    assert.equal(result.check, 'github_token');
+    assert.equal(result.verdict, 'not_configured');
+  });
+
+  test('an accepted token reports the owner and its kind', async () => {
+    const result = await checkGitHubToken({ token: PAT, fetchImpl: respond(200, { login: 'octocat' }) });
+    assert.equal(result.verdict, 'ok');
+    assert.match(result.summary, /octocat/);
+    assert.match(result.summary, /fine-grained/);
+    assert.equal(JSON.stringify(result).includes(PAT), false, 'the report must not contain the token');
+  });
+
+  test('a rejected token is auth_failed, not "not configured"', async () => {
+    const result = await checkGitHubToken({
+      token: PAT,
+      fetchImpl: respond(401, { message: 'Bad credentials' }),
+    });
+    assert.equal(result.verdict, 'auth_failed');
+  });
+
+  test('a blocked network is reported as a network problem', async () => {
+    const result = await checkGitHubToken({ token: PAT, fetchImpl: blockedFetch });
+    assert.equal(result.verdict, 'network');
   });
 });
 

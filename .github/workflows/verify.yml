@@ -13,9 +13,12 @@
 #   1. Add the secrets (repo → Settings → Secrets and variables → Actions):
 #        GEMINI_API_KEY   the Google AI Studio key
 #        WHATSAPP_TOKEN   the agent API key WhatsApp generated
+#        GITHUB_TOKEN     a GitHub PAT (classic or fine-grained, repo scope) —
+#                         only needed to verify the GitHub integration
 #      or, from a machine with the gh CLI and admin rights:
 #        gh secret set GEMINI_API_KEY   < gemini.txt
 #        gh secret set WHATSAPP_TOKEN   < whatsapp.txt
+#        gh secret set GITHUB_TOKEN     < github.txt
 #   2. Actions → "Verify integrations" → Run workflow.
 #   3. Delete the secrets afterwards if the keys are temporary.
 #
@@ -51,6 +54,7 @@ jobs:
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Pinned deliberately: this app targets the managed Antigravity agent, and
       # the date suffix is the one part of it that moves.
       ANTIGRAVITY_AGENT: antigravity-preview-09-2026
@@ -77,6 +81,7 @@ jobs:
             echo "| Agent \`$ANTIGRAVITY_AGENT\` | one real mission: \`${{ inputs.prompt }}\` | 1 run |"
             echo "| WhatsApp token | read-only long poll | nothing |"
             echo "| WhatsApp send | one message to the agent's chat | nothing |"
+            echo "| GitHub token | owner resolution | nothing |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check the Gemini key and the agent

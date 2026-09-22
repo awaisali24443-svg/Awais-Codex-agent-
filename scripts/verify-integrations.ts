@@ -15,8 +15,8 @@
  *   npm run verify -- --whatsapp-only        # skip the mission (spends no run)
  *   npm run verify -- --prompt "say ready"   # a different smoke-test prompt
  *
- * Reads: GEMINI_API_KEY, WHATSAPP_TOKEN, ANTIGRAVITY_AGENT, ANTIGRAVITY_API_BASE,
- *        WHATSAPP_API_BASE — the same names the app uses.
+ * Reads: GEMINI_API_KEY, WHATSAPP_TOKEN, GITHUB_TOKEN, ANTIGRAVITY_AGENT,
+ *        ANTIGRAVITY_API_BASE, WHATSAPP_API_BASE — the same names the app uses.
  *
  * Exits 0 when every check that ran passed, 1 otherwise, so it is usable as a
  * gate in a workflow.
@@ -25,6 +25,7 @@ import {
   DEFAULT_AGENT,
   checkAgent,
   checkGeminiKey,
+  checkGitHubToken,
   checkWhatsAppToken,
   formatReport,
   hasFailure,
@@ -36,6 +37,7 @@ interface Args {
   whatsappOnly: boolean;
   agentOnly: boolean;
   keyOnly: boolean;
+  githubOnly: boolean;
   send: boolean;
   text?: string;
   prompt?: string;
@@ -48,6 +50,7 @@ function parseArgs(argv: string[]): Args {
     whatsappOnly: false,
     agentOnly: false,
     keyOnly: false,
+    githubOnly: false,
     send: false,
     json: false,
     help: false,
@@ -68,6 +71,9 @@ function parseArgs(argv: string[]): Args {
         // The cheap check: one GET, no mission, no WhatsApp. For "did the key
         // survive being pasted" without spending a run.
         args.keyOnly = true;
+        break;
+      case '--github-only':
+        args.githubOnly = true;
         break;
       case '--send':
         args.send = true;
@@ -101,6 +107,7 @@ const HELP = `npm run verify — check the credentials against the real provider
   --key-only          only the Gemini key: one GET, no mission (spends nothing)
   --agent-only        the key and the agent, no WhatsApp (spends one run)
   --whatsapp-only     only the WhatsApp token (no mission, spends nothing)
+  --github-only       only the GitHub token (no mission, spends nothing)
   --send              also send a test message into the agent's chat
   --text "..."        wording for that message
   --prompt "..."      prompt for the smoke-test mission
@@ -117,11 +124,12 @@ async function main(): Promise<void> {
 
   const geminiApiKey = (process.env.GEMINI_API_KEY ?? '').trim();
   const whatsappToken = (process.env.WHATSAPP_TOKEN ?? '').trim();
+  const githubToken = (process.env.GITHUB_TOKEN ?? '').trim();
   const agent = (process.env.ANTIGRAVITY_AGENT ?? DEFAULT_AGENT).trim();
 
-  if (!geminiApiKey && !whatsappToken) {
+  if (!geminiApiKey && !whatsappToken && !githubToken) {
     console.error(
-      'Neither GEMINI_API_KEY nor WHATSAPP_TOKEN is set. Nothing to verify.\n\n' + HELP,
+      'Neither GEMINI_API_KEY, WHATSAPP_TOKEN nor GITHUB_TOKEN is set. Nothing to verify.\n\n' + HELP,
     );
     process.exit(2);
   }
@@ -132,12 +140,15 @@ async function main(): Promise<void> {
     console.log(`[verify] agent:      ${agent}`);
     if (geminiApiKey) console.log(`[verify] gemini key: ${identify(geminiApiKey)}`);
     if (whatsappToken) console.log(`[verify] whatsapp:   ${identify(whatsappToken)}`);
+    if (githubToken) console.log(`[verify] github:     ${identify(githubToken)}`);
     console.log('[verify] each check calls the provider; nothing is simulated\n');
   }
 
   const results: CheckResult[] = [];
 
-  if (!args.whatsappOnly && !args.keyOnly) {
+  if (args.githubOnly) {
+    results.push(await checkGitHubToken({ token: githubToken }));
+  } else if (!args.whatsappOnly && !args.keyOnly) {
     results.push(
       await checkGeminiKey({
         apiKey: geminiApiKey,
@@ -160,7 +171,9 @@ async function main(): Promise<void> {
     }
   }
 
-  if (args.keyOnly) {
+  if (args.githubOnly) {
+    // handled above; nothing else runs
+  } else if (args.keyOnly) {
     results.push(
       await checkGeminiKey({
         apiKey: geminiApiKey,
@@ -184,6 +197,12 @@ async function main(): Promise<void> {
         }),
       );
     }
+  }
+
+  // The GitHub PAT check is read-only (owner resolution); exporting is
+  // exercised through the app's own /api/github/* routes.
+  if (!args.githubOnly && githubToken) {
+    results.push(await checkGitHubToken({ token: githubToken }));
   }
 
   if (args.json) {
