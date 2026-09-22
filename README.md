@@ -104,9 +104,20 @@ Locally, `AUTH_MODE` defaults to `key` but falls back to `open` with a loud warn
 
 ## Deploying to Render
 
-`render.yaml` is a complete blueprint: link a Neon database, paste the connection string as `DATABASE_URL`, generate `SESSION_SECRET` and `ACCESS_KEY`, set `MASTER_KEY` (`openssl rand -hex 32`) and `GEMINI_API_KEY`, and deploy. Migrations run at boot, because Render's free tier has no shell.
+Step-by-step (and the failure table): **[DEPLOY.md](DEPLOY.md)**. The short version:
 
-Then: open `https://<service>.onrender.com/?k=<ACCESS_KEY>` **once**. The key is exchanged for a signed session cookie and stripped out of the address bar.
+1. **Neon** → new project → copy the **pooled** connection string.
+2. `openssl rand -hex 32` → that is `MASTER_KEY`.
+3. Render → **New +** → **Blueprint** → this repository → `render.yaml` is read automatically.
+4. Fill the four values it asks for: `DATABASE_URL`, `MASTER_KEY`, `GEMINI_API_KEY`, and optionally
+   `WHATSAPP_TOKEN`. Everything else — `SESSION_SECRET`, `ACCESS_KEY`, budget, retention, the agent
+   id, the health check — is already in the blueprint.
+5. Open `https://<service>.onrender.com/?k=<ACCESS_KEY>` once, using the `ACCESS_KEY` Render
+   generated (service → **Environment**).
+
+`render.yaml` deliberately does **not** set `POLLER_ENABLED`, so the service polls on its own as
+soon as a WhatsApp token exists — whether that token came from the dashboard or from the app's
+Settings panel. The only reason to set it to `false` is a second host: one poller per agent.
 
 ---
 

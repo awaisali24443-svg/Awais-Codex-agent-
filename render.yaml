@@ -57,10 +57,14 @@ services:
 
       # ---- WhatsApp (optional) ------------------------------------------
       # From the phone: Settings -> Agents -> Create an agent -> open its chat
-      # -> Chat info -> API key. Leaving this unset simply disables the poller.
+      # -> Chat info -> API key. In Render, leave this unset and paste the key
+      # into the app's Settings panel instead — it is stored encrypted and the
+      # poller starts by itself.
       - key: WHATSAPP_TOKEN
         sync: false
-      # Exactly ONE process may long-poll an agent; a second poller kills the
-      # first with a 409. Set true here OR on your laptop, never both.
-      - key: POLLER_ENABLED
-        value: "false"
+      # POLLER_ENABLED is deliberately NOT set here, so it stays on 'auto':
+      # Render polls as soon as a token exists (from the environment or from
+      # Settings). Set it to "false" only on a *second* host — exactly one
+      # process may long-poll an agent, and a second poller kills the first
+      # with a 409. On your laptop that means: leave WHATSAPP_TOKEN unset, or
+      # set POLLER_ENABLED=false, while Render owns the connection.
