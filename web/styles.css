@@ -377,6 +377,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .retry-btn:disabled { opacity: .5; cursor: default; }
 .retry-btn:not(:disabled):active { background: var(--surface-2); }
+
+/* Retry / edit-prompt button group on a finished task's notice. */
+.run-btns { margin-left: auto; display: flex; gap: 8px; flex: none; align-items: center; }
+.run-btns .retry-btn { margin-left: 0; }
 .send {
   margin-left: auto;
   display: grid; place-items: center;

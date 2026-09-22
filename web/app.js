@@ -465,6 +465,7 @@ function handleEvent(card, event, data) {
   switch (event) {
     case 'run.started':
       note('');
+      card.prompt = typeof data.prompt === 'string' ? data.prompt : '';
       break;
 
     case 'log':
@@ -577,28 +578,15 @@ function finishCard(card, outcome, data = {}) {
     // A failed complex task is usually worth one more attempt, not a retyped
     // prompt. The retry starts a fresh run with the same prompt in the same
     // conversation; it costs one daily run like any other mission.
-    const retryBtn = document.createElement('button');
-    retryBtn.type = 'button';
-    retryBtn.className = 'retry-btn';
-    retryBtn.textContent = 'Retry this task';
-    retryBtn.addEventListener('click', async () => {
-      retryBtn.disabled = true;
-      try {
-        const { run } = await api(`/api/runs/${card.runId}/retry`, { method: 'POST' });
-        state.conversationId = run.conversationId;
-        noticeNode.remove();
-        setRunning(true);
-        attach(run.id, 0);
-        loadConversations();
-        loadBudget();
-      } catch (err) {
-        retryBtn.disabled = false;
-        renderNotice(err.body?.message || err.message || 'Could not retry.', true, 'warn');
-      }
-    });
-    noticeNode.append(retryBtn);
+    noticeNode.append(runActionButtons(card, { retry: true, edit: true, notice: noticeNode }));
   } else if (outcome === 'cancelled') {
-    renderNotice('Stopped. Whatever it produced is kept below.', false, 'info');
+    const noticeNode = renderNotice('Stopped. Whatever it produced is kept below.', false, 'info');
+    noticeNode.append(runActionButtons(card, { edit: true }));
+  } else {
+    // A finished task can be re-run as-is or tweaked in the composer and
+    // re-sent.
+    const noticeNode = renderNotice('Done.', false, 'check');
+    noticeNode.append(runActionButtons(card, { retry: true, edit: true, notice: noticeNode }));
   }
 
   setRunning(false);
@@ -608,6 +596,65 @@ function finishCard(card, outcome, data = {}) {
   // Extraction runs after the run is closed, so give it a moment to land
   // before asking what was learned — otherwise the list is always one behind.
   setTimeout(loadMemory, 1_200);
+}
+
+/* Re-run a finished task with the same prompt via the retry endpoint: a brand
+   new run in the same conversation. The finished notice is replaced by the
+   new run's card.
+   @param {{ button: HTMLButtonElement, notice?: { remove(): void } | null }} opts */
+async function retryRun(card, opts) {
+  const { button, notice } = opts;
+  button.disabled = true;
+  try {
+    const { run } = await api(`/api/runs/${card.runId}/retry`, { method: 'POST' });
+    state.conversationId = run.conversationId;
+    if (notice) notice.remove();
+    setRunning(true);
+    attach(run.id, 0);
+    loadConversations();
+    loadBudget();
+  } catch (err) {
+    button.disabled = false;
+    renderNotice(err.body?.message || err.message || 'Could not retry.', true, 'warn');
+  }
+}
+
+/* Load a run's prompt back into the composer so it can be edited and re-sent.
+   The prompt is captured from `run.started` when the card is drawn, so it is
+   exactly what the run was asked — including for retried runs. */
+function editPrompt(card) {
+  if (!card.prompt) {
+    toast('No prompt to edit on this task.');
+    return;
+  }
+  el.prompt.value = card.prompt;
+  autoGrow();
+  el.send.disabled = false;
+  el.prompt.focus();
+  el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
+}
+
+/* The button group appended to a finished run's notice. */
+function runActionButtons(card, { retry = false, edit = false, notice = null } = {}) {
+  const group = document.createElement('span');
+  group.className = 'run-btns';
+  if (retry) {
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'retry-btn';
+    retryBtn.textContent = 'Retry this task';
+    retryBtn.addEventListener('click', () => retryRun(card, { button: retryBtn, notice }));
+    group.append(retryBtn);
+  }
+  if (edit) {
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'retry-btn';
+    editBtn.textContent = 'Edit prompt';
+    editBtn.addEventListener('click', () => editPrompt(card));
+    group.append(editBtn);
+  }
+  return group;
 }
 
 /* Files the mission produced. Read from the artifact record, so it works the

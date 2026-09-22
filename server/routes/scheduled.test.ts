@@ -3,8 +3,8 @@
  *
  * These prove the routes are actually mounted and wired: creating a reminder
  * validates, and retrying a failed run starts a fresh run with the same prompt
- * in the same conversation — while anything that is not a failed run is
- * refused.
+ * in the same conversation — completed runs can be re-run the same way, while
+ * anything else (queued, active) is refused.
  */
 import test, { after, before, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -155,7 +155,20 @@ describe('run retry', () => {
     await settle(retried.body.run.id); // the retry fails too, with this engine
   });
 
-  test('only failed runs can be retried', async () => {
+  test('a completed run can be retried into a fresh run', async () => {
+    // Inserted directly so no engine round-trip is needed.
+    await db.query(
+      `INSERT INTO runs (id, kind, prompt, status, engine)
+        VALUES ('run_completed_stub', 'chat', 'done mission', 'completed', 'test')`,
+    );
+    const retried = await post('/api/runs/run_completed_stub/retry', {});
+    assert.equal(retried.status, 201);
+    assert.notEqual(retried.body.run.id, 'run_completed_stub');
+    assert.equal(retried.body.run.prompt, 'done mission');
+    await settle(retried.body.run.id); // the retry fails too, with this engine
+  });
+
+  test('a run that has not finished cannot be retried', async () => {
     const missing = await post('/api/runs/run_nope/retry', {});
     assert.equal(missing.status, 404);
 
