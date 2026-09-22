@@ -42,6 +42,72 @@ export const DEFAULT_API_BASE = 'https://generativelanguage.googleapis.com/v1bet
 /** A workspace snapshot can be large; the read timeout has to allow for it. */
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
+/** A preview tree is bounded twice: an agent workspace can hold a node_modules. */
+const PREVIEW_MAX_FILES = 200;
+const PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Copy an HTML artifact's sibling files into its cache directory.
+ *
+ * Only the entry file's own directory is ever walked — never the whole
+ * workspace. Only regular files (symlinks are directory entries, not files,
+ * so they are skipped), and every copy is re-checked against both the source
+ * root and the target root. Best effort throughout: a preview that is missing
+ * one asset still renders.
+ */
+function copyPreviewSiblings(entryFile: string, intoDir: string): void {
+  const sourceRoot = path.resolve(path.dirname(entryFile));
+  const targetRoot = path.resolve(intoDir);
+  const entryResolved = path.resolve(entryFile);
+
+  let files = 0;
+  let bytes = 0;
+  const stack: string[] = [sourceRoot];
+
+  while (stack.length > 0 && files < PREVIEW_MAX_FILES && bytes < PREVIEW_MAX_BYTES) {
+    const dir = stack.pop() as string;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const resolved = path.resolve(path.join(dir, entry.name));
+      if (resolved !== sourceRoot && !resolved.startsWith(sourceRoot + path.sep)) continue;
+
+      if (entry.isDirectory()) {
+        stack.push(resolved);
+        continue;
+      }
+      if (!entry.isFile() || resolved === entryResolved) continue;
+
+      const rel = path.relative(sourceRoot, resolved);
+      if (!rel || rel === '.' || rel === '..' || rel.startsWith('..' + path.sep)) continue;
+      const targetResolved = path.resolve(path.join(targetRoot, rel));
+      if (targetResolved !== targetRoot && !targetResolved.startsWith(targetRoot + path.sep)) continue;
+
+      let size = 0;
+      try {
+        size = fs.statSync(resolved).size;
+      } catch {
+        continue;
+      }
+      if (bytes + size > PREVIEW_MAX_BYTES) continue;
+
+      try {
+        fs.mkdirSync(path.dirname(targetResolved), { recursive: true });
+        fs.copyFileSync(resolved, targetResolved);
+      } catch {
+        continue;
+      }
+      files += 1;
+      bytes += size;
+    }
+  }
+}
+
 export interface Artifact {
   id: string;
   runId: string;
@@ -100,8 +166,21 @@ export function mimeFor(filename: string): string {
   if (lower.endsWith('.pdf')) return 'application/pdf';
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'text/html; charset=utf-8';
+  if (lower.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (lower.endsWith('.js') || lower.endsWith('.mjs')) return 'text/javascript; charset=utf-8';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.json')) return 'application/json; charset=utf-8';
+  if (lower.endsWith('.woff2')) return 'font/woff2';
+  if (lower.endsWith('.woff')) return 'font/woff';
   if (lower.endsWith('.md') || lower.endsWith('.txt')) return 'text/plain; charset=utf-8';
   return 'application/octet-stream';
+}
+
+/** A website entry point: the one artifact kind the UI can render live. */
+export function isHtmlArtifactName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith('.html') || lower.endsWith('.htm');
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +441,15 @@ export async function materializeArtifact(
     const target = path.join(root, storageKey);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(found, target);
+
+    // A website is rarely one file: pull the entry page's neighbours (its
+    // style.css, app.js, images/…) into the same cache directory so the
+    // preview route can serve its relative assets. The sandbox tree is the
+    // only place those files exist, and the per-artifact copy is what
+    // survives the sandbox expiring.
+    if (isHtmlArtifactName(fresh.name)) {
+      copyPreviewSiblings(found, path.dirname(target));
+    }
 
     const size = fs.statSync(target).size;
     await markStored(deps.db, fresh.id, { size, sha256: sha256(target), storageKey });

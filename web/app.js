@@ -440,6 +440,7 @@ const ICONS = {
   android: '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>',
   package: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"/><path d="M12 12l8-4.5M12 12v9M12 12 4 7.5"/>',
   spark: '<path d="M12 3v5M12 16v5M3 12h5M16 12h5"/>',
+  eye: '<path d="M2 12s3.6-6.8 10-6.8S22 12 22 12s-3.6 6.8-10 6.8S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/>',
 };
 
 function iconFor(name) {
@@ -666,7 +667,10 @@ async function loadArtifacts(card) {
   try {
     const { artifacts } = await api(`/api/runs/${card.runId}/artifacts`);
     card.files.innerHTML = '';
-    for (const artifact of artifacts) card.files.append(artifactChip(artifact));
+    for (const artifact of artifacts) {
+      card.files.append(artifactChip(artifact));
+      if (artifact.previewable) card.files.append(previewButton(artifact));
+    }
   } catch { /* the run is what matters; a missing file list is not fatal */ }
 }
 
@@ -703,6 +707,69 @@ function artifactChip(artifact) {
   });
 
   return chip;
+}
+
+/* A website the mission built gets a live preview, not just a download. The
+   page is served by /api/artifacts/:id/preview and rendered in a sandboxed
+   iframe: its own scripts and styles run, but the sandbox keeps it away from
+   the app — allow-scripts only, never allow-same-origin, never
+   allow-top-navigation. */
+function previewButton(artifact) {
+  const btn = document.createElement('button');
+  btn.className = 'file preview-btn';
+  btn.type = 'button';
+  btn.innerHTML = `${iconFor('eye')}<span></span>`;
+  btn.querySelector('span').textContent = `Preview ${artifact.name}`;
+  btn.addEventListener('click', () => openPreview(artifact));
+  return btn;
+}
+
+function openPreview(artifact) {
+  closePreview();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'preview-overlay';
+  overlay.id = 'preview-overlay';
+
+  const bar = document.createElement('div');
+  bar.className = 'preview-bar';
+
+  const title = document.createElement('span');
+  title.className = 'preview-title';
+  title.textContent = artifact.name;
+
+  const close = document.createElement('button');
+  close.className = 'preview-close';
+  close.type = 'button';
+  close.textContent = '✕ Close';
+  close.addEventListener('click', closePreview);
+
+  bar.append(title, close);
+
+  const frame = document.createElement('iframe');
+  frame.className = 'preview-frame';
+  frame.title = `Preview of ${artifact.name}`;
+  // The sandbox is the whole security story for the parent: scripts inside
+  // may run, but the page can never reach this document or navigate it.
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.src = artifact.previewUrl || `/api/artifacts/${artifact.id}/preview/`;
+
+  overlay.append(bar, frame);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closePreview();
+  });
+  document.body.append(overlay);
+  document.addEventListener('keydown', previewEscape);
+}
+
+function previewEscape(event) {
+  if (event.key === 'Escape') closePreview();
+}
+
+function closePreview() {
+  const overlay = document.getElementById('preview-overlay');
+  if (overlay) overlay.remove();
+  document.removeEventListener('keydown', previewEscape);
 }
 
 function formatBytes(bytes) {

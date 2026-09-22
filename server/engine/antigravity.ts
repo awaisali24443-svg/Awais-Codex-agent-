@@ -858,7 +858,9 @@ export function findArtifact(args: Record<string, unknown> | undefined): string 
   if (!args) return null;
   for (const key of ['TargetFile', 'target_file', 'path', 'file', 'filename']) {
     const value = args[key];
-    if (typeof value === 'string' && /\.(apk|zip|tar|tar\.gz|aab|ipa)$/i.test(value)) return value;
+    // .html is here so a website build lands in the artifact record — the UI
+    // can only preview what the record knows about.
+    if (typeof value === 'string' && /\.(apk|zip|tar|tar\.gz|aab|ipa|html?)$/i.test(value)) return value;
   }
   return null;
 }

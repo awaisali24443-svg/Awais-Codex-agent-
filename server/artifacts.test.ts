@@ -72,6 +72,15 @@ describe('naming', () => {
     assert.equal(mimeFor('report.pdf'), 'application/pdf');
     assert.equal(mimeFor('mystery.bin'), 'application/octet-stream');
   });
+
+  test('maps website file types for the preview route', () => {
+    assert.equal(mimeFor('index.html'), 'text/html; charset=utf-8');
+    assert.equal(mimeFor('page.HTM'), 'text/html; charset=utf-8');
+    assert.equal(mimeFor('style.css'), 'text/css; charset=utf-8');
+    assert.equal(mimeFor('app.js'), 'text/javascript; charset=utf-8');
+    assert.equal(mimeFor('logo.svg'), 'image/svg+xml');
+    assert.equal(mimeFor('data.json'), 'application/json; charset=utf-8');
+  });
 });
 
 describe('the record', () => {
@@ -94,6 +103,13 @@ describe('the record', () => {
 
     const names = (await listArtifacts(db, runId)).map((a) => a.name).sort();
     assert.deepEqual(names, ['app-debug.apk', 'workspace.zip']);
+  });
+
+  test('records a website build with a renderable mime type', async () => {
+    const artifact = await recordArtifact(db, runId, '/workspace/site/index.html');
+    assert.ok(artifact);
+    assert.equal(artifact.name, 'index.html');
+    assert.equal(artifact.mime, 'text/html; charset=utf-8');
   });
 
   test('starts with no bytes attached', async () => {
@@ -253,5 +269,57 @@ describe('the bytes', () => {
 
     assert.equal(await materializeArtifact({ db, apiKey: '', environmentId: 'env_1' }, artifact), null);
     assert.equal(await materializeArtifact({ db, apiKey: 'k', environmentId: '' }, artifact), null);
+  });
+
+  test('an html artifact brings its sibling assets into the cache', async () => {
+    const archive = makeArchive({
+      'site/index.html': '<html><link rel="stylesheet" href="style.css"></html>',
+      'site/style.css': 'body { color: red; }',
+      'site/app.js': 'console.log("hi")',
+      'site/img/logo.png': 'PNG-BYTES',
+      'elsewhere/secret.txt': 'not part of the site',
+    });
+    const artifact = await recordArtifact(db, runId, '/workspace/site/index.html');
+    assert.ok(artifact);
+
+    const result = await materializeArtifact(
+      { db, apiKey: 'k', environmentId: 'env_site', fetchImpl: fakeDownload(archive) },
+      artifact,
+    );
+    assert.ok(result, 'the html artifact should materialize');
+    assert.equal(fs.readFileSync(result.absolutePath, 'utf-8'), '<html><link rel="stylesheet" href="style.css"></html>');
+
+    const cacheDir = path.join(artifactsRoot(), artifact.id);
+    assert.equal(fs.readFileSync(path.join(cacheDir, 'style.css'), 'utf-8'), 'body { color: red; }');
+    assert.equal(fs.readFileSync(path.join(cacheDir, 'app.js'), 'utf-8'), 'console.log("hi")');
+    assert.equal(fs.readFileSync(path.join(cacheDir, 'img', 'logo.png'), 'utf-8'), 'PNG-BYTES');
+    assert.equal(
+      fs.existsSync(path.join(cacheDir, 'secret.txt')),
+      false,
+      'only the entry page\u2019s own directory is copied, never the whole tree',
+    );
+  });
+
+  test('a non-html artifact does not pull in siblings', async () => {
+    const archive = makeArchive({
+      'out/app-release.apk': 'RELEASE',
+      'out/notes.txt': 'build notes',
+    });
+    const artifact = await recordArtifact(db, runId, '/workspace/out/app-release.apk');
+    assert.ok(artifact);
+
+    const result = await materializeArtifact(
+      { db, apiKey: 'k', environmentId: 'env_apk', fetchImpl: fakeDownload(archive) },
+      artifact,
+    );
+    assert.ok(result);
+
+    const cacheDir = path.join(artifactsRoot(), artifact.id);
+    assert.equal(fs.existsSync(path.join(cacheDir, 'app-release.apk')), true);
+    assert.equal(
+      fs.existsSync(path.join(cacheDir, 'notes.txt')),
+      false,
+      'sibling copying is a website-preview behaviour, not a general one',
+    );
   });
 });
