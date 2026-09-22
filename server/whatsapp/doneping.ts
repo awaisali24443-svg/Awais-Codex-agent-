@@ -15,10 +15,12 @@
  *   - Silent without a token. No WhatsApp key means no ping, no error, no
  *     log line worth waking up for.
  *
- * This does not need the poller: outbound sends go straight to the platform,
- * and the agent has exactly one recipient (its creator), so there is no chat
- * id to know and no poll loop to disturb. `to` is deliberately omitted —
- * passing an id we did not learn from traffic is how a send goes wrong.
+ * This does not need the poller: outbound sends go straight to the platform.
+ * The ping needs an explicit `to` — the platform requires it on this route —
+ * so the operator configures their own number once (`whatsapp_to` secret /
+ * `WHATSAPP_TO`), and the ping goes there and nowhere else. Without a
+ * configured recipient the ping is skipped silently, the same as without a
+ * token.
  *
  * It never throws. A ping failure must not touch the run that just finished.
  */
@@ -32,7 +34,7 @@ import type { Run, TerminalStatus } from '../runs.js';
 
 export interface DonePingDeps {
   db: Db;
-  /** The secrets store; only `whatsapp_token` is read. */
+  /** The secrets store; `whatsapp_token` and `whatsapp_to` are read. */
   secrets: Pick<SecretsStore, 'get'>;
   /** Test seam: replaces the HTTP layer. */
   fetchImpl?: typeof fetch;
@@ -95,6 +97,8 @@ export async function sendDonePing(
 
   const token = deps.secrets.get('whatsapp_token');
   if (!token) return false;
+  const to = deps.secrets.get('whatsapp_to');
+  if (!to) return false;
 
   try {
     const client = new WhatsAppClient({
@@ -108,7 +112,7 @@ export async function sendDonePing(
 
     const text = await finalTextOf(deps.db, run.id);
     const message = composeDonePing(run, outcome, text, run.errorMessage);
-    const ok = await sender.send(message);
+    const ok = await sender.send(message, { to });
     if (ok) log(`[doneping] ping sent for ${run.id} (${outcome})`);
     else log(`[doneping] ping failed for ${run.id}: ${sender.error ?? 'unknown'}`, 'warn');
     return ok;

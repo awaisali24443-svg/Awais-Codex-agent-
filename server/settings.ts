@@ -100,7 +100,7 @@ export function isSettingKey(value: unknown): value is SettingKey {
 // secrets
 // ---------------------------------------------------------------------------
 
-export const SECRET_NAMES = ['gemini_api_key', 'whatsapp_token'] as const;
+export const SECRET_NAMES = ['gemini_api_key', 'whatsapp_token', 'whatsapp_to'] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
 
 export interface SecretSpec {
@@ -125,6 +125,13 @@ export const KNOWN_SECRETS: Record<SecretName, SecretSpec> = {
     description: 'Lets the poller read and answer messages sent to the agent from your phone.',
     envVar: 'WHATSAPP_TOKEN',
     usedBy: 'server/whatsapp/poller.ts',
+  },
+  whatsapp_to: {
+    name: 'whatsapp_to',
+    label: 'WhatsApp "done" ping recipient',
+    description: 'Your phone number in international format. Run-completion pings are sent here; without it the ping is silently skipped.',
+    envVar: 'WHATSAPP_TO',
+    usedBy: 'server/whatsapp/doneping.ts',
   },
 };
 
@@ -326,6 +333,7 @@ export function createStores(db: Db, config: AppConfig): {
     secrets: new SecretsStore(db, config.masterKey, {
       gemini_api_key: config.geminiApiKey,
       whatsapp_token: config.whatsappToken,
+      whatsapp_to: config.whatsappTo,
     }),
   };
 }

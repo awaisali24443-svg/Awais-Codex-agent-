@@ -456,7 +456,7 @@ describe('settings routes', () => {
 
     assert.deepEqual(
       body.secrets.map((s) => s.name),
-      ['gemini_api_key', 'whatsapp_token'],
+      ['gemini_api_key', 'whatsapp_token', 'whatsapp_to'],
     );
     assert.equal(body.secrets[0].source, 'missing');
     assert.equal(body.encryption.available, true);

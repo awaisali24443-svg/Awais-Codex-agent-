@@ -44,7 +44,7 @@ export class WhatsAppSender {
    */
   async send(
     text: string,
-    options: { replyTo?: string | null; previewUrl?: boolean } = {},
+    options: { replyTo?: string | null; previewUrl?: boolean; to?: string } = {},
   ): Promise<boolean> {
     const chunks = splitText(text, MAX_TEXT_CHARS);
     if (chunks.length === 0) return true;

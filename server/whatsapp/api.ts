@@ -312,7 +312,7 @@ export class WhatsAppClient {
 
   async sendText(
     body: string,
-    options: { replyTo?: string | null; previewUrl?: boolean } = {},
+    options: { replyTo?: string | null; previewUrl?: boolean; to?: string } = {},
   ): Promise<{ messageId: string | null; waId: string | null }> {
     if (body.length > MAX_TEXT_CHARS) {
       throw new WhatsAppError(
@@ -326,8 +326,10 @@ export class WhatsAppClient {
       type: 'text',
       text: options.previewUrl ? { body, preview_url: true } : { body },
     };
-    // Omitted deliberately: the platform knows the single recipient. Passing an
-    // id we did not learn from traffic is how a send goes to the wrong place.
+    // `to` is optional: inbound replies omit it (the platform knows the single
+    // recipient), but the run-completion ping passes an explicit recipient
+    // configured by the operator.
+    if (options.to) payload.to = options.to;
     if (options.replyTo) payload.context = { message_id: options.replyTo };
 
     const outcome = await this.call('/messages', { method: 'POST', body: payload });

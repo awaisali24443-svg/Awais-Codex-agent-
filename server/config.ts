@@ -20,6 +20,8 @@ export interface AppConfig {
   geminiApiKey: string;
   /** WhatsApp Agent Platform token. Optional: the feature is a limited beta. */
   whatsappToken: string;
+  /** Explicit recipient for the run-completion "done" ping (E.164, e.g. +923324744601). Optional: no ping without it. */
+  whatsappTo: string;
   /** Override the WhatsApp Agent Platform base (tests point this at a fake). */
   whatsappApiBase: string;
 
@@ -241,6 +243,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     masterKey,
     geminiApiKey,
     whatsappToken: (env.WHATSAPP_TOKEN ?? '').trim(),
+    whatsappTo: (env.WHATSAPP_TO ?? '').trim(),
     whatsappApiBase: (env.WHATSAPP_API_BASE ?? '').trim(),
     engineName: engineRaw === 'scripted' ? 'scripted' : 'antigravity',
     antigravityAgent: (env.ANTIGRAVITY_AGENT ?? 'antigravity-preview-09-2026').trim(),

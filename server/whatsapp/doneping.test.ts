@@ -61,8 +61,8 @@ async function fakePlatform(): Promise<{ url: string; sends: CapturedSend[]; clo
   };
 }
 
-const secrets = (token: string | null) => ({
-  get: (_name: SecretName) => token ?? '',
+const secrets = (token: string | null, to: string | null = '+10000000000') => ({
+  get: (name: SecretName) => (name === 'whatsapp_to' ? to ?? '' : token ?? ''),
 });
 
 async function makeRun(notifyWhatsapp: boolean, kind: 'chat' | 'whatsapp' = 'chat'): Promise<Run> {
@@ -125,7 +125,19 @@ describe('sendDonePing', () => {
     const payload = platform.sends[0].body;
     const text = (payload.text as { body?: string })?.body ?? '';
     assert.ok(text.includes('✅ Done — Summarise the quarterly report'));
-    assert.ok(!('to' in payload), 'the platform knows the single recipient; never send an id');
+    assert.equal(payload.to, '+10000000000', 'the ping carries the configured recipient');
+  });
+
+  test('stays silent without a configured recipient', async (t) => {
+    const platform = await fakePlatform();
+    t.after(() => platform.close());
+
+    const run = await makeRun(true);
+    assert.equal(
+      await sendDonePing({ db, secrets: secrets(TOKEN, null), baseUrl: platform.url }, run, 'completed'),
+      false,
+    );
+    assert.equal(platform.sends.length, 0);
   });
 
   test('stays silent without an opt-in, for other channels, and on cancel', async (t) => {
