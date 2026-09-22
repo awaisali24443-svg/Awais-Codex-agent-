@@ -13,6 +13,8 @@
  *   previous_interaction_id    when continuing, so the agent keeps its memory
  *   stream: true               tokens as they are produced
  *   store: true                so the interaction can be re-read if the stream dies
+ *   thinking_summaries: 'auto' live thought summaries in the stream (retried as
+ *                          THINKING_SUMMARIES_AUTO if the API rejects the value)
  *   agent_config               optional hard token ceiling
  *
  * ## The three rules this file obeys
@@ -37,7 +39,9 @@
  * The upstream event schema is tolerated rather than assumed: the agent preview
  * is a beta and v1's parser already had to accept several shapes for the same
  * field. Everything is read defensively, and a shape we do not recognise is
- * skipped rather than crashing the mission.
+ * skipped rather than crashing the mission. Thought deltas (delta.type
+ * 'thought_summary', step types 'thought'/'thought_summary') feed the Thinking
+ * panel; text deltas feed the answer stream.
  */
 import {
   EngineAbortedError,
@@ -106,10 +110,12 @@ interface StreamPayload {
     steps?: unknown[];
   };
   step?: {
+    type?: string;
     summary?: string;
+    content?: unknown;
     tool_calls?: Array<{ name?: string; arguments?: Record<string, unknown> }>;
   };
-  delta?: { text?: string; [key: string]: unknown };
+  delta?: { type?: string; text?: string; content?: unknown; [key: string]: unknown };
   error?: { message?: string; code?: number | string };
 }
 
@@ -224,6 +230,9 @@ export class AntigravityEngine implements Engine {
       environment: ctx.environmentId?.trim() || 'remote',
       stream: true,
       store: true,
+      // Default none upstream would keep the Thinking panel silent for the
+      // whole run; "auto" asks for live thought summaries.
+      thinking_summaries: 'auto',
     };
     if (ctx.previousInteractionId) {
       payload.previous_interaction_id = ctx.previousInteractionId;
@@ -244,6 +253,21 @@ export class AntigravityEngine implements Engine {
       detail = null;
     };
 
+    // The docs say `thinking_summaries` takes "auto"/"none", but some backends
+    // reject "auto" with "unknown enum value" and only accept the qualified
+    // THINKING_SUMMARIES_AUTO. Retry once with the qualified name. This MUST
+    // run before the field-stripping fallback below: that one matches the word
+    // "unknown" too, and would strip `store` and re-send the same rejected
+    // value forever — the feature would die quietly instead of recovering.
+    if (!response.ok && response.status === 400 && !emitted && payload.thinking_summaries === 'auto') {
+      const message = await failureDetail();
+      if (/unknown enum|invalid enum/i.test(message)) {
+        ctx.log(`Retrying with THINKING_SUMMARIES_AUTO: ${message}`, 'warn');
+        payload.thinking_summaries = 'THINKING_SUMMARIES_AUTO';
+        await repost();
+      }
+    }
+
     // A stale sandbox is a normal, expected failure: environments expire. Fall
     // back to a fresh remote sandbox, but only if this mission was a
     // continuation and nothing has been produced yet — otherwise we would pay
@@ -263,10 +287,14 @@ export class AntigravityEngine implements Engine {
     }
 
     // The beta may not accept optional fields such as `store`. Drop the ones we
-    // can live without and try once more, still only before any output.
-    if (!response.ok && response.status === 400 && !emitted) {
+    // can live without and try once more, still only before any output. The
+    // once-guard matters: a 400 the strip cannot fix must fail loudly in the
+    // loop below instead of re-posting forever and hanging the mission slot.
+    let optionalFieldsStripped = false;
+    if (!response.ok && response.status === 400 && !emitted && !optionalFieldsStripped) {
       const message = await failureDetail();
       if (/unknown|invalid|unexpected|unsupported|field/i.test(message)) {
+        optionalFieldsStripped = true;
         ctx.log(`Retrying without optional fields: ${message}`, 'warn');
         delete payload.store;
         delete payload.agent_config;
@@ -401,6 +429,8 @@ export class AntigravityEngine implements Engine {
     // The upstream stream sends one summary per step, but may repeat the same
     // summary across frames — only a change is new reasoning worth showing.
     let lastSummary: string | undefined;
+    // Same for live thought summaries: consecutive deltas may repeat a frame.
+    let lastThought: string | undefined;
 
     if (!response.body) {
       throw new EngineError('The agent returned no stream body', 'upstream_error');
@@ -476,10 +506,40 @@ export class AntigravityEngine implements Engine {
             }
           }
 
+          // step.start events carry a typed step object. A thought step may hold
+          // its text as Content parts rather than a summary — that is the
+          // thinking channel too. (Tool-call steps reach the tool panel through
+          // the generic tool_calls loop below, for every event name.)
+          const stepType = typeof data.step?.type === 'string' ? data.step.type.toLowerCase() : '';
+          if (!data.step?.summary && (stepType === 'thought' || stepType === 'thought_summary')) {
+            const stepThought = extractContentText(data.step?.content);
+            if (stepThought && stepThought !== lastThought) {
+              lastThought = stepThought;
+              emit.thinking(stepThought);
+            }
+          }
+
           if (data.delta) {
-            if (typeof data.delta.text === 'string' && data.delta.text) {
-              streamed += data.delta.text;
-              emit.text(data.delta.text);
+            if (data.delta.type === 'thought_summary') {
+              // Live reasoning deltas: the text lives in a Content object
+              // (parts[]), not under a `text` key.
+              const thought =
+                extractContentText(data.delta.content) ||
+                (typeof data.delta.text === 'string' ? data.delta.text : '');
+              if (thought && thought !== lastThought) {
+                lastThought = thought;
+                emit.thinking(thought);
+              }
+            } else {
+              const direct = typeof data.delta.text === 'string' ? data.delta.text : '';
+              // Newer wire shape for answer text: { type: 'text', content: … }
+              // with no top-level `text` key.
+              const answer =
+                direct || (data.delta.type === 'text' ? extractContentText(data.delta.content) : '');
+              if (answer) {
+                streamed += answer;
+                emit.text(answer);
+              }
             }
             // A few agent APIs stream reasoning under a sibling key of `text`.
             // Only these known names are forwarded — anything else is metadata
@@ -722,6 +782,27 @@ export function parseSseBlock(block: string): StreamPayload | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Pull text out of a Content object: { parts: [{ text }] }. The Interactions
+ * API wraps thought_summary and text deltas this way; parts may also be plain
+ * strings. Anything else yields '' — a shape we do not recognise is skipped,
+ * not crashed on.
+ */
+export function extractContentText(content: unknown): string {
+  if (!content || typeof content !== 'object') return '';
+  const parts = (content as { parts?: unknown }).parts;
+  if (!Array.isArray(parts)) return '';
+  let out = '';
+  for (const part of parts) {
+    if (typeof part === 'string') {
+      out += part;
+    } else if (part && typeof (part as { text?: unknown }).text === 'string') {
+      out += (part as { text: string }).text;
+    }
+  }
+  return out;
 }
 
 /** Pull the model's text out of an interaction's step list. */

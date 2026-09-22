@@ -26,7 +26,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { AntigravityEngine } from './antigravity.js';
+import { AntigravityEngine, extractContentText } from './antigravity.js';
 import { EngineAbortedError, EngineError, type EngineContext } from './types.js';
 
 interface Recorded {
@@ -230,6 +230,16 @@ describe('the request it sends', () => {
       type: 'antigravity',
       max_total_tokens: 50_000,
     });
+  });
+
+  test('requests live thought summaries as a top-level field', async () => {
+    fake = await startFake((_req, res) => sse(res, happyStream()));
+    const engine = engineFor(fake.base);
+    const { ctx } = makeCtx();
+
+    await engine.run('build me an app', ctx);
+
+    assert.equal(fake.requests[0].body.thinking_summaries, 'auto');
   });
 });
 
@@ -515,6 +525,114 @@ describe('failures', () => {
       (err: EngineError) => err.errorType === 'auth_failed' && /GEMINI_API_KEY/.test(err.message),
     );
     assert.equal(fake.requests.length, 0, 'it must not even try without a key');
+  });
+});
+
+describe('live thinking summaries', () => {
+  test('a thought_summary delta feeds the Thinking panel', async () => {
+    fake = await startFake((_req, res) =>
+      sse(res, [
+        { event: 'interaction.start', data: { interaction: { id: 'int_think' } } },
+        {
+          event: 'step.delta',
+          data: {
+            delta: {
+              type: 'thought_summary',
+              content: { parts: [{ text: 'Weighing two approaches…' }] },
+            },
+          },
+        },
+        {
+          event: 'step.delta',
+          data: {
+            delta: { type: 'text', content: { parts: [{ text: 'Going with the second.' }] } },
+          },
+        },
+        {
+          event: 'interaction.complete',
+          data: {
+            interaction: { id: 'int_think', status: 'completed', output_text: 'Going with the second.' },
+          },
+        },
+      ]),
+    );
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    const result = await engine.run('think out loud', ctx);
+
+    assert.ok(
+      seen.thinking.includes('Weighing two approaches'),
+      `thinking panel got: ${JSON.stringify(seen.thinking)}`,
+    );
+    // The thought text must not leak into the answer stream…
+    assert.equal(seen.text, 'Going with the second.');
+    // …and the text delta in Content shape must still reach it.
+    assert.equal(result.text, 'Going with the second.');
+  });
+
+  test('step.start thought and tool steps map to the right panels', async () => {
+    fake = await startFake((_req, res) =>
+      sse(res, [
+        { event: 'interaction.start', data: { interaction: { id: 'int_ss' } } },
+        {
+          event: 'step.start',
+          data: {
+            step: { type: 'thought', content: { parts: [{ text: 'Checking the build config' }] } },
+          },
+        },
+        {
+          event: 'step.start',
+          data: {
+            step: { type: 'tool_call', tool_calls: [{ name: 'run_tests', arguments: {} }] },
+          },
+        },
+        {
+          event: 'interaction.complete',
+          data: { interaction: { id: 'int_ss', status: 'completed', output_text: 'done' } },
+        },
+      ]),
+    );
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    await engine.run('start steps', ctx);
+
+    assert.ok(seen.thinking.includes('Checking the build config'));
+    assert.deepEqual(seen.tools, ['run_tests']);
+  });
+
+  test('an unknown-enum rejection retries with the qualified enum name first', async () => {
+    let calls = 0;
+    fake = await startFake((_req, res, body) => {
+      calls += 1;
+      if (calls === 1) {
+        assert.equal(body.thinking_summaries, 'auto', 'the first attempt uses the documented value');
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'unknown enum value "auto" for thinking_summaries' } }));
+        return;
+      }
+      // The qualified name must be tried BEFORE any field is stripped: store
+      // must survive, or the recovery machinery dies quietly with it.
+      assert.equal(body.thinking_summaries, 'THINKING_SUMMARIES_AUTO');
+      assert.equal(body.store, true, 'optional fields must not be stripped for an enum rejection');
+      sse(res, happyStream());
+    });
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    const result = await engine.run('enum check', ctx);
+
+    assert.equal(calls, 2, 'exactly one enum retry, then the mission runs');
+    assert.equal(result.interactionId, 'int_abc');
+    assert.ok(seen.logs.some((l) => /THINKING_SUMMARIES_AUTO/i.test(l)), 'the retry is logged');
+  });
+
+  test('extractContentText tolerates odd shapes', async () => {
+    assert.equal(extractContentText({ parts: [{ text: 'a' }, 'b', { nope: 1 }, null] }), 'ab');
+    assert.equal(extractContentText({ parts: 'not an array' }), '');
+    assert.equal(extractContentText(null), '');
+    assert.equal(extractContentText('a string'), '');
   });
 });
 
