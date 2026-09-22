@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 // Precomputed CRC-32 Table for standard IEEE 802.3 checksums
 const crc32Table = new Uint32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -16,7 +18,23 @@ function calculateCrc32(buf: Buffer): number {
   return (crc ^ (-1)) >>> 0;
 }
 
-// Generate a valid minimal signed APK buffer for local simulation fallback
+/** Base64 SHA-256 of an entry's bytes — the value a JAR manifest expects. */
+function sha256Digest(content: Buffer): string {
+  return createHash('sha256').update(content).digest('base64');
+}
+
+/**
+ * Build a minimal, structurally valid APK-shaped ZIP for local simulation.
+ *
+ * The container is real: local headers, central directory, EOCD and CRC-32s all
+ * check out, and the `META-INF/MANIFEST.MF` digests below are the entries' true
+ * SHA-256 values rather than the placeholder text that used to sit there.
+ *
+ * What it is *not* is signed. There is no `META-INF/*.SF`/`*.RSA` signature
+ * block, so Android will refuse to install it — deliberately: this stands in for
+ * "the build produced a file" so the artifact path can be exercised offline, and
+ * a real, installable APK has to come out of the sandbox's own toolchain.
+ */
 export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 'com.awaiscodex.app'): Buffer {
   // A minimal valid ZIP archive containing AndroidManifest.xml and DEX headers
   const manifestXml = `<?xml version="1.0" encoding="utf-8"?>
@@ -46,7 +64,20 @@ export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 
     0x00, 0x00, 0x00, 0x00, 0x70, 0x00, 0x00, 0x00,
     0x78, 0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x00
   ]);
-  const metaInfMf = Buffer.from(`Manifest-Version: 1.0\nCreated-By: Awais Codex Antigravity Build Tool\n\nName: AndroidManifest.xml\nSHA-256-Digest: placeholder\n\nName: classes.dex\nSHA-256-Digest: placeholder\n`, 'utf-8');
+  const metaInfMf = Buffer.from(
+    [
+      'Manifest-Version: 1.0',
+      'Created-By: Awais Codex Antigravity Build Tool',
+      '',
+      'Name: AndroidManifest.xml',
+      `SHA-256-Digest: ${sha256Digest(manifestBuf)}`,
+      '',
+      'Name: classes.dex',
+      `SHA-256-Digest: ${sha256Digest(dummyDex)}`,
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
 
   // Build a standard single-file or multi-file ZIP container with valid CRC32
   function createZipEntry(filename: string, content: Buffer, offset: number) {

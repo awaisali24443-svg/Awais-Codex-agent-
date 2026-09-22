@@ -3,14 +3,68 @@ services:
     name: awais-codex-agent
     env: node
     plan: free
-    buildCommand: npm install --include=dev --legacy-peer-deps && npm run build
+    # `npm ci` needs the lockfile to be in sync; `--include=dev` is required
+    # because the build uses esbuild, which is a devDependency, and Render sets
+    # NODE_ENV=production for the build.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
+    healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV
         value: production
+
+      # ---- database (required) ------------------------------------------
+      # Neon *pooled* connection string (host contains "-pooler"). Render's
+      # free disk is ephemeral, so every run and message lives in Postgres.
+      - key: DATABASE_URL
+        sync: false
+
+      # ---- secrets (required) -------------------------------------------
+      # Signs session cookies. Generated once by Render and never shown to
+      # anyone but this service.
+      - key: SESSION_SECRET
+        generateValue: true
+      # The key in your saved link: https://<service>.onrender.com/?k=<ACCESS_KEY>
+      # Open that URL once and the browser keeps a signed session for a year.
+      - key: ACCESS_KEY
+        generateValue: true
+      # Encrypts stored API tokens (AES-256-GCM). Must be exactly 64 hex
+      # characters, which Render cannot generate — create it with:
+      #   openssl rand -hex 32
+      # Changing it later makes every stored secret unreadable.
+      - key: MASTER_KEY
+        sync: false
+
+      # ---- the agent -----------------------------------------------------
+      # Google AI Studio key (https://aistudio.google.com/apikey).
       - key: GEMINI_API_KEY
         sync: false
-      - key: WHATSAPP_VERIFY_TOKEN
-        value: awais_codex_verify_token
-      - key: GITHUB_TOKEN
+      - key: ENGINE
+        value: antigravity
+      # The managed agent id is date-stamped and Google retires old ones. If
+      # missions start failing with agent_unavailable, this is the value to
+      # update — see https://ai.google.dev/gemini-api/docs/antigravity-agent
+      - key: ANTIGRAVITY_AGENT
+        value: antigravity-preview-09-2026
+
+      # ---- quota & retention --------------------------------------------
+      - key: DAILY_RUN_BUDGET
+        value: "100"
+      - key: EVENT_RETENTION_DAYS
+        value: "14"
+      - key: ARTIFACT_RETENTION_DAYS
+        value: "7"
+
+      # ---- WhatsApp (optional) ------------------------------------------
+      # From the phone: Settings -> Agents -> Create an agent -> open its chat
+      # -> Chat info -> API key. In Render, leave this unset and paste the key
+      # into the app's Settings panel instead — it is stored encrypted and the
+      # poller starts by itself.
+      - key: WHATSAPP_TOKEN
         sync: false
+      # POLLER_ENABLED is deliberately NOT set here, so it stays on 'auto':
+      # Render polls as soon as a token exists (from the environment or from
+      # Settings). Set it to "false" only on a *second* host — exactly one
+      # process may long-poll an agent, and a second poller kills the first
+      # with a 409. On your laptop that means: leave WHATSAPP_TOKEN unset, or
+      # set POLLER_ENABLED=false, while Render owns the connection.
