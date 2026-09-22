@@ -397,12 +397,12 @@ export class AntigravityEngine implements Engine {
               streamed += data.delta.text;
               emit.text(data.delta.text);
             }
-            // Forward any other string fields the API may use for reasoning
-            // (e.g. a future `reasoning` delta) into the Thinking panel.
-            // Unknown non-string fields are ignored.
-            for (const [key, value] of Object.entries(data.delta)) {
-              if (key === 'text' || typeof value !== 'string' || !value) continue;
-              emit.thinking(value);
+            // A few agent APIs stream reasoning under a sibling key of `text`.
+            // Only these known names are forwarded — anything else is metadata
+            // (a stray `type: "text"` once leaked into the Thinking panel).
+            for (const key of ['reasoning', 'thinking', 'thought', 'reasoning_text']) {
+              const value = data.delta[key];
+              if (typeof value === 'string' && value) emit.thinking(value);
             }
           }
         }
