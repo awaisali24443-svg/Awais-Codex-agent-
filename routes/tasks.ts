@@ -14,6 +14,15 @@ import { injectMemoryIntoPrompt, extractAndStoreMemories } from '../memory-engin
 
 const router = Router();
 
+// Temporary diagnostic: per-run records of what the /stream-task proxy
+// actually observed upstream (event shapes) and via interaction polling.
+// Holds no prompt text or outputs. Remove once the live-stream work is done.
+const streamDebugLog: any[] = [];
+
+router.get('/debug/last-stream', (_req: Request, res: Response) => {
+  res.json({ runs: streamDebugLog.slice(-3) });
+});
+
 export interface NormalizedMissionActivity {
   phase: 'planning' | 'scaffolding' | 'implementation' | 'build' | 'verification' | 'general';
   title: string;
@@ -376,8 +385,99 @@ router.all('/stream-task', async (req: Request, res: Response) => {
     }
   }, 5000);
 
+  // Live narration helpers + interaction polling. Defined before the try
+  // block so the close handler can stop the poller too.
+  const emitActivity = (phase: string, title: string, detail?: string, status = 'running') => {
+    res.write(`event: activity\ndata: ${JSON.stringify({ phase, title, detail: detail || '', status })}\n\n`);
+    if (typeof (res as any).flush === 'function') (res as any).flush();
+  };
+  const emitThought = (text: string, summary?: string) => {
+    res.write(`event: thought\ndata: ${JSON.stringify({ delta: { thought: text, thought_summary: summary || '' } })}\n\n`);
+    if (typeof (res as any).flush === 'function') (res as any).flush();
+  };
+  let sawInteraction = false;
+  let sawFirstToken = false;
+  let lastSummary = '';
+
+  // Diagnostic record for this proxied run (temporary): which upstream event
+  // shapes actually arrive mid-run, and what the interaction poll observes.
+  // No prompt text or outputs are stored.
+  const dbg: any = {
+    ts: Date.now(), eventTypes: {}, polls: 0, polledSteps: 0,
+    emittedLiveThoughts: 0, sawStepSummaryInStream: false, sawReasoningInStream: false,
+  };
+  const seenStepIds = new Set<string>();
+  let pollTimer: any = null;
+  let pollCount = 0;
+
+  const stopPolling = () => {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  };
+
+  const describeToolArgs = (args: any): string => {
+    if (!args || typeof args !== 'object') return '';
+    const cmd = args.command || args.cmd || '';
+    const file = args.TargetFile || args.path || args.filename || '';
+    return [cmd && `$ ${String(cmd).slice(0, 80)}`, file && String(file).slice(0, 80)].filter(Boolean).join(' · ');
+  };
+
+  // The upstream stream carries almost nothing mid-run, but the stored
+  // interaction can be re-read by ID (the same read /poll-task performs).
+  // New steps found there are the agent's real activity — forward them live.
+  const ingestPolledSteps = (steps: any[]) => {
+    steps.forEach((s, index) => {
+      if (!s || typeof s !== 'object') return;
+      const sid = String(s.id || s.step_id || `idx:${index}`);
+      if (seenStepIds.has(sid)) return;
+      seenStepIds.add(sid);
+      dbg.polledSteps++;
+      const summary = typeof s.summary === 'string' ? s.summary.trim() : '';
+      const thought = typeof s.thought === 'string' ? s.thought.trim() : '';
+      const toolCalls = Array.isArray(s.tool_calls) ? s.tool_calls
+        : (s.function_call ? [{ name: s.function_call.name, arguments: s.function_call.arguments }] : []);
+      const narr = summary || thought;
+      if (narr && narr !== lastSummary) {
+        lastSummary = narr;
+        dbg.emittedLiveThoughts++;
+        emitThought(thought, summary);
+      }
+      if (toolCalls.length > 0 || narr) {
+        const first = toolCalls[0] || {};
+        if (first.name) emitActivity('tool', `Running ${first.name}`, describeToolArgs(first.arguments));
+        // Forward as a live step so the timeline renders it immediately; the
+        // completed payload later replaces these with authoritative versions.
+        res.write(`event: step.start\ndata: ${JSON.stringify({ step: s })}\n\n`);
+        if (typeof (res as any).flush === 'function') (res as any).flush();
+      }
+    });
+  };
+
+  const startPolling = (iid: string) => {
+    const doPoll = async () => {
+      if (pollCount >= 20) { stopPolling(); return; }
+      pollCount++;
+      dbg.polls = pollCount;
+      try {
+        const pollUrl = `${API_ENDPOINT}/${encodeURIComponent(iid)}?key=${encodeURIComponent(apiKey)}`;
+        const pr = await fetch(pollUrl, { signal: abortController.signal });
+        if (!pr.ok) return;
+        const pj: any = await pr.json().catch(() => ({}));
+        const steps = Array.isArray(pj.steps) ? pj.steps
+          : Array.isArray(pj.interaction?.steps) ? pj.interaction.steps
+          : Array.isArray(pj.data?.steps) ? pj.data.steps : [];
+        ingestPolledSteps(steps);
+        const st = pj.status || pj.interaction?.status || pj.data?.status;
+        if (st === 'completed' || st === 'success') stopPolling();
+      } catch { /* transient — the next tick retries */ }
+    };
+    stopPolling();
+    pollTimer = setInterval(doPoll, 5000);
+    doPoll();
+  };
+
   res.on('close', () => {
     clearInterval(keepAliveInterval);
+    stopPolling();
     abortController.abort();
   });
 
@@ -417,23 +517,6 @@ router.all('/stream-task', async (req: Request, res: Response) => {
     }
 
     incrementServerCallBudget('website');
-
-    // Live narration: the proxy observes real lifecycle moments and narrates
-    // them as `activity` / `thought` events the instant they happen — the
-    // connection opening, the sandbox becoming ready, the agent's own step
-    // summaries, streamed reasoning keys, the first answer token. Nothing here
-    // is scripted: every event fires only when actually observed upstream.
-    const emitActivity = (phase: string, title: string, detail?: string, status = 'running') => {
-      res.write(`event: activity\ndata: ${JSON.stringify({ phase, title, detail: detail || '', status })}\n\n`);
-      if (typeof (res as any).flush === 'function') (res as any).flush();
-    };
-    const emitThought = (text: string, summary?: string) => {
-      res.write(`event: thought\ndata: ${JSON.stringify({ delta: { thought: text, thought_summary: summary || '' } })}\n\n`);
-      if (typeof (res as any).flush === 'function') (res as any).flush();
-    };
-    let sawInteraction = false;
-    let sawFirstToken = false;
-    let lastSummary = '';
 
     emitActivity('connect', 'Connected — streaming the agent live');
 
@@ -503,24 +586,32 @@ router.all('/stream-task', async (req: Request, res: Response) => {
 
           if (delta.text) accumulatedOutput += delta.text;
 
+          dbg.eventTypes[eventType] = (dbg.eventTypes[eventType] || 0) + 1;
+
           // Narrate real lifecycle moments the instant they are observed.
           const interactionId = eventData.interaction?.id;
           if (interactionId && !sawInteraction) {
             sawInteraction = true;
             const envId = eventData.interaction?.environment_id || '';
             emitActivity('sandbox', 'Sandbox ready', envId ? `environment ${envId}` : '', 'completed');
+            // Start re-reading the stored interaction: its partial steps are
+            // the agent's real mid-run activity.
+            startPolling(interactionId);
           }
           // The step summary is the agent's own narration of what it is doing —
           // surface it live, the way the server-owned run pipeline does.
           const stepSummary = typeof step.summary === 'string' ? step.summary.trim() : '';
           if (stepSummary && stepSummary !== lastSummary && !isThought) {
             lastSummary = stepSummary;
+            dbg.sawStepSummaryInStream = true;
+            dbg.emittedLiveThoughts++;
             emitThought('', stepSummary);
           }
           // Some agent APIs stream reasoning under a sibling key of `text`.
           for (const key of ['reasoning', 'thinking', 'thought', 'reasoning_text']) {
             const value = (delta as any)[key];
             if (typeof value === 'string' && value.trim()) {
+              dbg.sawReasoningInStream = true;
               emitThought(value);
               break;
             }
@@ -560,10 +651,14 @@ router.all('/stream-task', async (req: Request, res: Response) => {
     }
 
     clearInterval(keepAliveInterval);
+    stopPolling();
+    streamDebugLog.push(dbg);
+    if (streamDebugLog.length > 5) streamDebugLog.shift();
     res.write(`event: done\ndata: [DONE]\n\n`);
     res.end();
   } catch (err: any) {
     clearInterval(keepAliveInterval);
+    stopPolling();
     if (err.name === 'AbortError') return;
     console.error('Antigravity streaming error:', err);
     res.write(`event: error\ndata: ${JSON.stringify({
