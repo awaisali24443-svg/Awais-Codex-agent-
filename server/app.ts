@@ -16,6 +16,8 @@ import { DISABLED_HEALTH, type PollerHealth } from './whatsapp/poller.js';
 import { createRunRoutes } from './routes/runs.js';
 import { createMemoryRoutes } from './routes/memory.js';
 import { createArtifactRoutes } from './routes/artifacts.js';
+import { createSettingsRoutes } from './routes/settings.js';
+import type { SecretsStore, SettingsStore } from './settings.js';
 import {
   checkAccessKey,
   claimAccessKey,
@@ -33,6 +35,12 @@ export interface AppDeps {
   bus: EventBus;
   /** Owns the lifecycle of in-flight runs. */
   executor: RunExecutor;
+  /**
+   * Live settings and credentials. Read at request time, never captured: the
+   * whole point of the store is that a change applies without a restart.
+   */
+  settings: SettingsStore;
+  secrets: SecretsStore;
   /** Runtime status, filled in by the boot sequence. */
   status: {
     startedAt: number;
@@ -116,7 +124,15 @@ export function createApp(deps: AppDeps): Express {
     }
 
     checks.poller = pollerHealth().state;
-    checks.engine = config.geminiApiKey ? 'key present' : 'no key configured';
+    // The stored key counts: readiness should answer "can a mission run", not
+    // "did the environment happen to contain a key at boot".
+    const apiKey = deps.secrets.get('gemini_api_key');
+    checks.engine =
+      config.engineName === 'scripted'
+        ? 'scripted (no key needed)'
+        : apiKey
+          ? `key present (${deps.secrets.source('gemini_api_key')})`
+          : 'no key configured';
 
     res.status(ready ? 200 : 503).json({
       ok: ready,
@@ -182,6 +198,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config }));
   app.use('/api', createMemoryRoutes({ db }));
   app.use('/api', createArtifactRoutes({ db, config }));
+  app.use('/api', createSettingsRoutes({ settings: deps.settings, secrets: deps.secrets }));
 
   // ---- the app itself -----------------------------------------------------
 

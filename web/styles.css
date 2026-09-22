@@ -461,3 +461,41 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   .stream { scroll-behavior: auto; }
 }
+
+/* ---- settings panel (drawer) ---- */
+.setting-row {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 9px 0; border-top: 1px solid var(--line-soft);
+}
+.setting-label { font-size: 12.5px; color: var(--ink-soft); }
+.setting-label em {
+  display: block; margin-top: 2px; font-style: normal;
+  font-size: 11px; color: var(--muted);
+}
+.setting-input {
+  width: 100%; padding: 8px 10px; font: inherit; font-size: 13.5px; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+  border-radius: 9px;
+}
+.setting-input:focus { outline: none; border-color: var(--line); }
+
+.secret { padding: 9px 0; border-top: 1px solid var(--line-soft); }
+.secret-main { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.secret-name { font-size: 13px; color: var(--ink-soft); }
+.secret-state { font-size: 11px; color: var(--muted); text-align: right; }
+.secret-state.ok { color: var(--ok); }
+.secret-state.bad { color: var(--danger); }
+.secret-actions { display: flex; gap: 8px; margin-top: 7px; }
+.secret-actions button {
+  flex: 1; padding: 7px 10px; font: inherit; font-size: 12.5px; color: var(--ink-soft);
+  background: transparent; border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
+}
+.secret-actions button.primary { color: var(--surface); background: var(--ink); border-color: var(--ink); }
+.secret-actions button.danger { color: var(--danger); }
+.secret-input {
+  width: 100%; margin-top: 7px; padding: 8px 10px; font: inherit; font-size: 13px;
+  background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 9px;
+}
+.secret-input:focus { outline: none; border-color: var(--line); }
+.setting-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.setting-note.bad { color: var(--danger); }

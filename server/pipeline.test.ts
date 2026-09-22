@@ -22,6 +22,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { createApp } from './app.js';
+import { createStores } from './settings.js';
 import { createDb, type Db } from './db.js';
 import { migrate } from './migrate.js';
 import { loadConfig, type AppConfig } from './config.js';
@@ -109,6 +110,7 @@ before(async () => {
     db,
     bus,
     executor,
+    ...createStores(db, config),
     status: { startedAt: Date.now(), migrationsApplied: 1, orphanedRuns: 0 },
   });
 

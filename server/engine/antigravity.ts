@@ -45,10 +45,20 @@ import {
   type EngineResult,
 } from './types.js';
 
+/**
+ * A credential, or a function that produces the current one.
+ *
+ * The function form exists so a key stored in Settings takes effect on the next
+ * mission instead of the next deployment: the engine is built once at boot, but
+ * it asks for the value every time it makes a request. Callers with a plain
+ * string (tests, mostly) are unaffected.
+ */
+type Credential = string | (() => string);
+
 export interface AntigravityEngineOptions {
-  apiKey: string;
+  apiKey: Credential;
   /** Agent id, e.g. antigravity-preview-09-2026. The date suffix changes. */
-  agent: string;
+  agent: Credential;
   /** Base URL, overridable so tests can run against a local fake. */
   apiBase?: string;
   /** Optional hard ceiling on tokens for one interaction. */
@@ -103,8 +113,21 @@ export class AntigravityEngine implements Engine {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
+  /** Resolve a credential that may have been replaced since the last mission. */
+  private static resolve(value: Credential): string {
+    return (typeof value === 'function' ? value() : value).trim();
+  }
+
+  private get apiKey(): string {
+    return AntigravityEngine.resolve(this.options.apiKey);
+  }
+
+  private get agent(): string {
+    return AntigravityEngine.resolve(this.options.agent);
+  }
+
   async run(prompt: string, ctx: EngineContext): Promise<EngineResult> {
-    if (!this.options.apiKey) {
+    if (!this.apiKey) {
       throw new EngineError(
         'No API key configured. Add GEMINI_API_KEY in Settings, or set it in the environment.',
         'auth_failed',
@@ -175,7 +198,7 @@ export class AntigravityEngine implements Engine {
     };
 
     const payload: Record<string, unknown> = {
-      agent: this.options.agent,
+      agent: this.agent,
       input: [{ type: 'text', text: prompt }],
       environment: ctx.environmentId?.trim() || 'remote',
       stream: true,
@@ -260,7 +283,7 @@ export class AntigravityEngine implements Engine {
       headers: {
         'content-type': 'application/json',
         // Header only, never a `?key=` query string: URLs end up in logs.
-        'x-goog-api-key': this.options.apiKey,
+        'x-goog-api-key': this.apiKey,
         accept: 'text/event-stream',
       },
       body: JSON.stringify(payload),
@@ -432,7 +455,7 @@ export class AntigravityEngine implements Engine {
       try {
         touch();
         const res = await this.fetchImpl(`${this.apiBase}/interactions/${encodeURIComponent(interactionId)}`, {
-          headers: { 'x-goog-api-key': this.options.apiKey },
+          headers: { 'x-goog-api-key': this.apiKey },
           signal: controller.signal,
         });
         if (!res.ok) continue;

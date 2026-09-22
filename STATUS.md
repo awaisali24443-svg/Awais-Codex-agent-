@@ -240,6 +240,45 @@ GET /api/status  -H 'authorization: Bearer <default session secret>' → 200   �
 
 ---
 
+## 7b. The second continuation pass — settings, secrets, and a live UI bug
+
+Three things landed on top of §8, all verified in this document's style.
+
+**1. Settings and secrets are real now.** `server/crypto.ts`, `server/settings.ts` and `server/routes/settings.ts`, mounted at `/api/settings` and behind the session like everything else under `/api`:
+
+* Credentials are AES-256-GCM sealed with `MASTER_KEY`, with the secret's own name bound in as associated data — so the ciphertext of one credential cannot be pasted into another row and opened there (a test does exactly that and expects a failure).
+* No endpoint returns a value: not on write, not in the list. What you get is whether it exists, where it came from (encrypted store vs environment), a timestamp and a 12-hex fingerprint so "did my paste take?" is answerable without ever shipping the key back to a browser. The test asserts against the raw response text, so a future field that leaks it fails too.
+* A stored value **takes effect on the next request, not the next deploy**: the engine and the WhatsApp client read their credentials through a getter, so `PUT /api/settings/secrets/gemini_api_key` makes `/readyz` report `key present (stored)` on the running process.
+* Two settings are honoured and both have a consumer: `dailyRunBudget` (read per mission by `accept.ts`, and by `/api/budget`, so what the UI shows and what the server enforces cannot disagree) and `antigravityAgent` (date-stamped, so it must be changeable without a redeploy). The store writes into the live `AppConfig` rather than keeping a second copy, which is why those two call sites needed no changes at all.
+* Changing `MASTER_KEY` does not take the server down: unreadable rows are reported at boot, the environment values keep working, and the panel shows the credential as *cannot decrypt*. A dev boot with no `MASTER_KEY` refuses writes with `503 encryption_unavailable` and a hint, rather than encrypting with a placeholder key that is sitting in the repository.
+* `config.masterKey` is now empty when unset instead of `'0'.repeat(64)`. A known fake key would have made writes *succeed* while storing a value anyone could read — the worst of both.
+
+**2. A live bug in the browser app.** `web/app.js` called `loadMemory()` at two places and defined it nowhere. Since `enter()` awaited it, every line after it — resuming a task that was already running, reopening the last conversation — never executed, and because the boot handler catches the `ReferenceError` as "not signed in", **the app showed the sign-in screen instead of the app**. The memory panel's HTML and CSS had been built; nothing ever filled them in.
+
+Fixed, and then guarded: `npm run lint:web` type-checks `web/app.js` and `web/sw.js` (`tsconfig.web.json`, `checkJs`), which reports `TS2304: Cannot find name 'loadMemory'` on the very next commit. Getting there meant fixing 42 real complaints in the browser app (untyped `$()`, a timer hung off a function object, three call sites passing fewer fields than `addStep` claimed to require). `server/web-app.test.ts` covers the rest: every `$('id')` exists in `index.html`, ids are unique, every referenced asset is served, every collapsible panel is bound to a renderer, and the UI's table of credential states matches the server's list exactly.
+
+**3. The PWA cache version moved on** (`codex-v1` → `codex-v2`) so the installed app actually picks up the new markup instead of serving yesterday's shell forever.
+
+### Verified
+
+```
+npm run lint       → server (tsc) clean + browser app (tsc, checkJs) clean
+npm test           → 237 tests / 46 suites, 0 failures
+npm run build      → dist/server.cjs 160.3 kB
+
+# live, against the running preview with a MASTER_KEY set
+PUT /api/settings/secrets/gemini_api_key {"value":"AIza…"}
+  → 200 {secret:{source:"stored", fingerprint:"ea957e23b0b5"}} — the value is not in the response
+GET /api/settings  → source "stored", fingerprint, updatedAt
+PUT /api/settings/dailyRunBudget {"value":25}
+  → GET /api/budget limit 100 → 25 with no restart
+  → the next mission: {"bucket":"web","remaining":24,"limit":25}
+```
+
+Known limitation, unchanged: with no `DATABASE_URL`, dev storage is in-memory PGlite, so settings, secrets, memories and runs do not survive a restart — including the stored credentials. Persistence is covered by the store-level test (a second store decrypts what the first wrote) and by anything running against real Postgres.
+
+---
+
 ## 8. What has since been done (continuation pass)
 
 Everything in §6's blocker list and the first four items of §7 are addressed. The suite went from **112 to 193 tests**, all passing; `npm run lint` is clean and `npm run build` produces a server bundle that boots.
@@ -259,7 +298,7 @@ Everything in §6's blocker list and the first four items of §7 are addressed. 
 
 Also settled: **the branch is on GitHub** ([PR #1](https://github.com/awaisali24443-svg/Awais-Codex-agent-/pull/1), 10 commits ahead of `main`, CI green), the PWA icons are generated from `web/icon.svg` by `scripts/make-icons.mjs` instead of hand-copied, and **`apk-generator.ts` no longer lies**. It used to write `SHA-256-Digest: placeholder` into `META-INF/MANIFEST.MF` of an APK it called "signed"; it now computes each entry's real base64 SHA-256, and the doc comment states plainly that there is no signature block so Android will refuse to install it. Verified by unzipping the output: both digests match the entries, `unzip -t` is clean, no `placeholder` text remains. Nothing calls it — it is kept as v1 reference, not as a build path.
 
-Still open, deliberately: secret encryption *and* a settings API (the `secrets`/`settings` tables are still empty — `MASTER_KEY` is validated but unused), WhatsApp media, and deleting the legacy v1 tree rather than documenting it.
+Still open, deliberately: WhatsApp media (the platform can send and receive it; this build is text-only), GitHub export (v1 had it, v2 never rebuilt it), and deleting the legacy v1 tree rather than documenting it.
 
 ### Verified after the continuation pass
 

@@ -19,6 +19,7 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { AddressInfo } from 'node:net';
 
 import { createApp } from './app.js';
+import { createStores } from './settings.js';
 import { createDb, type Db } from './db.js';
 import { migrate } from './migrate.js';
 import { EventBus } from './events.js';
@@ -661,6 +662,7 @@ describe('the admin view', () => {
       db,
       bus,
       executor,
+      ...createStores(db, config),
       status: {
         startedAt: Date.now(),
         migrationsApplied: 1,

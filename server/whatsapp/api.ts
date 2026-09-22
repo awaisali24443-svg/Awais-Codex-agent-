@@ -98,7 +98,14 @@ export interface Updates {
 }
 
 export interface WhatsAppOptions {
-  token: string;
+  /**
+   * The platform token, or a function returning the current one.
+   *
+   * The function form lets a token stored in Settings start working on the next
+   * poll rather than after a redeploy — the client is constructed once, but it
+   * reads the credential per request.
+   */
+  token: string | (() => string);
   baseUrl?: string;
   /** Injected in tests. */
   fetchImpl?: typeof fetch;
@@ -185,8 +192,15 @@ export class WhatsAppClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutSlackMs: number;
 
+  /** Accept either a plain token or a getter that reads the current one. */
+  private static resolveToken(token: string | (() => string)): string {
+    return (typeof token === 'function' ? token() : token).trim();
+  }
+
   constructor(private readonly options: WhatsAppOptions) {
-    if (!options.token) throw new Error('WhatsAppClient: token is required');
+    if (!WhatsAppClient.resolveToken(options.token)) {
+      throw new Error('WhatsAppClient: token is required');
+    }
     this.baseUrl = (options.baseUrl ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutSlackMs = options.timeoutSlackMs ?? 15_000;
@@ -224,7 +238,7 @@ export class WhatsAppClient {
       response = await this.fetchImpl(url, {
         method: init.method,
         headers: {
-          Authorization: `Bearer ${this.options.token}`,
+          Authorization: `Bearer ${WhatsAppClient.resolveToken(this.options.token)}`,
           ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),

@@ -37,6 +37,8 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Server (tsc) and browser app (tsc --checkJs): the latter is what
+      # catches a renderer that calls a function nobody declared.
       - name: Type-check
         run: npm run lint
 

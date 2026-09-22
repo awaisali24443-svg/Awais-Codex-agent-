@@ -15,7 +15,11 @@
                 is idempotent and no merge logic can drift.
    ========================================================================== */
 
-const $ = (id) => document.getElementById(id);
+/* `$` hands back whatever element the id names. The cast keeps the file
+   checkable: without it, every `el.prompt.value` is an error on `HTMLElement`,
+   the noise buries the mistakes worth catching (a function that does not
+   exist), and the check gets turned off. */
+const $ = (id) => /** @type {any} */ (document.getElementById(id));
 
 const el = {
   login: $('screen-login'),
@@ -41,6 +45,10 @@ const el = {
   memoryTitle: $('memory-title'),
   memoryBody: $('memory-body'),
   memoryToggle: $('memory-toggle'),
+  settings: $('settings'),
+  settingsTitle: $('settings-title'),
+  settingsBody: $('settings-body'),
+  settingsToggle: $('settings-toggle'),
   topbarTitle: $('topbar-title'),
   statusDot: $('status-dot'),
   toast: $('toast'),
@@ -55,6 +63,7 @@ const state = {
   conversations: [],
   budget: null,
   memory: null,
+  settings: null,
 };
 
 /* ------------------------------------------------------------------ api -- */
@@ -68,8 +77,8 @@ async function api(path, options = {}) {
 
   if (res.status === 401) {
     showLogin();
-    const err = new Error('unauthorized');
-    err.status = 401;
+    /** @type {Error & { status: number, body?: unknown }} */
+    const err = Object.assign(new Error('unauthorized'), { status: 401 });
     throw err;
   }
 
@@ -78,9 +87,11 @@ async function api(path, options = {}) {
   try { body = raw ? JSON.parse(raw) : null; } catch { body = { message: raw }; }
 
   if (!res.ok) {
-    const err = new Error(body?.message || body?.error || `HTTP ${res.status}`);
-    err.status = res.status;
-    err.body = body;
+    /** @type {Error & { status: number, body: unknown }} */
+    const err = Object.assign(new Error(body?.message || body?.error || `HTTP ${res.status}`), {
+      status: res.status,
+      body,
+    });
     throw err;
   }
   return body;
@@ -101,12 +112,15 @@ function showApp() {
   el.app.hidden = false;
 }
 
+/** @type {ReturnType<typeof setTimeout> | undefined} */
+let toastTimer;
+
 function toast(message, ms = 4200) {
   el.toast.textContent = message;
   el.toast.hidden = false;
   requestAnimationFrame(() => el.toast.classList.add('show'));
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => {
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
     el.toast.classList.remove('show');
     setTimeout(() => { el.toast.hidden = true; }, 220);
   }, ms);
@@ -150,7 +164,7 @@ el.loginForm.addEventListener('submit', async (event) => {
 async function enter() {
   showApp();
   renderThread([]);
-  await Promise.allSettled([loadConversations(), loadBudget(), loadMemory()]);
+  await Promise.allSettled([loadConversations(), loadBudget(), loadMemory(), loadSettings()]);
 
   try {
     const { run } = await api('/api/runs/active');
@@ -334,7 +348,7 @@ function drawAnswer(card, streaming) {
   card.answer.innerHTML = markdown(text) + (streaming ? '<span class="caret"></span>' : '');
 }
 
-function addStep(card, key, { name, detail, icon, done }) {
+function addStep(card, key, { name, detail = '', icon = 'dot', done = false }) {
   let step = card.stepIndex.get(key);
   if (!step) {
     step = document.createElement('div');
@@ -679,7 +693,7 @@ function autoGrow() {
   el.prompt.style.height = `${Math.min(el.prompt.scrollHeight, window.innerHeight * 0.34)}px`;
 }
 
-for (const chip of document.querySelectorAll('.chip')) {
+for (const chip of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('.chip'))) {
   chip.addEventListener('click', () => {
     el.prompt.value = chip.dataset.fill || '';
     autoGrow();
@@ -750,6 +764,234 @@ function renderBudget() {
     <div class="budget-bar"><div class="budget-fill${remaining <= limit * 0.15 ? ' low' : ''}" style="width:${pct}%"></div></div>`;
 }
 
+/* ----------------------------------------------------------------- memory -- */
+
+/* Two panels in the drawer read the server's state: what the agent remembers
+   and what it is configured with. Both are lazy and silent — a failure to load
+   either must never take the app down with it, which is exactly what happened
+   when `enter()` called a renderer that did not exist yet. */
+
+async function loadMemory() {
+  try {
+    state.memory = await api('/api/memory');
+    renderMemory();
+  } catch { /* the app works without the panel */ }
+}
+
+function profileLine(profile) {
+  if (!profile) return '';
+  const parts = [];
+  if (profile.name) parts.push(profile.name);
+  if (profile.role) parts.push(profile.role);
+  if (profile.environment) parts.push(`on ${profile.environment}`);
+  if (Array.isArray(profile.preferredFrameworks) && profile.preferredFrameworks.length) {
+    parts.push(profile.preferredFrameworks.join(', '));
+  }
+  if (Array.isArray(profile.customDirectives) && profile.customDirectives.length) {
+    parts.push(profile.customDirectives.join('; '));
+  }
+  return parts.join(' · ');
+}
+
+function renderMemory() {
+  const data = state.memory;
+  if (!data) return;
+
+  const profile = profileLine(data.profile);
+  const items = Array.isArray(data.memories) ? data.memories : [];
+
+  // Nothing learned yet: an empty "Remembered" section teaches the operator
+  // nothing, so it stays out of the way until there is something in it.
+  if (!profile && items.length === 0) {
+    el.memory.hidden = true;
+    return;
+  }
+
+  el.memory.hidden = false;
+  el.memoryTitle.textContent = items.length ? `Remembered (${items.length})` : 'Remembered';
+
+  const rows = [];
+  if (profile) {
+    rows.push(`<div class="memory-item"><span class="tag">you</span>${escapeHtml(profile)}</div>`);
+  }
+  for (const item of items.slice(0, 6)) {
+    rows.push(
+      `<div class="memory-item"><span class="tag">${escapeHtml(item.category)}</span>${escapeHtml(item.content)}</div>`,
+    );
+  }
+  if (items.length > 6) {
+    rows.push(`<div class="memory-note">…and ${items.length - 6} more</div>`);
+  }
+  rows.push('<button class="memory-forget" id="memory-forget">Forget everything</button>');
+
+  el.memoryBody.innerHTML = rows.join('');
+  el.memoryBody.querySelector('#memory-forget')?.addEventListener('click', forgetEverything);
+}
+
+async function forgetEverything() {
+  const button = el.memoryBody.querySelector('#memory-forget');
+  if (button?.dataset.busy) return;
+  if (button) { button.dataset.busy = '1'; button.textContent = 'Forgetting…'; }
+  try {
+    const { removed } = await api('/api/memory/clear', { method: 'POST' });
+    state.memory = null;
+    el.memory.hidden = true;
+    toast(removed ? `Forgot ${removed} thing${removed === 1 ? '' : 's'}.` : 'Nothing was remembered.');
+  } catch (err) {
+    toast(err.message || 'Could not clear what was remembered.');
+    if (button) { button.dataset.busy = ''; button.textContent = 'Forget everything'; }
+  }
+}
+
+/* --------------------------------------------------------------- settings -- */
+
+const SECRET_STATE = {
+  stored: (secret) => ({
+    text: `saved here · ${secret.fingerprint}`,
+    className: 'ok',
+  }),
+  environment: (secret) => ({
+    text: `from ${secret.envVar} in the environment`,
+    className: 'ok',
+  }),
+  missing: () => ({ text: 'not set', className: 'bad' }),
+  unreadable: () => ({ text: 'cannot decrypt — MASTER_KEY changed', className: 'bad' }),
+};
+
+async function loadSettings() {
+  try {
+    state.settings = await api('/api/settings');
+    renderSettings();
+  } catch { /* the app works without the panel */ }
+}
+
+function renderSettings() {
+  const data = state.settings;
+  if (!data) return;
+  el.settings.hidden = false;
+
+  const saved = data.settings.filter((s) => s.source === 'stored').length;
+  el.settingsTitle.textContent = saved ? `Settings (${saved})` : 'Settings';
+
+  const rows = data.settings.map((setting) => `
+    <label class="setting-row">
+      <span class="setting-label">
+        ${escapeHtml(setting.label)}
+        <em>${setting.source === 'stored' ? 'saved here' : `from ${escapeHtml(setting.envVar)}`}</em>
+      </span>
+      <input class="setting-input" data-setting="${escapeHtml(setting.key)}"
+        type="${typeof setting.value === 'number' ? 'number' : 'text'}"
+        value="${escapeHtml(String(setting.value))}" />
+    </label>`);
+
+  const secrets = data.secrets.map((secret) => {
+    const state_ = (SECRET_STATE[secret.source] || SECRET_STATE.missing)(secret);
+    return `
+      <div class="secret" data-secret="${escapeHtml(secret.name)}">
+        <div class="secret-main">
+          <span class="secret-name">${escapeHtml(secret.label)}</span>
+          <span class="secret-state ${state_.className}">${escapeHtml(state_.text)}</span>
+        </div>
+        <div class="secret-actions">
+          <button class="primary" data-act="set" data-name="${escapeHtml(secret.name)}">Replace</button>
+          ${secret.source === 'stored'
+            ? `<button class="danger" data-act="remove" data-name="${escapeHtml(secret.name)}">Remove</button>`
+            : ''}
+        </div>
+      </div>`;
+  });
+
+  const encryptionNote = data.encryption.available
+    ? `<p class="setting-note">Keys are encrypted with MASTER_KEY before they are stored, and are never sent back to this screen — only a short fingerprint is.</p>`
+    : `<p class="setting-note bad">${escapeHtml(data.encryption.hint || 'Storing secrets is unavailable.')}</p>`;
+
+  el.settingsBody.innerHTML = `${rows.join('')}<p class="setting-note">Changes apply immediately — no redeploy.</p>${secrets.join('')}${encryptionNote}`;
+
+  for (const input of el.settingsBody.querySelectorAll('.setting-input')) {
+    input.addEventListener('change', () => saveSetting(input));
+  }
+  el.settingsBody.addEventListener('click', onSettingsClick);
+}
+
+async function saveSetting(input) {
+  const key = input.dataset.setting;
+  const raw = input.value;
+  const value = input.type === 'number' ? Number(raw) : raw;
+  input.disabled = true;
+  try {
+    const { value: applied } = await api(`/api/settings/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
+    toast(`${key === 'dailyRunBudget' ? 'Budget' : 'Setting'} saved: ${applied}`);
+    // The budget shown at the top of the drawer must agree with the new limit.
+    if (key === 'dailyRunBudget') await loadBudget();
+    await loadSettings();
+  } catch (err) {
+    toast(err.message || 'That value was refused.');
+    input.value = input.defaultValue;
+  } finally {
+    input.disabled = false;
+  }
+}
+
+function onSettingsClick(event) {
+  const button = event.target.closest('button[data-act]');
+  if (!button) return;
+  const name = button.dataset.name;
+  if (button.dataset.act === 'remove') void removeSecret(name);
+  if (button.dataset.act === 'set') askSecret(button, name);
+}
+
+/** The value is entered, sent, and forgotten by this screen — it is never shown again. */
+function askSecret(button, name) {
+  const row = button.closest('.secret');
+  const actions = row.querySelector('.secret-actions');
+  actions.innerHTML = `
+    <input class="secret-input" type="password" autocomplete="off" spellcheck="false"
+      placeholder="paste the key, then Save" data-name="${escapeHtml(name)}" />
+    <button class="primary" data-act="save">Save</button>
+    <button data-act="cancel">Cancel</button>`;
+  const input = actions.querySelector('.secret-input');
+  input.focus();
+  actions.addEventListener('click', (event) => {
+    const act = event.target.closest('button[data-act]')?.dataset.act;
+    if (act === 'save') void saveSecret(name, input.value);
+    if (act === 'cancel') void loadSettings();
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void saveSecret(name, input.value);
+  });
+}
+
+async function saveSecret(name, value) {
+  if (!value || !value.trim()) {
+    toast('Nothing to save.');
+    return;
+  }
+  try {
+    const { secret } = await api(`/api/settings/secrets/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
+    // The response is metadata; the value is deliberately not echoed anywhere.
+    toast(`${secret.label} saved (${secret.fingerprint}).`);
+    await loadSettings();
+  } catch (err) {
+    toast(err.message || 'Could not store that key.');
+  }
+}
+
+async function removeSecret(name) {
+  try {
+    await api(`/api/settings/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    toast('Removed. The environment value, if any, applies again.');
+    await loadSettings();
+  } catch (err) {
+    toast(err.message || 'Could not remove that key.');
+  }
+}
+
 /* --------------------------------------------------------------- drawer -- */
 
 function openDrawer() {
@@ -767,6 +1009,19 @@ function closeDrawer() {
 }
 
 $('btn-menu').addEventListener('click', openDrawer);
+
+/* Collapsible panels. The bodies are populated separately, so opening one is
+   only ever a matter of flipping two attributes. */
+function bindPanel(toggle, body) {
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', String(!open));
+    body.hidden = open;
+  });
+}
+
+bindPanel(el.memoryToggle, el.memoryBody);
+bindPanel(el.settingsToggle, el.settingsBody);
 $('btn-close-drawer').addEventListener('click', closeDrawer);
 el.scrim.addEventListener('click', closeDrawer);
 

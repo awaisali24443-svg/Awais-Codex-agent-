@@ -17,6 +17,7 @@ Powered strictly by the **Google Antigravity managed agent** (`antigravity-previ
 | **WhatsApp** | Send a task from your phone; get an acknowledgement, a progress line if it is slow, and the answer — including `/status`, `/cancel` and `/new` |
 | **Real artifacts** | When the agent builds a file (APK, ZIP, tarball), it is recorded on the mission and downloadable — fetched from the sandbox on first request and cached after |
 | **Knows its limits** | A daily run budget enforced in the database, one mission at a time, typed errors (`quota_exceeded`, `auth_failed`, `agent_unavailable`), and an idle watchdog so a stalled agent frees the slot |
+| **Configurable from the app** | The Settings panel in the drawer changes the daily budget and the agent id live, and holds credentials — a key pasted there is encrypted with `MASTER_KEY` (AES-256-GCM), never sent back to the browser, and used from the next request instead of the next deploy |
 | **Installable** | A PWA with a service worker: network-first while online, last-known page offline |
 
 ---
@@ -68,16 +69,18 @@ npm install
 npm run dev          # http://localhost:3000
 ```
 
-`npm run dev` needs no configuration at all: with no `.env`, it uses in-process **PGlite** for storage and starts **open** (it warns you). To point it at the real agent, copy `.env.example` to `.env` and set `GEMINI_API_KEY`. To try the whole pipeline without spending a single one of your ~100 daily runs, set `ENGINE=scripted`.
+`npm run dev` needs no configuration at all: with no `.env`, it uses in-process **PGlite** for storage and starts **open** (it warns you). That PGlite lives in memory, so tasks, memories, settings and stored keys are gone when the process stops — point `DATABASE_URL` at Postgres (or set `MASTER_KEY` and run with a database) if you want a local run to persist. To point it at the real agent, copy `.env.example` to `.env` and set `GEMINI_API_KEY`. To try the whole pipeline without spending a single one of your ~100 daily runs, set `ENGINE=scripted`.
 
 ```bash
-npm test             # 193 tests, no network and no credentials required
-npm run lint         # tsc --noEmit
+npm test             # 237 tests, no network and no credentials required
+npm run lint         # type-checks the server AND the browser app (see below)
 npm run build        # bundles the server to dist/server.cjs (the UI ships as-is)
 npm start            # production
 npm run db:migrate   # apply migrations and exit
 npm run icons        # re-render web/pwa-*.png + apple-touch-icon.png from icon.svg
 ```
+
+`npm run lint` runs two checks: `tsc --noEmit` over `server/`, and `tsc --noEmit -p tsconfig.web.json`, which type-checks `web/app.js` and `web/sw.js` as JavaScript. The second one exists because the browser app has no bundler and no build step of its own — without it, a renderer that calls a function nobody defined is a `ReferenceError` at runtime, and inside `enter()` that looks like a sign-in screen rather than a bug. (It looked exactly like that for a while: `loadMemory()` was called by nobody from nowhere.) `server/web-app.test.ts` covers what a type checker cannot know — that every `$('id')` exists in the markup, and that every asset the page asks for is really served.
 
 ### Configuration
 
@@ -88,8 +91,8 @@ Everything lives in `.env` (see `.env.example` for the annotated list).
 | `DATABASE_URL` | Postgres. **Required in production** — free hosting disks are ephemeral, so JSON files lose data on every restart |
 | `SESSION_SECRET` | Signs the session cookie. ≥32 chars in production |
 | `ACCESS_KEY` | The key in your `?k=…` link / sign-in screen. ≥12 chars in production |
-| `MASTER_KEY` | 64 hex chars, for encrypting stored secrets |
-| `GEMINI_API_KEY` | Google AI Studio key for the agent |
+| `MASTER_KEY` | 64 hex chars (`openssl rand -hex 32`). Enables storing credentials from the app; without it, Settings refuses writes rather than saving them in the clear |
+| `GEMINI_API_KEY` | Google AI Studio key for the agent. Optional — a key stored in Settings is used instead |
 | `ANTIGRAVITY_AGENT` | The managed agent id — **date-stamped**, so it is configuration, not a constant |
 | `DAILY_RUN_BUDGET` | Hard daily cap, default 100 |
 | `WHATSAPP_TOKEN` + `POLLER_ENABLED` | The phone channel. Exactly one process may poll an agent |
@@ -126,6 +129,11 @@ POST   /api/memory                   add one · /search to see what would be rec
 PUT    /api/memory/:id · DELETE :id  correct or forget
 PUT    /api/memory/profile           name, role, stack, standing directives
 POST   /api/memory/clear             forget everything
+GET    /api/settings                 live settings + credential states (never values)
+PUT    /api/settings/:key            change one (applies immediately, no redeploy)
+DELETE /api/settings/:key            drop the override, back to the environment
+PUT    /api/settings/secrets/:name   store a credential, encrypted
+DELETE /api/settings/secrets/:name   forget it (the env var, if set, applies again)
 GET    /healthz · /readyz            liveness and readiness (database, poller, key)
 ```
 
@@ -173,6 +181,7 @@ data/                  runtime scratch (gitignored): extracted sandbox snapshots
 * Deny by default: every `/api` route needs a session, and `PUBLIC_ROUTES` is a two-entry allowlist.
 * Constant-time comparisons for the access key and bearer tokens.
 * The agent's API key travels as a header, never in a URL.
+* Stored credentials are AES-256-GCM encrypted, with the secret's own name bound in as associated data so a ciphertext cannot be moved between rows. No endpoint returns a stored value — only whether it exists, where it came from, and a short fingerprint so you can tell whether you pasted the same key twice. A value saved while `MASTER_KEY` was one thing, read while it is another, is reported as unreadable rather than silently ignored.
 * Extracted sandbox snapshots land in `data/artifacts/` (gitignored) and are only ever served by artifact id; files are located by basename inside the extraction root, so an agent-supplied path cannot climb out of it.
 * Artifact downloads and memory writes are both behind the session, so the store is only ever read and written by the operator.
 

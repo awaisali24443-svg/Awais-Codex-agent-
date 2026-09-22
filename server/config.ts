@@ -102,8 +102,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const pollerEnabled = readBool(env.POLLER_ENABLED, false);
-  if (pollerEnabled && !(env.WHATSAPP_TOKEN ?? '').trim()) {
-    problems.push('POLLER_ENABLED=true but WHATSAPP_TOKEN is empty — the poller would spin');
+  const hasEnvToken = Boolean((env.WHATSAPP_TOKEN ?? '').trim());
+  /**
+   * A poller with no token would hammer the platform with unauthenticated
+   * requests, so this is worth failing over — but "no token in the environment"
+   * is no longer the same as "no token": the encrypted store can hold one, and
+   * that store needs MASTER_KEY to exist at all. So the hard failure is kept
+   * exactly where the answer is knowable here (no MASTER_KEY means nothing can
+   * have been stored), and otherwise the boot sequence re-checks after loading
+   * secrets, where it can name both places the token might live.
+   */
+  if (pollerEnabled && !hasEnvToken && !masterKey) {
+    problems.push(
+      'POLLER_ENABLED=true but WHATSAPP_TOKEN is empty — the poller would spin. ' +
+        'Set WHATSAPP_TOKEN, or set MASTER_KEY and store it in Settings.',
+    );
   }
 
   // The real engine is the default: silently running the scripted one in
@@ -180,7 +193,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: readInt(env.PORT, 3000),
     databaseUrl,
     sessionSecret: sessionSecret || 'dev-only-insecure-session-secret-change-me',
-    masterKey: masterKey || '0'.repeat(64),
+    /**
+     * Empty when unset, rather than a placeholder of zeros.
+     *
+     * A fake key would make `sealSecret` succeed and the `secrets` table look
+     * populated while every value in it was readable by anyone holding this
+     * source file. An empty key says "encryption is unavailable", which is a
+     * state the store can report honestly and the API can refuse writes over.
+     */
+    masterKey,
     geminiApiKey,
     whatsappToken: (env.WHATSAPP_TOKEN ?? '').trim(),
     whatsappApiBase: (env.WHATSAPP_API_BASE ?? '').trim(),

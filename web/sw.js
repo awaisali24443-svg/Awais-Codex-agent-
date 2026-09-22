@@ -18,7 +18,19 @@
    a manifest with no worker behind it).
    ========================================================================== */
 
-const VERSION = 'codex-v1';
+/* The service-worker globals (`ExtendableEvent`, `FetchEvent`,
+   `ServiceWorkerGlobalScope`) live in TypeScript's WebWorker lib, which cannot
+   be loaded alongside DOM — the two declare `self` and `caches` differently. So
+   the small surface this file uses is named here instead, which keeps the file
+   under `npm run lint:web` and therefore keeps typos in it from shipping. */
+/**
+ * @typedef {object} WorkerEvent
+ * @property {(promise: Promise<unknown>) => void} waitUntil
+ * @property {Request} [request]
+ * @property {(response: Promise<Response> | Response) => void} [respondWith]
+ */
+
+const VERSION = 'codex-v2';
 const SHELL = [
   '/',
   '/index.html',
@@ -28,7 +40,8 @@ const SHELL = [
   '/icon.svg',
 ];
 
-self.addEventListener('install', (event) => {
+/** @param {WorkerEvent} event */
+function onInstall(event) {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(VERSION);
@@ -36,20 +49,25 @@ self.addEventListener('install', (event) => {
       await Promise.all(
         SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' })).catch(() => undefined)),
       );
-      await self.skipWaiting();
+      await /** @type {any} */ (self).skipWaiting();
     })(),
   );
-});
+}
 
-self.addEventListener('activate', (event) => {
+self.addEventListener('install', /** @type {any} */ (onInstall));
+
+/** @param {WorkerEvent} event */
+function onActivate(event) {
   event.waitUntil(
     (async () => {
       const names = await caches.keys();
       await Promise.all(names.filter((name) => name !== VERSION).map((name) => caches.delete(name)));
-      await self.clients.claim();
+      await /** @type {any} */ (self).clients.claim();
     })(),
   );
-});
+}
+
+self.addEventListener('activate', /** @type {any} */ (onActivate));
 
 /** Nothing under /api, and nothing cross-origin, is ever cached here. */
 function cacheable(request, url) {
@@ -59,7 +77,8 @@ function cacheable(request, url) {
   return true;
 }
 
-self.addEventListener('fetch', (event) => {
+/** @param {WorkerEvent} event */
+function onFetch(event) {
   const url = new URL(event.request.url);
   if (!cacheable(event.request, url)) return;
 
@@ -87,4 +106,6 @@ self.addEventListener('fetch', (event) => {
       }
     })(),
   );
-});
+}
+
+self.addEventListener('fetch', /** @type {any} */ (onFetch));
