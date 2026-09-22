@@ -343,9 +343,9 @@ describe('whatsapp intake', () => {
     const sends = platform.to('/messages');
     assert.equal(sends[0]?.method, 'POST');
     assert.equal(sends[0]?.authorization, 'Bearer test-token');
-    // No `to`: an agent has exactly one recipient, and the id is learned from
-    // traffic rather than configured.
-    assert.equal(sends[0]?.body?.to, undefined);
+    // Every send carries an explicit `to`: the platform requires it, and the
+    // inbound `from` is the `user:<id>` to send back to.
+    assert.equal(sends[0]?.body?.to, 'user:5');
     assert.equal(sends[0]?.body?.messaging_product, 'whatsapp');
     assert.equal(sends[0]?.body?.type, 'text');
     assert.match(String((sends[0]?.body?.text as { body?: string })?.body), /On it/);

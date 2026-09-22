@@ -262,11 +262,11 @@ export class WhatsAppPoller {
         }
         if (TERMINAL_STATUSES.includes(run.status)) {
           this.log(`[wa] delivering the outcome of ${run.id} that died with the last process`);
-          this.watch(run, row.wamid);
+          this.watch(run, row.wamid, row.payload.from);
           continue;
         }
         this.log(`[wa] still watching ${run.id}`);
-        this.watch(run, row.wamid);
+        this.watch(run, row.wamid, row.payload.from);
       } catch (err) {
         this.log(`[wa] could not reconcile ${row.wamid}: ${(err as Error).message}`, 'error');
       }
@@ -551,13 +551,13 @@ export class WhatsAppPoller {
 
     // Detached on purpose: watching a long task must not block the next poll,
     // and the relay writes the closing message itself.
-    this.watch(result.run, message.id);
+    this.watch(result.run, message.id, message.from);
   }
 
   /** Follow a run to its end and deliver the result, without blocking the loop. */
-  private watch(run: Run, wamid: string): void {
+  private watch(run: Run, wamid: string, to: string): void {
     this.watching += 1;
-    void relayRun({ db: this.deps.db, bus: this.deps.bus, send: this.deps.sender }, run)
+    void relayRun({ db: this.deps.db, bus: this.deps.bus, send: this.deps.sender, to }, run)
       .then(async (result) => {
         if (result.outcome === 'detached') {
           // Still running; the next boot's reconcile picks it up if it dies.
@@ -581,6 +581,9 @@ export class WhatsAppPoller {
   ): Promise<boolean> {
     const delivered = await this.deps.sender.send(text, {
       replyTo: options.replyTo === null ? null : message.id,
+      // The platform requires an explicit `to` on every send — even on
+      // replies. The inbound `from` is the `user:<id>` to send back to.
+      to: message.from,
     });
     if (delivered && options.markProcessed !== false) {
       await markProcessed(this.deps.db, message.id, null);

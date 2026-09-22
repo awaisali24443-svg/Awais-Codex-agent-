@@ -23,6 +23,8 @@ export interface RelayDeps {
   db: Db;
   bus: EventBus;
   send: WhatsAppSender;
+  /** The explicit `to` (`user:<id>`) for every send — the platform requires it. */
+  to: string;
   /** Send one "still working" line if the run is slower than this. */
   progressAfterMs?: number;
   /** Give up watching after this long; the run itself continues. */
@@ -117,7 +119,7 @@ export async function relayRun(deps: RelayDeps, run: Run): Promise<RelayResult> 
   if (TERMINAL_STATUSES.includes(current.status)) {
     const text = await finalTextOf(deps.db, run.id);
     const outcome = current.status as RelayOutcome;
-    await deps.send.send(closingMessage(outcome, text, current.errorMessage));
+    await deps.send.send(closingMessage(outcome, text, current.errorMessage), { to: deps.to });
     await reportError(deps, current);
     return { outcome, text };
   }
@@ -139,7 +141,7 @@ export async function relayRun(deps: RelayDeps, run: Run): Promise<RelayResult> 
 
       const text = (await finalTextOf(deps.db, run.id)) || latest;
       const finished = await getRun(deps.db, run.id);
-      await deps.send.send(closingMessage(outcome, text, finished?.errorMessage ?? null));
+      await deps.send.send(closingMessage(outcome, text, finished?.errorMessage ?? null), { to: deps.to });
       await reportError(deps, finished);
       resolve({ outcome, text });
     };
@@ -164,7 +166,7 @@ export async function relayRun(deps: RelayDeps, run: Run): Promise<RelayResult> 
       progressSent = true;
       const waited = elapsed((deps.now ?? Date.now)() - startedAt);
       const detail = milestone ? ` — ${milestone}` : '';
-      void deps.send.send(`⏳ Still working (${waited})${detail}.`, { previewUrl: false });
+      void deps.send.send(`⏳ Still working (${waited})${detail}.`, { previewUrl: false, to: deps.to });
     }, progressAfterMs);
     progressTimer.unref?.();
 
@@ -200,7 +202,7 @@ async function reportError(deps: RelayDeps, run: Run | null): Promise<void> {
     budget_exceeded: 'The daily task budget for today is used up.',
   };
   const note = notes[type];
-  if (note) await deps.send.send(`ℹ️ ${note}`);
+  if (note) await deps.send.send(`ℹ️ ${note}`, { to: deps.to });
 }
 
 /** Events of a finished run, for the admin/debug path. */

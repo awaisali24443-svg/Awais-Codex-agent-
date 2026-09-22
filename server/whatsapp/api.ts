@@ -326,9 +326,10 @@ export class WhatsAppClient {
       type: 'text',
       text: options.previewUrl ? { body, preview_url: true } : { body },
     };
-    // `to` is optional: inbound replies omit it (the platform knows the single
-    // recipient), but the run-completion ping passes an explicit recipient
-    // configured by the operator.
+    // `to` is required on every send — the platform rejects the request
+    // without it, even when quoting an inbound message via context. Callers
+    // pass the recipient explicitly: the inbound `from` for replies, the
+    // learned creator id for proactive pings.
     if (options.to) payload.to = options.to;
     if (options.replyTo) payload.context = { message_id: options.replyTo };
 
