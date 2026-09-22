@@ -299,6 +299,22 @@ export async function executeTurn(projectId, turnId) {
           turn.currentSubAgent = 'Antigravity: Sandbox connected...';
           saveProjects();
           if (state.activeSessionId === project.id) renderConversation(project);
+        } else if (eventType === 'activity') {
+          // Live narration from the server: real lifecycle moments observed
+          // upstream (connected, sandbox ready, composing). The 150ms live
+          // timer re-renders the thinking panel from turn.thoughts.
+          const act = eventData || {};
+          const title = act.title || 'Working';
+          if (!turn.thoughts) turn.thoughts = [];
+          turn.thoughts.push({
+            summary: title,
+            text: act.detail || '',
+            phase: act.phase || '',
+            status: act.status || 'running',
+            timestamp: Date.now()
+          });
+          turn.currentSubAgent = `[${title}]`;
+          saveProjects();
         } else if (eventType === 'thought') {
           let thoughtText = '';
           if (typeof delta === 'string') thoughtText = delta;

@@ -418,6 +418,25 @@ router.all('/stream-task', async (req: Request, res: Response) => {
 
     incrementServerCallBudget('website');
 
+    // Live narration: the proxy observes real lifecycle moments and narrates
+    // them as `activity` / `thought` events the instant they happen — the
+    // connection opening, the sandbox becoming ready, the agent's own step
+    // summaries, streamed reasoning keys, the first answer token. Nothing here
+    // is scripted: every event fires only when actually observed upstream.
+    const emitActivity = (phase: string, title: string, detail?: string, status = 'running') => {
+      res.write(`event: activity\ndata: ${JSON.stringify({ phase, title, detail: detail || '', status })}\n\n`);
+      if (typeof (res as any).flush === 'function') (res as any).flush();
+    };
+    const emitThought = (text: string, summary?: string) => {
+      res.write(`event: thought\ndata: ${JSON.stringify({ delta: { thought: text, thought_summary: summary || '' } })}\n\n`);
+      if (typeof (res as any).flush === 'function') (res as any).flush();
+    };
+    let sawInteraction = false;
+    let sawFirstToken = false;
+    let lastSummary = '';
+
+    emitActivity('connect', 'Connected — streaming the agent live');
+
     const reader = upstreamRes.body.getReader();
     const decoder = new TextDecoder();
     let sseBuffer = '';
@@ -483,6 +502,33 @@ router.all('/stream-task', async (req: Request, res: Response) => {
           }
 
           if (delta.text) accumulatedOutput += delta.text;
+
+          // Narrate real lifecycle moments the instant they are observed.
+          const interactionId = eventData.interaction?.id;
+          if (interactionId && !sawInteraction) {
+            sawInteraction = true;
+            const envId = eventData.interaction?.environment_id || '';
+            emitActivity('sandbox', 'Sandbox ready', envId ? `environment ${envId}` : '', 'completed');
+          }
+          // The step summary is the agent's own narration of what it is doing —
+          // surface it live, the way the server-owned run pipeline does.
+          const stepSummary = typeof step.summary === 'string' ? step.summary.trim() : '';
+          if (stepSummary && stepSummary !== lastSummary && !isThought) {
+            lastSummary = stepSummary;
+            emitThought('', stepSummary);
+          }
+          // Some agent APIs stream reasoning under a sibling key of `text`.
+          for (const key of ['reasoning', 'thinking', 'thought', 'reasoning_text']) {
+            const value = (delta as any)[key];
+            if (typeof value === 'string' && value.trim()) {
+              emitThought(value);
+              break;
+            }
+          }
+          if (delta.text && !sawFirstToken) {
+            sawFirstToken = true;
+            emitActivity('compose', 'Composing the answer');
+          }
 
           // Ensure output_text is populated on completion
           if (eventType === 'interaction.completed' && eventData.interaction) {

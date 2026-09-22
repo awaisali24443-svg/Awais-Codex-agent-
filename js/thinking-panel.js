@@ -83,9 +83,21 @@ export function generateThoughtStream(turn) {
         stage: stageName,
         icon: '🧠',
         text: t.text || t.summary || '',
+        phase: t.phase || '',
         isDone: !isThoughtActive
       });
     });
+  }
+
+  // The "Composing the answer" narration carries the live tail of the
+  // streaming output, so the panel shows real tokens as they arrive.
+  if (isRunning && turn.output) {
+    const composing = thoughts.find(t => t.phase === 'compose');
+    if (composing) {
+      const out = String(turn.output);
+      const tail = out.slice(-180);
+      composing.text = (tail.length < out.length ? '…' : '') + tail;
+    }
   }
 
   // 2. Real steps from Antigravity live stream or execution
