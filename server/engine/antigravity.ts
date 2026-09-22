@@ -17,9 +17,11 @@
  *
  * ## The three rules this file obeys
  *
- * 1. NEVER RETRY SOMETHING THAT WAS PAID FOR. A mission costs one of ~100 daily
- *    runs and every token counts against a 100K TPM ceiling. Retries happen
- *    only for 429/503 *and* only while nothing has been emitted yet.
+ * 1. NEVER PAY TWICE, NEVER GIVE UP EARLY. A rejected request cost nothing
+ *    and is re-posted with patient backoff. A 429 that lands mid-mission does
+ *    not fail the run: the engine waits out the TPM window and resumes the
+ *    stored interaction, so the agent continues where it stopped. Only a spent
+ *    daily quota fails fast — no wait can fix that.
  *
  * 2. NEVER LOSE OUTPUT. Google's stream can be cut mid-mission. Rather than
  *    returning a truncated answer, the engine re-reads the stored interaction by
@@ -69,12 +71,27 @@ export interface AntigravityEngineOptions {
   recoveryAttempts?: number;
   /** Backoff before the single retry-safe retry. Tests set 0. */
   retryDelayMs?: number;
+  /**
+   * First wait when Google rate-limits the mission (TPM). Doubles each time,
+   * capped at 2 minutes per wait. The engine waits instead of failing, so a
+   * free-tier quota never kills a mission — it just slows it down.
+   */
+  rateLimitBaseDelayMs?: number;
+  /**
+   * Stop waiting and park the mission after this much total rate-limit delay.
+   * The single mission slot cannot hang forever, however patient we are.
+   */
+  rateLimitMaxWaitMs?: number;
   fetchImpl?: typeof fetch;
 }
 
 const DEFAULT_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RECOVERY_ATTEMPTS = 4;
+const DEFAULT_RATE_LIMIT_BASE_DELAY_MS = 30_000;
+const DEFAULT_RATE_LIMIT_MAX_WAIT_MS = 30 * 60_000;
+/** Longest single wait between rate-limit retries. TPM windows clear per minute. */
+const MAX_RATE_LIMIT_DELAY_MS = 2 * 60_000;
 
 /** Shape of one streamed event. Every field optional: the schema is a beta. */
 interface StreamPayload {
@@ -103,6 +120,8 @@ export class AntigravityEngine implements Engine {
   private readonly idleTimeoutMs: number;
   private readonly recoveryAttempts: number;
   private readonly retryDelayMs: number;
+  private readonly rateLimitBaseDelayMs: number;
+  private readonly rateLimitMaxWaitMs: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: AntigravityEngineOptions) {
@@ -110,6 +129,8 @@ export class AntigravityEngine implements Engine {
     this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.recoveryAttempts = options.recoveryAttempts ?? DEFAULT_RECOVERY_ATTEMPTS;
     this.retryDelayMs = options.retryDelayMs ?? 3_000;
+    this.rateLimitBaseDelayMs = options.rateLimitBaseDelayMs ?? DEFAULT_RATE_LIMIT_BASE_DELAY_MS;
+    this.rateLimitMaxWaitMs = options.rateLimitMaxWaitMs ?? DEFAULT_RATE_LIMIT_MAX_WAIT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -253,23 +274,86 @@ export class AntigravityEngine implements Engine {
       }
     }
 
-    if (!response.ok) {
-      const error = classify(response.status, await failureDetail());
-
-      // Retry-safe statuses, and only before anything was produced: a retry
-      // re-runs the whole mission, and on a ~100-run daily quota a wrong retry
-      // is a wasted day.
-      if (error.retryable && !emitted) {
-        ctx.log(`${error.errorType} (${response.status}) — retrying once`, 'warn');
-        await this.sleep(this.retryDelayMs, controller.signal);
-        await repost();
-        if (response.ok) return this.consume(response, ctx, emit, controller, touch);
-        throw classify(response.status, await failureDetail());
+    // The patient loop: TPM rate limits are waited out, not failed. A rejected
+    // request cost nothing, so re-posting it is safe. A 429 that lands
+    // mid-stream resumes the stored interaction instead of restarting the
+    // mission, so the agent continues where it stopped and no token is ever
+    // paid twice. Only a spent daily quota fails fast — waiting cannot fix
+    // that, and the run is recorded honestly instead of hanging the slot.
+    let waits = 0;
+    let waitedMs = 0;
+    for (;;) {
+      if (!response.ok) {
+        const error = classify(response.status, await failureDetail());
+        if (error.retryable) {
+          waitedMs = await this.waitForRateLimit(emit, controller, touch, waits, waitedMs);
+          waits += 1;
+          await repost();
+          continue;
+        }
+        throw error;
       }
-      throw error;
+      try {
+        return await this.consume(response, ctx, emit, controller, touch);
+      } catch (err) {
+        const limited = asResumableRateLimit(err);
+        if (!limited) throw err;
+        const resumeId = limited.interactionId;
+        if (resumeId) {
+          // Continue the stored interaction — the agent keeps its memory and
+          // its sandbox instead of starting (and billing) the mission over.
+          payload.previous_interaction_id = resumeId;
+        } else if (emitted) {
+          // Output was produced but there is no stored interaction to resume.
+          // Restarting would pay twice for the same mission: do not retry.
+          throw err;
+        }
+        waitedMs = await this.waitForRateLimit(emit, controller, touch, waits, waitedMs);
+        waits += 1;
+        await repost();
+      }
     }
+  }
 
-    return this.consume(response, ctx, emit, controller, touch);
+  /**
+   * Wait out a rate limit instead of failing the mission. TPM windows clear
+   * every minute, so a bounded wait almost always succeeds; the wait is logged
+   * so the operator watches patience, not a hang. Throws when the total wait
+   * budget is spent — the single mission slot cannot hang forever.
+   */
+  private async waitForRateLimit(
+    emit: { log(message: string, level?: 'info' | 'warn' | 'error'): void },
+    controller: AbortController,
+    touch: () => void,
+    waits: number,
+    waitedMs: number,
+  ): Promise<number> {
+    const delay = Math.min(this.rateLimitBaseDelayMs * 2 ** Math.min(waits, 2), MAX_RATE_LIMIT_DELAY_MS);
+    if (waitedMs + delay > this.rateLimitMaxWaitMs) {
+      throw new EngineError(
+        `Google rate-limited the mission for ${Math.round(waitedMs / 60000)}m and the wait budget is spent. ` +
+          'Nothing was lost — run the mission again in a few minutes when the TPM window clears.',
+        'rate_limited',
+        false,
+        429,
+      );
+    }
+    emit.log(
+      `Rate limited by Google (TPM) — waiting ${Math.round(delay / 1000)}s, then continuing where it stopped` +
+        (waitedMs > 0 ? ` (${(waitedMs / 60000).toFixed(1)}m waited so far)` : '') +
+        '.',
+      'warn',
+    );
+    // Sleep in small chunks: a deliberate wait is activity, not a stall, so
+    // the idle watchdog stays quiet, and an operator cancel still lands fast.
+    let remaining = delay;
+    while (remaining > 0) {
+      if (controller.signal.aborted) throw new EngineAbortedError();
+      touch();
+      await new Promise((resolve) => setTimeout(resolve, Math.min(remaining, 5_000)));
+      remaining -= 5_000;
+    }
+    return waitedMs + delay;
   }
 
   private post(
@@ -343,7 +427,7 @@ export class AntigravityEngine implements Engine {
           const data = parsed as StreamPayload;
 
           if (data.error?.message) {
-            throw new EngineError(data.error.message, 'upstream_error', false);
+            throw rateLimitOrUpstream(data.error, interactionId);
           }
 
           if (data.interaction?.id) interactionId = data.interaction.id;
@@ -537,6 +621,39 @@ export class AntigravityEngine implements Engine {
       signal.addEventListener('abort', onAbort, { once: true });
     });
   }
+}
+
+/** A 429 the engine can wait out: carries the stored interaction to resume. */
+export interface ResumableRateLimit extends EngineError {
+  interactionId?: string;
+}
+
+/** True when the failure is a waitable rate limit rather than a fatal error. */
+export function asResumableRateLimit(err: unknown): ResumableRateLimit | null {
+  if (err instanceof EngineError && err.errorType === 'rate_limited' && err.retryable) {
+    return err as ResumableRateLimit;
+  }
+  return null;
+}
+
+/**
+ * An error frame is usually fatal — except a 429, which just means the
+ * free-tier TPM window is full. Those are waited out and resumed, so the
+ * mission survives them; everything else throws as before. A per-day quota
+ * message classifies as quota_exhausted (not retryable) and still fails fast.
+ */
+export function rateLimitOrUpstream(
+  error: { message?: string; code?: number | string },
+  interactionId: string | undefined,
+): EngineError {
+  const message = error.message ?? 'unknown upstream error';
+  const code = typeof error.code === 'string' ? Number(error.code) : error.code;
+  if (code === 429 || /rate.?limit|429|resource.?exhausted|quota.?exceeded/i.test(message)) {
+    const err = classify(429, message) as ResumableRateLimit;
+    err.interactionId = interactionId;
+    return err;
+  }
+  return new EngineError(message, 'upstream_error', false);
 }
 
 /** Map an HTTP status to a failure the operator can act on. */

@@ -159,6 +159,9 @@ function engineFor(base: string, extra: Partial<ConstructorParameters<typeof Ant
     agent: 'antigravity-preview-09-2026',
     apiBase: base,
     retryDelayMs: 0,
+    // Rate-limit waits are real sleeps: keep them tiny in tests.
+    rateLimitBaseDelayMs: 20,
+    rateLimitMaxWaitMs: 5_000,
     ...extra,
   });
 }
@@ -383,23 +386,67 @@ describe('failures', () => {
     assert.equal(fake.requests.length, 1, 'a spent quota must never be retried');
   });
 
-  test('being rate limited is retried once, as it is retry-safe', async () => {
+  test('rate limits are waited out, not failed — the mission continues', async () => {
     let calls = 0;
     fake = await startFake((_req, res) => {
       calls += 1;
-      if (calls === 1) {
+      if (calls <= 2) {
         res.writeHead(429, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Resource exhausted: too many requests per minute' } }));
+        res.end(JSON.stringify({ error: { message: 'Resource exhausted: too many tokens per minute' } }));
         return;
       }
       sse(res, happyStream());
     });
     const engine = engineFor(fake.base);
-    const { ctx } = makeCtx();
+    const { ctx, seen } = makeCtx();
 
     const result = await engine.run('rate limited', ctx);
-    assert.equal(calls, 2);
+    assert.equal(calls, 3, 'two 429s are waited out, the third attempt runs');
     assert.equal(result.interactionId, 'int_abc');
+    assert.ok(
+      seen.logs.some((l) => /waiting \d+s, then continuing/i.test(l)),
+      'the wait is logged so the operator watches patience, not a hang',
+    );
+  });
+
+  test('a mid-stream 429 resumes the stored interaction instead of restarting', async () => {
+    let calls = 0;
+    fake = await startFake((_req, res, body) => {
+      calls += 1;
+      if (calls === 1) {
+        // The agent starts, emits its id, then the TPM window fills mid-run.
+        sse(res, [
+          { event: 'interaction.start', data: { interaction: { id: 'int_mid', environment_id: 'env_1' } } },
+          { event: 'delta', data: { delta: { text: 'partial ' } } },
+          { event: 'error', data: { error: { message: '429: Resource exhausted, tokens per minute', code: 429 } } },
+        ]);
+        return;
+      }
+      // The resume must continue the stored interaction, not start over.
+      assert.equal(body.previous_interaction_id, 'int_mid');
+      sse(res, happyStream());
+    });
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    const result = await engine.run('mid-stream limit', ctx);
+    assert.equal(calls, 2);
+    assert.equal(result.text, 'Building your app.');
+    assert.ok(seen.logs.some((l) => /continuing where it stopped/i.test(l)));
+  });
+
+  test('waiting too long parks the mission instead of hanging the slot', async () => {
+    fake = await startFake((_req, res) => {
+      res.writeHead(429, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Resource exhausted: too many tokens per minute' } }));
+    });
+    const engine = engineFor(fake.base, { rateLimitMaxWaitMs: 30 });
+    const { ctx } = makeCtx();
+
+    await assert.rejects(
+      () => engine.run('always limited', ctx),
+      (err: EngineError) => err.errorType === 'rate_limited' && err.retryable === false,
+    );
   });
 
   test('a dead sandbox falls back to a fresh one', async () => {
