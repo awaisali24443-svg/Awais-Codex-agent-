@@ -28,7 +28,7 @@ async function makeRun(id: string, status = 'running', startedAt?: string): Prom
 before(async () => {
   db = await createDb('');
   const result = await migrate(db);
-  assert.deepEqual(result.applied, [1, 2], 'fresh database should apply migrations 001 and 002');
+  assert.deepEqual(result.applied, [1, 2, 3], 'fresh database should apply migrations 001-003');
 });
 
 after(async () => {
@@ -39,7 +39,7 @@ describe('migrations', () => {
   test('are idempotent', async () => {
     const again = await migrate(db);
     assert.deepEqual(again.applied, [], 'second run applies nothing');
-    assert.deepEqual(again.skipped, [1, 2]);
+    assert.deepEqual(again.skipped, [1, 2, 3]);
   });
 
   test('filenames follow NNN_name.sql and sort numerically', () => {
@@ -59,6 +59,7 @@ describe('migrations', () => {
       'memories',
       'memory_profile',
       'messages',
+      'reminders',
       'run_events',
       'runs',
       'schema_migrations',

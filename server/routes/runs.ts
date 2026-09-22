@@ -39,7 +39,7 @@ import type { EventBus, StreamEvent } from '../events.js';
 import type { RunExecutor } from '../executor.js';
 import { budgetSnapshot } from '../budget.js';
 import { listArtifacts } from '../artifacts.js';
-import { BUCKET_FOR_KIND, acceptRun } from '../accept.js';
+import { BUCKET_FOR_KIND, acceptRun, type AcceptResult } from '../accept.js';
 import {
   TERMINAL_STATUSES,
   getActiveRun,
@@ -93,6 +93,34 @@ function isTerminal(status: RunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
+/** One response shape for every route that starts a run. */
+function sendAccepted(res: Response, result: AcceptResult, config: AppConfig): void {
+  if (!result.ok && result.reason === 'in_progress') {
+    res.status(409).json({
+      error: 'run_in_progress',
+      message: `"${result.active.prompt.slice(0, 80)}" is already running`,
+      activeRunId: result.active.id,
+    });
+    return;
+  }
+
+  if (!result.ok) {
+    res.status(429).json({
+      error: 'daily_budget_exceeded',
+      message: result.message,
+      used: result.used,
+      limit: result.limit,
+      resetsAt: result.resetsAt,
+    });
+    return;
+  }
+
+  res.status(201).json({
+    run: result.run,
+    budget: { bucket: result.bucket, remaining: result.remaining, limit: config.dailyRunBudget },
+  });
+}
+
 export function createRunRoutes(deps: RunRouteDeps): Router {
   const { db, bus, executor, config } = deps;
   const router = Router();
@@ -136,30 +164,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       },
     );
 
-    if (!result.ok && result.reason === 'in_progress') {
-      res.status(409).json({
-        error: 'run_in_progress',
-        message: `"${result.active.prompt.slice(0, 80)}" is already running`,
-        activeRunId: result.active.id,
-      });
-      return;
-    }
-
-    if (!result.ok) {
-      res.status(429).json({
-        error: 'daily_budget_exceeded',
-        message: result.message,
-        used: result.used,
-        limit: result.limit,
-        resetsAt: result.resetsAt,
-      });
-      return;
-    }
-
-    res.status(201).json({
-      run: result.run,
-      budget: { bucket: result.bucket, remaining: result.remaining, limit: config.dailyRunBudget },
-    });
+    sendAccepted(res, result, config);
   });
 
   // ---- read ---------------------------------------------------------------
@@ -221,6 +226,39 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       });
     }
     res.json({ ok: true, signalled });
+  });
+
+  /**
+   * Retry a failed run: same prompt, same conversation, a fresh attempt.
+   *
+   * Only failed runs qualify — retrying a completed one would just duplicate
+   * it, and retrying an active one would violate the one-at-a-time rule. The
+   * new run goes through the normal acceptance path, so it costs one daily run
+   * like any other mission.
+   */
+  router.post('/runs/:id/retry', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    if (run.status !== 'failed') {
+      res.status(400).json({
+        error: 'not_failed',
+        message: `Only a failed run can be retried (this one is ${run.status})`,
+      });
+      return;
+    }
+
+    const result = await acceptRun(
+      { db, executor, config },
+      {
+        prompt: run.prompt,
+        kind: run.kind,
+        conversationId: run.conversationId,
+      },
+    );
+    sendAccepted(res, result, config);
   });
 
   // ---- the live stream ----------------------------------------------------

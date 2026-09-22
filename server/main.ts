@@ -19,6 +19,7 @@ import type { Engine } from './engine/types.js';
 import { acceptRun } from './accept.js';
 import { WhatsAppService } from './whatsapp/lifecycle.js';
 import { sendDonePing } from './whatsapp/doneping.js';
+import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
 
 /**
  * Pick the engine.
@@ -163,6 +164,42 @@ async function boot(): Promise<void> {
     // Nothing to say: either polling is on, or it is off on purpose.
   } else if (!whatsapp.running) {
     console.log(`[boot] whatsapp: ${whatsapp.health().detail}`);
+  }
+
+  // ---- reminders ----------------------------------------------------------
+  // Opt-in twice over: the table and the API exist regardless, but the loop
+  // that turns a due reminder into a run only exists with REMINDERS_ENABLED.
+  // A firing reminder spends one daily run through the normal acceptance path,
+  // so an in-flight task or a spent budget just defers it to the next tick.
+  if (config.remindersEnabled) {
+    const fireDue = async (): Promise<void> => {
+      try {
+        const due = await claimDueReminders(db);
+        for (const reminder of due) {
+          const result = await acceptRun(
+            { db, executor, config },
+            { prompt: `Reminder: ${reminder.text}`, kind: 'api' },
+          );
+          if (result.ok) {
+            await markReminderFired(db, reminder.id, result.run.id);
+            console.log(`[reminders] fired ${reminder.id} as ${result.run.id}`);
+          } else {
+            await releaseReminder(db, reminder.id);
+            console.log(
+              `[reminders] deferred ${reminder.id} (${result.reason}); retrying next tick`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error('[reminders] tick failed:', (err as Error).message);
+      }
+    };
+    const timer = setInterval(() => void fireDue(), 60_000);
+    timer.unref?.();
+    void fireDue();
+    console.log('[boot] reminders: scheduler on (60s tick)');
+  } else {
+    console.log('[boot] reminders: scheduler off — set REMINDERS_ENABLED=true to fire reminders');
   }
 
   const server = app.listen(config.port, '0.0.0.0', () => {

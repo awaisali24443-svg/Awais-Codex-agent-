@@ -368,6 +368,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .plan-num { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; flex: none; }
 .plan-row.done .plan-label { color: var(--muted); text-decoration: line-through; }
+
+/* Retry button on a failed task's notice. */
+.retry-btn {
+  margin-left: auto; padding: 7px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font-size: 13px; cursor: pointer; flex: none;
+}
+.retry-btn:disabled { opacity: .5; cursor: default; }
+.retry-btn:not(:disabled):active { background: var(--surface-2); }
 .send {
   margin-left: auto;
   display: grid; place-items: center;

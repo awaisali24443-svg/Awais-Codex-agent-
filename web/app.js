@@ -573,7 +573,30 @@ function finishCard(card, outcome, data = {}) {
 
   if (outcome === 'failed') {
     const message = humanError(data.errorType, data.errorMessage);
-    renderNotice(message, true, 'warn');
+    const noticeNode = renderNotice(message, true, 'warn');
+    // A failed complex task is usually worth one more attempt, not a retyped
+    // prompt. The retry starts a fresh run with the same prompt in the same
+    // conversation; it costs one daily run like any other mission.
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'retry-btn';
+    retryBtn.textContent = 'Retry this task';
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      try {
+        const { run } = await api(`/api/runs/${card.runId}/retry`, { method: 'POST' });
+        state.conversationId = run.conversationId;
+        noticeNode.remove();
+        setRunning(true);
+        attach(run.id, 0);
+        loadConversations();
+        loadBudget();
+      } catch (err) {
+        retryBtn.disabled = false;
+        renderNotice(err.body?.message || err.message || 'Could not retry.', true, 'warn');
+      }
+    });
+    noticeNode.append(retryBtn);
   } else if (outcome === 'cancelled') {
     renderNotice('Stopped. Whatever it produced is kept below.', false, 'info');
   }

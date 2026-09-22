@@ -14,6 +14,7 @@ import type { EventBus } from './events.js';
 import type { RunExecutor } from './executor.js';
 import { DISABLED_HEALTH, type PollerHealth } from './whatsapp/poller.js';
 import { createRunRoutes } from './routes/runs.js';
+import { createReminderRoutes } from './routes/reminders.js';
 import { createMemoryRoutes } from './routes/memory.js';
 import { createArtifactRoutes } from './routes/artifacts.js';
 import { createSettingsRoutes } from './routes/settings.js';
@@ -206,6 +207,7 @@ export function createApp(deps: AppDeps): Express {
   });
 
   app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config }));
+  app.use('/api', createReminderRoutes({ db }));
   app.use('/api', createMemoryRoutes({ db }));
   app.use('/api', createArtifactRoutes({ db, config }));
   app.use(

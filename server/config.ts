@@ -50,6 +50,13 @@ export interface AppConfig {
    */
   pollerEnabled: boolean;
   /**
+   * Whether the reminder scheduler runs. Opt-in and off by default: a reminder
+   * firing spends one of the day's runs, so nothing may schedule itself into
+   * the budget without the operator asking. Set REMINDERS_ENABLED=true to turn
+   * the 60-second firing loop on.
+   */
+  remindersEnabled: boolean;
+  /**
    * 'key'  - the API needs a session, obtained once from a ?k= link.
    * 'open' - no check at all. Public internet plus a spendable daily quota.
    */
@@ -244,6 +251,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // the honest answer available at this point: a token is reachable and
     // polling was not switched off.
     pollerEnabled: pollerMode !== 'off' && hasEnvToken,
+    remindersEnabled: ['1', 'true', 'yes', 'on'].includes(
+      (env.REMINDERS_ENABLED ?? '').trim().toLowerCase(),
+    ),
     authMode,
     accessKey,
     dailyRunBudget,
