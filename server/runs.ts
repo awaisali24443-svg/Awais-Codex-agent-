@@ -449,3 +449,43 @@ export async function listMessages(
     createdAt: toIso(r.created_at) as string,
   }));
 }
+
+/**
+ * Recent-turn context for the engine.
+ *
+ * Every run's prompt is only the newest message, so a follow-up like "make it
+ * shorter" arrives with no idea what "it" was. This builds a compact transcript
+ * of the conversation's recent turns (wire-only, like the memory block — the
+ * stored prompt is never rewritten) so the agent knows what the conversation
+ * is about. The current run's own opening message is excluded because it is
+ * already the prompt.
+ *
+ * Bounded on purpose: at most HISTORY_TURNS messages, each truncated, so a
+ * long conversation cannot blow up the token cost of every new run.
+ */
+export const HISTORY_TURNS = 12;
+const HISTORY_CHARS_PER_TURN = 600;
+
+export async function buildHistoryBlock(
+  db: Db,
+  conversationId: string | null,
+  excludeRunId: string,
+): Promise<string> {
+  if (!conversationId) return '';
+  const rows = await db.query<{ role: string; content: string }>(
+    `SELECT role, content FROM messages
+      WHERE conversation_id = $1 AND run_id <> $2
+      ORDER BY created_at DESC, id DESC
+      LIMIT $3`,
+    [conversationId, excludeRunId, HISTORY_TURNS],
+  );
+  if (rows.length === 0) return '';
+  const lines = rows.reverse().map((r) => {
+    const who = r.role === 'assistant' ? 'assistant' : 'user';
+    const text = r.content.length > HISTORY_CHARS_PER_TURN
+      ? r.content.slice(0, HISTORY_CHARS_PER_TURN) + '…'
+      : r.content;
+    return `${who}: ${text}`;
+  });
+  return `[conversation — recent turns, oldest first]\n${lines.join('\n')}`;
+}

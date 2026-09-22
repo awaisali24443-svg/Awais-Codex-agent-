@@ -28,7 +28,7 @@
 import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import { EngineAbortedError, type Engine, type EngineContext, type LogLevel } from './engine/types.js';
-import { emitEvent, finishRun, setRunStatus, type Run, type TerminalStatus } from './runs.js';
+import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type Run, type TerminalStatus } from './runs.js';
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withPlanning } from './planning.js';
@@ -250,7 +250,16 @@ export class RunExecutor {
       // stored prompt stays exactly what the operator wrote — the memory block
       // exists only on the wire to the model, so history and search never show
       // a mission that "said" things the operator did not type.
-      const memory = await applyMemory(this.deps.db, run.prompt);
+      //
+      // Same wire-only trick for conversation awareness: the recent turns of
+      // this conversation ride along, so a follow-up ("make it shorter")
+      // arrives knowing what "it" was. A first message has no history, so
+      // nothing changes for it.
+      const history = await buildHistoryBlock(this.deps.db, run.conversationId, run.id);
+      const memory = await applyMemory(
+        this.deps.db,
+        history ? `${history}\n\n${run.prompt}` : run.prompt,
+      );
 
       await writer.write('run.started', {
         kind: run.kind,

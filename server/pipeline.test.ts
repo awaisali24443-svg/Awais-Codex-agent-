@@ -28,7 +28,7 @@ import { migrate } from './migrate.js';
 import { loadConfig, type AppConfig } from './config.js';
 import { EventBus } from './events.js';
 import { RunExecutor } from './executor.js';
-import { createRun, getRun } from './runs.js';
+import { createRun, finishRun, getRun, buildHistoryBlock } from './runs.js';
 import { addMemory, clearMemories, listMemories, updateProfile } from './memory.js';
 import { artifactsRoot, listArtifacts, recordArtifact } from './artifacts.js';
 import { createArtifactRoutes } from './routes/artifacts.js';
@@ -396,5 +396,29 @@ describe('artifacts over HTTP', () => {
     } finally {
       await close();
     }
+  });
+});
+
+describe('conversation awareness', () => {
+  test('a follow-up run sees the recent turns but not its own prompt', async () => {
+    const first = await createRun(db, { prompt: 'plan my expo booth', engine: 'recording' });
+    await finishRun(db, first.id, { status: 'completed', text: 'Here is your booth plan.' });
+
+    const followup = await createRun(db, {
+      prompt: 'make it cheaper',
+      engine: 'recording',
+      conversationId: first.conversationId,
+    });
+
+    const block = await buildHistoryBlock(db, first.conversationId, followup.id);
+    assert.ok(block.includes('user: plan my expo booth'), 'sees the earlier question');
+    assert.ok(block.includes('assistant: Here is your booth plan.'), 'sees the earlier answer');
+    assert.ok(!block.includes('make it cheaper'), 'does not repeat its own prompt');
+  });
+
+  test('a first message gets no history block', async () => {
+    const run = await createRun(db, { prompt: 'hello', engine: 'recording' });
+    const block = await buildHistoryBlock(db, run.conversationId, run.id);
+    assert.equal(block, '');
   });
 });
