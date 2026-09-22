@@ -41,6 +41,12 @@ export interface AppDeps {
    */
   settings: SettingsStore;
   secrets: SecretsStore;
+  /**
+   * Called after a credential is stored or removed, so whatever consumes it can
+   * react — for the WhatsApp token, that means starting or stopping the poller
+   * rather than waiting for a restart. Failures here must not fail the save.
+   */
+  onCredentialChanged?: (name: string) => Promise<void> | void;
   /** Runtime status, filled in by the boot sequence. */
   status: {
     startedAt: number;
@@ -198,7 +204,15 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config }));
   app.use('/api', createMemoryRoutes({ db }));
   app.use('/api', createArtifactRoutes({ db, config }));
-  app.use('/api', createSettingsRoutes({ settings: deps.settings, secrets: deps.secrets }));
+  app.use(
+    '/api',
+    createSettingsRoutes({
+      settings: deps.settings,
+      secrets: deps.secrets,
+      pollerHealth,
+      onCredentialChanged: deps.onCredentialChanged,
+    }),
+  );
 
   // ---- the app itself -----------------------------------------------------
 

@@ -18,6 +18,7 @@
  */
 import { Router, type Request, type Response } from 'express';
 
+import type { PollerHealth } from '../whatsapp/poller.js';
 import {
   SECRET_NAMES,
   SETTINGS,
@@ -33,6 +34,10 @@ import {
 export interface SettingsRouteDeps {
   settings: SettingsStore;
   secrets: SecretsStore;
+  /** Live WhatsApp connection state, so the panel can say whether it is connected. */
+  pollerHealth?: () => PollerHealth;
+  /** Lets the owner of a credential react to it changing. Never throws. */
+  onCredentialChanged?: (name: string) => Promise<void> | void;
 }
 
 /** Wrap an async handler so a rejection becomes a 500 instead of a hung socket. */
@@ -49,8 +54,59 @@ function handle(
   };
 }
 
-export function createSettingsRoutes({ settings, secrets }: SettingsRouteDeps): Router {
+export function createSettingsRoutes({
+  settings,
+  secrets,
+  pollerHealth,
+  onCredentialChanged,
+}: SettingsRouteDeps): Router {
   const router = Router();
+
+  /**
+   * Tell the owner of a credential that it changed. Deliberately not fatal: the
+   * value is already stored, and a connection that fails to start reports its
+   * own error through `pollerHealth` — failing the request would hide both.
+   */
+  /**
+   * The connection, in one shape, for every response that reports it.
+   *
+   * A write and a read must agree: the first version returned the poller's raw
+   * health after saving and a shaped block on the panel, so the same field meant
+   * two things depending on which call you made.
+   */
+  const whatsappState = (): {
+    mode: 'connected' | 'disconnected' | 'error' | 'unknown';
+    state: string;
+    detail: string | null;
+    agentId: string | null;
+    lastPollAt: string | null;
+    lastError: string | null;
+  } => {
+    const poller = pollerHealth?.();
+    if (!poller) {
+      return { mode: 'unknown', state: 'disabled', detail: null, agentId: null, lastPollAt: null, lastError: null };
+    }
+    return {
+      // 'connected' has to mean *polling*, not "a poller object exists" — the
+      // first version said connected while the state beside it said disabled.
+      mode:
+        poller.state === 'running' ? 'connected' : poller.state === 'error' ? 'error' : 'disconnected',
+      state: poller.state,
+      detail: poller.detail ?? null,
+      agentId: poller.agentId,
+      lastPollAt: poller.lastPollAt,
+      lastError: poller.lastError,
+    };
+  };
+
+  const notify = async (name: string): Promise<void> => {
+    if (!onCredentialChanged) return;
+    try {
+      await onCredentialChanged(name);
+    } catch (err) {
+      console.error(`[settings] reacting to ${name} failed:`, (err as Error).message);
+    }
+  };
 
   /** Everything the UI needs to render the panel, and nothing secret. */
   router.get(
@@ -59,8 +115,12 @@ export function createSettingsRoutes({ settings, secrets }: SettingsRouteDeps): 
       res.json({
         settings: settings.list(),
         secrets: secrets.list(),
-        // So the UI can explain *why* saving a key is refused instead of
-        // showing a disabled button with no reason.
+        /**
+         * Whether the phone channel is actually connected. "Paste the API key"
+         * is the whole setup, so the panel has to show the result of that — and
+         * when it is not working, why.
+         */
+        whatsapp: whatsappState(),
         encryption: {
           available: secrets.encryptionAvailable,
           envVar: 'MASTER_KEY',
@@ -156,7 +216,8 @@ export function createSettingsRoutes({ settings, secrets }: SettingsRouteDeps): 
       try {
         // The response is the metadata, never the value that was just stored.
         const secret = await secrets.set(name, raw);
-        res.json({ ok: true, secret });
+        await notify(name);
+        res.json({ ok: true, secret, whatsapp: whatsappState() });
       } catch (err) {
         if (err instanceof SecretsUnavailableError) {
           res.status(503).json({ error: 'encryption_unavailable', message: err.message });
@@ -184,7 +245,14 @@ export function createSettingsRoutes({ settings, secrets }: SettingsRouteDeps): 
       }
 
       const { removed, source } = await secrets.remove(name);
-      res.json({ ok: true, removed, secret: secrets.describe(name), source });
+      await notify(name);
+      res.json({
+        ok: true,
+        removed,
+        secret: secrets.describe(name),
+        source,
+        whatsapp: whatsappState(),
+      });
     }),
   );
 

@@ -6,7 +6,6 @@
  * and no one-off jobs, so schema setup must happen here on every boot.
  */
 import { loadConfig, type AppConfig } from './config.js';
-import { DISABLED_HEALTH } from './whatsapp/poller.js';
 import { createDb, markOrphanedRuns, pruneRunEvents, type Db } from './db.js';
 import { pruneArtifacts } from './artifacts.js';
 import { createStores, type SecretsStore } from './settings.js';
@@ -18,9 +17,7 @@ import { ScriptedEngine } from './engine/scripted.js';
 import { AntigravityEngine } from './engine/antigravity.js';
 import type { Engine } from './engine/types.js';
 import { acceptRun } from './accept.js';
-import { WhatsAppClient } from './whatsapp/api.js';
-import { WhatsAppPoller } from './whatsapp/poller.js';
-import { WhatsAppSender } from './whatsapp/sender.js';
+import { WhatsAppService } from './whatsapp/lifecycle.js';
 
 /**
  * Pick the engine.
@@ -119,40 +116,17 @@ async function boot(): Promise<void> {
   console.log(`[boot] engine: ${config.engineName}`);
 
   // ---- WhatsApp -----------------------------------------------------------
-  // One long-poll loop talks to the phone; the same acceptance path the web UI
-  // uses decides whether a task may run. The flag was already validated above
-  // so a misconfigured deployment fails here, at boot, rather than at 3am.
-  let poller: WhatsAppPoller | null = null;
-  const whatsappToken = secrets.get('whatsapp_token');
-  if (config.pollerEnabled && whatsappToken) {
-    const client = new WhatsAppClient({
-      // Resolved per request, so replacing the token in Settings is picked up
-      // by the next poll instead of needing a redeploy.
-      token: () => secrets.get('whatsapp_token'),
-      baseUrl: config.whatsappApiBase || undefined,
-    });
-    poller = new WhatsAppPoller({
-      db,
-      bus,
-      client,
-      executor,
-      config,
-      sender: new WhatsAppSender(client, (message, level) =>
-        level === 'error' ? console.error(`[wa] ${message}`) : console.log(`[wa] ${message}`),
-      ),
-      accept: (input) => acceptRun({ db, executor, config }, input),
-      log: (message, level) =>
-        level === 'error' ? console.error(message) : console.log(message),
-    });
-  } else if (config.pollerEnabled) {
-    // Reached when MASTER_KEY allowed the boot to get this far without an
-    // environment token. Name both places it could have been, because "it is
-    // not set" is confusing when the operator just saved it in Settings.
-    throw new Error(
-      'POLLER_ENABLED is set but no WhatsApp token was found — set WHATSAPP_TOKEN ' +
-        'in the environment, or store it under Settings (which needs MASTER_KEY).',
-    );
-  }
+  // Polling is driven by the credential, not by a variable: the service starts
+  // the loop when a token exists and stops it when one is removed, so pasting
+  // the agent's API key WhatsApp generated is the entire setup.
+  const whatsapp = new WhatsAppService({
+    db,
+    bus,
+    executor,
+    config,
+    secrets,
+    accept: (input) => acceptRun({ db, executor, config }, input),
+  });
 
   const app = createApp({
     config,
@@ -161,29 +135,33 @@ async function boot(): Promise<void> {
     executor,
     settings,
     secrets,
+    // A stored credential must take effect on the connection that uses it —
+    // that is the difference between a settings screen and a settings file.
+    onCredentialChanged: async () => {
+      await whatsapp.sync('credential changed');
+    },
     status: {
       startedAt,
       migrationsApplied: migration.applied.length,
       orphanedRuns: orphaned,
-      poller: () => poller?.health() ?? DISABLED_HEALTH,
+      poller: () => whatsapp.health(),
     },
   });
 
-  if (poller) {
-    try {
-      const resumed = await poller.reconcile();
-      if (resumed > 0) console.log(`[boot] whatsapp: resumed ${resumed} unfinished message(s)`);
-    } catch (err) {
-      // A broken reconcile must not stop the server: the web app still works,
-      // and the rows stay queued for the next boot.
-      console.error('[boot] whatsapp reconcile failed:', (err as Error).message);
-    }
-    poller.start();
+  const whatsappSync = await whatsapp.sync('boot');
+  if (whatsappSync === 'unchanged' && !whatsapp.health().detail && !whatsapp.running) {
+    // Nothing to say: either polling is on, or it is off on purpose.
+  } else if (!whatsapp.running) {
+    console.log(`[boot] whatsapp: ${whatsapp.health().detail}`);
   }
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[boot] listening on http://0.0.0.0:${config.port}`);
-    console.log(`[boot] health: /healthz   readiness: /readyz   poller: ${poller ? 'running' : 'disabled'}`);
+    console.log(
+      `[boot] health: /healthz   readiness: /readyz   poller: ${
+        whatsapp.isPolling ? 'running' : 'stopped'
+      }`,
+    );
     if (config.authMode === 'open') {
       console.log('[boot] access: open — no key needed (set ACCESS_KEY to require one)');
     } else {
@@ -218,7 +196,7 @@ async function boot(): Promise<void> {
     // Stop the long poll first: it holds a request open for up to 25 seconds,
     // and a message arriving during shutdown belongs to the next boot's
     // reconcile rather than to a half-dead process.
-    if (poller) await poller.stop();
+    await whatsapp.shutdown();
 
     // Abort runs before closing the pool. Each cancellation writes a terminal
     // event, which also lets its SSE stream end on its own — otherwise those

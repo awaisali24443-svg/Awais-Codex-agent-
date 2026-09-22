@@ -279,6 +279,70 @@ Known limitation, unchanged: with no `DATABASE_URL`, dev storage is in-memory PG
 
 ---
 
+## 7c. The third pass — connecting WhatsApp for real, and where the app stands
+
+### The platform this talks to, confirmed
+
+The phone channel is the **WhatsApp Agent Platform** (`api.whatsapp.com/agent/v1`), which is the
+API behind the *third-party agents* feature WhatsApp started rolling out on 4 September 2026
+(Android beta 2.26.35.3; terms updated 25 August 2026). It is not the old Business/webhook API:
+
+* The user creates the agent **inside WhatsApp** (Settings → Agents → Create an agent, name and
+  avatar, up to five), and WhatsApp **generates the API key** that the hosting service uses.
+* An agent can only message the account that created it — there is no way to message an
+  arbitrary number, which is why our replies go back to the inbound message's `from`.
+* Transport is a **long poll we make** (`get_updates` with an offset), not a webhook Meta posts
+  to us. Sends, read receipts and typing are the other side of it.
+* One-to-one chats only; agent chats are **not** end-to-end encrypted, and the rollout is still
+  limited by country and account.
+
+Our client already matched that shape (endpoint, `Bearer` token, long poll with offsets, no
+retry on send, typing that expires after 25s, per-endpoint rate discipline). What it did *not*
+match was the setup story: the poller was built once at boot and only if `WHATSAPP_TOKEN`
+happened to be in the environment, and `POLLER_ENABLED` defaulted to false. So "paste the API
+key WhatsApp gave you" — the entire setup the feature asks for — did nothing until the next
+deploy. **Fixed in this pass:**
+
+* `server/whatsapp/lifecycle.ts` owns the connection: `poll ⇔ POLLER_ENABLED is not false AND a
+  token exists`. It is the only place that starts or stops the loop, it serialises overlapping
+  credential changes, and it stops the old loop *before* a new one could exist (a second poller
+  on one agent is a 409 from the platform, i.e. a connection nobody can take over).
+* `POLLER_ENABLED` is now opt-out: unset means "poll whenever a token exists"; `false` remains
+  the hard stop for the second host; `true` means a token must be reachable at boot, and is
+  still the silent-spin error when nothing could ever supply one.
+* `PUT /api/settings/secrets/whatsapp_token` returns the resulting connection state, so the
+  panel can say *connected* — or name the platform's error (a wrong key connects, fails the
+  first poll, and is reported as `state: 'error'` with `lastError`, rather than a 500 that hides
+  both). Removing the key stops the poll immediately.
+* The Settings panel shows the connection, and `/readyz` reports `poller: running`.
+
+**14 new tests** drive this through the real HTTP surface against a fake platform: the key
+starts the poll and real requests arrive with `Bearer <token>`; removal leaves nothing polling;
+a wrong key is stored and reported as an error; `POLLER_ENABLED=false` stores the key but keeps
+this host quiet; an environment token takes over again when the stored one is deleted.
+
+### How complete is it
+
+| Area | Built | What is missing |
+|---|---|---|
+| Mission loop — real engine, SSE, durable replay, cancel, retry ladder, idle watchdog | **100%** | Nothing in the code. **No mission has run against a live `GEMINI_API_KEY`** — every test uses a fake server |
+| Storage — Postgres/PGlite, migrations, orphan recovery, retention | **100%** | |
+| Auth — `?k=` link, session, bearer, open mode, dev fallback | **100%** | |
+| Budget — per-channel, database-enforced, live-configurable | **100%** | |
+| Memory — extraction, recall, profile, API, prompt injection | **100%** | |
+| Artifacts — record, lazy fetch, download, cache, prune | **95%** | Uploading a file *into* a run; deleting from the UI |
+| Settings & secrets — live config, AES-256-GCM store | **95%** | Only the settings and credentials something actually reads |
+| WhatsApp — connect, poll, relay, format, commands | **90%** | **Media both ways**: no photo in, no APK back to the phone |
+| PWA, CI, Render, health, docs | **100%** | |
+| GitHub export | **0%** | v1 had token handling and a repo list; v2 never ported it |
+| Legacy v1 tree | not removed | Kept as reference; git history preserves it either way |
+
+**Overall ≈ 90%** of what v1 promised, plus the entire §8 plan except GitHub export. Ranked by
+what a user would feel: (1) WhatsApp media, (2) live agent verification with a real key,
+(3) GitHub export, (4) deleting the v1 tree.
+
+---
+
 ## 8. What has since been done (continuation pass)
 
 Everything in §6's blocker list and the first four items of §7 are addressed. The suite went from **112 to 193 tests**, all passing; `npm run lint` is clean and `npm run build` produces a server bundle that boots.

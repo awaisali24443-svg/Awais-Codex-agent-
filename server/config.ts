@@ -32,7 +32,22 @@ export interface AppConfig {
   /** Optional hard token ceiling for one interaction. 0 = uncapped. */
   antigravityMaxTokens: number;
 
-  /** Only one process may long-poll a WhatsApp agent. */
+  /**
+   * What the operator asked for, from POLLER_ENABLED:
+   *
+   *   'auto' (default) - poll whenever a token is available, from the
+   *                      environment or from Settings. Pasting the agent's API
+   *                      key is the whole setup step.
+   *   'on'             - the same, but a token must be reachable at boot.
+   *   'off'            - never poll. Exactly one process may long-poll an
+   *                      agent, so this is how a second host stays quiet.
+   */
+  pollerMode: 'auto' | 'on' | 'off';
+  /**
+   * Resolved state: whether the poller should be running *now*. Kept up to date
+   * by the WhatsApp service as tokens come and go, so it answers "is polling
+   * happening" rather than "was a variable set".
+   */
   pollerEnabled: boolean;
   /**
    * 'key'  - the API needs a session, obtained once from a ?k= link.
@@ -101,21 +116,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push('MASTER_KEY must be 64 hex characters (32 bytes) — e.g. `openssl rand -hex 32`');
   }
 
-  const pollerEnabled = readBool(env.POLLER_ENABLED, false);
+  /**
+   * Polling is opt-*out*, not opt-in. The agent's API key is the only thing the
+   * WhatsApp third-party-agent feature asks for: the user generates it in the
+   * app (Settings -> Agents -> Chat info -> API key) and pastes it in. Requiring
+   * a second environment variable on top of that would be a setup step that
+   * exists only in our implementation.
+   */
+  const pollerRaw = (env.POLLER_ENABLED ?? '').trim().toLowerCase();
+  let pollerMode: AppConfig['pollerMode'] = 'auto';
+  if (['1', 'true', 'yes', 'on'].includes(pollerRaw)) pollerMode = 'on';
+  else if (['0', 'false', 'no', 'off'].includes(pollerRaw)) pollerMode = 'off';
+  else if (pollerRaw !== '') {
+    problems.push(`POLLER_ENABLED must be true/false (got "${env.POLLER_ENABLED}")`);
+  }
+
   const hasEnvToken = Boolean((env.WHATSAPP_TOKEN ?? '').trim());
   /**
    * A poller with no token would hammer the platform with unauthenticated
    * requests, so this is worth failing over — but "no token in the environment"
-   * is no longer the same as "no token": the encrypted store can hold one, and
-   * that store needs MASTER_KEY to exist at all. So the hard failure is kept
-   * exactly where the answer is knowable here (no MASTER_KEY means nothing can
-   * have been stored), and otherwise the boot sequence re-checks after loading
-   * secrets, where it can name both places the token might live.
+   * is not the same as "no token": the encrypted store can hold one, and that
+   * store needs MASTER_KEY to exist at all. So the hard failure stays where the
+   * answer is knowable here — explicitly requested, and no token reachable from
+   * either place. Otherwise the service waits for a key to be stored, and says
+   * so on /readyz rather than at 3am.
    */
-  if (pollerEnabled && !hasEnvToken && !masterKey) {
+  if (pollerMode === 'on' && !hasEnvToken && !masterKey) {
     problems.push(
-      'POLLER_ENABLED=true but WHATSAPP_TOKEN is empty — the poller would spin. ' +
-        'Set WHATSAPP_TOKEN, or set MASTER_KEY and store it in Settings.',
+      'POLLER_ENABLED=true but WHATSAPP_TOKEN is empty and MASTER_KEY is not set — ' +
+        'the poller would spin. Set WHATSAPP_TOKEN, or set MASTER_KEY and store the ' +
+        'agent API key in Settings.',
     );
   }
 
@@ -209,7 +239,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     antigravityAgent: (env.ANTIGRAVITY_AGENT ?? 'antigravity-preview-09-2026').trim(),
     antigravityApiBase: (env.ANTIGRAVITY_API_BASE ?? '').trim(),
     antigravityMaxTokens: readInt(env.ANTIGRAVITY_MAX_TOKENS, 0),
-    pollerEnabled,
+    pollerMode,
+    // Resolved for real by the WhatsApp service once secrets are loaded; this is
+    // the honest answer available at this point: a token is reachable and
+    // polling was not switched off.
+    pollerEnabled: pollerMode !== 'off' && hasEnvToken,
     authMode,
     accessKey,
     dailyRunBudget,

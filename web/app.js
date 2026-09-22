@@ -901,11 +901,24 @@ function renderSettings() {
       </div>`;
   });
 
+  // Whether the phone channel is actually connected. "Paste the API key" is the
+  // whole setup, so the panel shows the result of having done it — including the
+  // reason when it is not working, which is the difference between "it is off"
+  // and "it is broken".
+  const whatsapp = data.whatsapp;
+  const whatsappNote = !whatsapp
+    ? ''
+    : whatsapp.state === 'running'
+      ? `<p class="setting-note"><b>WhatsApp connected</b>${whatsapp.agentId ? ` as ${escapeHtml(whatsapp.agentId)}` : ''}. Text it a task and it answers here too.</p>`
+      : whatsapp.state === 'error'
+        ? `<p class="setting-note bad"><b>WhatsApp cannot connect.</b> ${escapeHtml(whatsapp.lastError || 'The platform refused the key.')} Generate a new API key in WhatsApp → Settings → Agents, and replace it here.</p>`
+        : `<p class="setting-note">${escapeHtml(whatsapp.detail || 'WhatsApp is not connected.')}</p>`;
+
   const encryptionNote = data.encryption.available
     ? `<p class="setting-note">Keys are encrypted with MASTER_KEY before they are stored, and are never sent back to this screen — only a short fingerprint is.</p>`
     : `<p class="setting-note bad">${escapeHtml(data.encryption.hint || 'Storing secrets is unavailable.')}</p>`;
 
-  el.settingsBody.innerHTML = `${rows.join('')}<p class="setting-note">Changes apply immediately — no redeploy.</p>${secrets.join('')}${encryptionNote}`;
+  el.settingsBody.innerHTML = `${rows.join('')}<p class="setting-note">Changes apply immediately — no redeploy.</p>${secrets.join('')}${whatsappNote}${encryptionNote}`;
 
   for (const input of el.settingsBody.querySelectorAll('.setting-input')) {
     input.addEventListener('change', () => saveSetting(input));
@@ -970,12 +983,24 @@ async function saveSecret(name, value) {
     return;
   }
   try {
-    const { secret } = await api(`/api/settings/secrets/${encodeURIComponent(name)}`, {
+    const { secret, whatsapp } = await api(`/api/settings/secrets/${encodeURIComponent(name)}`, {
       method: 'PUT',
       body: JSON.stringify({ value }),
     });
     // The response is metadata; the value is deliberately not echoed anywhere.
     toast(`${secret.label} saved (${secret.fingerprint}).`);
+    // Saving the WhatsApp key connects (or fails to) immediately — say which,
+    // rather than leaving the answer to be discovered by texting it.
+    if (name === 'whatsapp_token' && whatsapp) {
+      toast(
+        whatsapp.state === 'running'
+          ? 'WhatsApp connected.'
+          : whatsapp.state === 'error'
+            ? `WhatsApp refused that key: ${whatsapp.lastError || 'check it and try again'}`
+            : whatsapp.detail || 'WhatsApp is not connected.',
+        6_000,
+      );
+    }
     await loadSettings();
   } catch (err) {
     toast(err.message || 'Could not store that key.');

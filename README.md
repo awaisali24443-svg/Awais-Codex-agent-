@@ -14,7 +14,7 @@ Powered strictly by the **Google Antigravity managed agent** (`antigravity-previ
 | **Live missions** | One prompt becomes a run: thinking, tool calls, steps and the final answer stream to the browser over SSE |
 | **Nothing is lost** | Every event is written to Postgres before it is sent, so a dropped phone connection, a closed tab or a redeploy costs you nothing — reopen and it replays what you missed |
 | **Remembers you** | Facts, preferences and standing instructions persist across sessions and conversations, and are recalled into every new mission (`server/memory.ts`) |
-| **WhatsApp** | Send a task from your phone; get an acknowledgement, a progress line if it is slow, and the answer — including `/status`, `/cancel` and `/new` |
+| **WhatsApp** | The September 2026 *third-party agents* feature: add the agent in WhatsApp, paste the API key it generates, and text it tasks. Acknowledgement, progress for slow work, the answer, plus `/status`, `/cancel`, `/new` |
 | **Real artifacts** | When the agent builds a file (APK, ZIP, tarball), it is recorded on the mission and downloadable — fetched from the sandbox on first request and cached after |
 | **Knows its limits** | A daily run budget enforced in the database, one mission at a time, typed errors (`quota_exceeded`, `auth_failed`, `agent_unavailable`), and an idle watchdog so a stalled agent frees the slot |
 | **Configurable from the app** | The Settings panel in the drawer changes the daily budget and the agent id live, and holds credentials — a key pasted there is encrypted with `MASTER_KEY` (AES-256-GCM), never sent back to the browser, and used from the next request instead of the next deploy |
@@ -149,15 +149,89 @@ curl -X POST localhost:3000/api/runs -H 'content-type: application/json' \
 
 ---
 
-## WhatsApp
+## WhatsApp (third-party agents, the September 2026 feature)
 
-1. On the phone: **Settings → Agents → Create an agent**, then **Chat info → API key**.
-2. Put that token in `WHATSAPP_TOKEN` and set `POLLER_ENABLED=true` on **one** host only.
-3. Message the agent. `/help`, `/status`, `/cancel`, `/new <task>` are understood.
+This uses the **WhatsApp Agent Platform** — the API behind the *third-party agents* that
+WhatsApp began rolling out on 4 September 2026 (Android beta 2.26.35.3, [WABetaInfo](https://wabetainfo.com/whatsapp-is-rolling-out-chats-with-third-party-agents/)).
 
-Inbound messages are written to `wa_updates` before anything else, marked read only after that, and never handled twice. Answers are read from the durable snapshot (not from memory) and converted from Markdown to WhatsApp's own syntax before sending.
+That feature is not the old Business/webhook API, and the difference matters:
+
+| | Business Cloud API (old) | Third-party agents (this) |
+|---|---|---|
+| Who talks to whom | A business to customers, via Meta's review and a registered number | **Your** agent in **your** chat, on your personal WhatsApp |
+| Who can be messaged | Any number that opted in | **Only the account that created the agent** — there is no way to message an arbitrary number |
+| Setup | Business verification, phone number, webhook URL, app secret | Name + avatar in WhatsApp, then **one API key** |
+| Transport | Meta POSTs webhooks to you | **You long-poll** `api.whatsapp.com/agent/v1` |
+
+### Connecting it
+
+1. On the phone: **Settings → Agents → Create an agent**, give it a name and an avatar.
+   (You can have up to five; removing one disconnects it but keeps the chat history.)
+2. Open the agent's chat → **Chat info → API key**. Copy it.
+3. Open this app → **drawer → Settings → WhatsApp Agent Platform token → Replace**, paste, Save.
+
+That is the whole setup. The poller starts the moment the key is stored — no restart, no
+`POLLER_ENABLED=true`, no redeploy — and the same panel then reads *WhatsApp connected*, or
+tells you why it did not (a 401 from the platform in plain words). Removing the key stops the
+poll immediately, so a revoked credential is not left looping.
+
+`WHATSAPP_TOKEN` in the environment still works and is equivalent; a key stored in Settings
+takes precedence, and deleting it hands control back to the variable. `POLLER_ENABLED=false`
+is the hard off — that is how a second host (your laptop, or a staging deploy) stays quiet,
+because the platform allows exactly **one** poller per agent and answers a second with 409.
+With no value set the poller runs whenever a token exists.
+
+Then text the agent a task. `/help`, `/status`, `/cancel`, `/new <task>` are understood.
+Progress arrives for slow tasks, the answer is chunked to the platform's 4096-character cap,
+and Markdown is converted to WhatsApp's own syntax (`*bold*`, not `**bold**`) at the boundary.
+
+### What it does and does not do
+
+* Inbound messages are written to `wa_updates` **before** anything else and marked read only
+  after that, so a crash cannot lose a task or double-handle one (the `wamid` primary key is
+  the enforcement).
+* Answers are read from the durable snapshot, not from memory, so a redeploy mid-task still
+  delivers the result.
+* Typing indicators are refreshed while a task runs — they expire after 25 seconds — and a
+  send is never retried after a 5xx, because it may already have been delivered.
+* **Text only, for now.** The platform also does media (upload/download, images, documents,
+  audio) and this build does not use it: you cannot send the agent a photo, and it cannot send
+  a built artifact back to your phone. That is the next piece of work, not a limitation of
+  the platform.
+* Agent chats are **not** end-to-end encrypted — WhatsApp says so explicitly in its terms —
+  so a task sent from the phone passes through Meta's service unencrypted, exactly as it
+  would with any third-party agent. Personal chats between people are unaffected.
+* The feature is still rolling out to a limited number of accounts in selected countries. If
+  **Settings → Agents** is not in your WhatsApp yet, neither is this channel; the web app is
+  unaffected.
 
 ---
+
+## Where it stands
+
+Honest accounting, kept up to date with the code. "Built" means the feature exists with tests
+and has been exercised at runtime; "proven live" is narrower — only a real API key can settle
+that, and the one thing still unproven is listed below.
+
+| Area | Built | Notes |
+|---|---|---|
+| Mission loop: engine, streaming, durable events, replay, cancel, retry ladder | ✅ 100% | The real Antigravity protocol is implemented against the documented endpoint; every test runs against a fake server, so **the first mission with a real `GEMINI_API_KEY` is still the proof** |
+| Storage: Postgres + migrations, PGlite for dev/test, orphan recovery, retention | ✅ 100% | |
+| Auth: `?k=` link, session cookie, bearer, open mode, dev fallback | ✅ 100% | |
+| Budget: per-channel daily cap, enforced in the database | ✅ 100% | Changeable live from Settings |
+| Memory: extraction, recall, profile, API, prompt injection | ✅ 100% | |
+| Artifacts: record, lazy fetch, download, cache, prune | ✅ 95% | No upload *into* a run, no delete from the UI |
+| Settings & secrets: live config, AES-256-GCM credentials | ✅ 95% | Two settings and two credentials — only the ones something reads |
+| WhatsApp: connect, poll, relay, format, commands | 🟡 90% | Text only; media is untouched |
+| PWA: installable, offline shell, versioned caches | ✅ 100% | |
+| Deploy & CI: Render blueprint, GitHub Actions, health checks | ✅ 100% | |
+| Docs: README, `.env.example`, `STATUS.md`, `ARCHITECTURE.md` | ✅ 100% | |
+| GitHub export: token, repo list, push | ❌ 0% | v1 had it; never ported |
+| Legacy v1 tree (`js/`, `routes/`, root `index.html`, …) | ❌ not removed | Documented as reference-only; git history keeps it |
+
+**Overall: about 90% of what v1 promised, plus the whole §8 plan from `ARCHITECTURE.md` except
+GitHub export.** The three things actually left are WhatsApp media, GitHub export, and running
+one mission against the live agent. `STATUS.md` has the file-by-file version of this.
 
 ## Repository layout
 

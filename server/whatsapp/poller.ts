@@ -53,6 +53,12 @@ export type PollerState = 'disabled' | 'running' | 'error';
 
 export interface PollerHealth {
   state: PollerState;
+  /**
+   * Why polling is not happening, in words. `disabled` on its own cannot tell
+   * "switched off on purpose" from "the key was deleted", and those need
+   * different fixes.
+   */
+  detail?: string | null;
   agentId: string | null;
   offset: number | null;
   lastPollAt: string | null;
@@ -181,6 +187,7 @@ export class WhatsAppPoller {
   health(): PollerHealth {
     return {
       state: this.state,
+      detail: null,
       agentId: this.agentId ?? this.cursor?.agentId ?? null,
       offset: this.cursor?.offset ?? null,
       lastPollAt: this.lastPollAt ? new Date(this.lastPollAt).toISOString() : null,
