@@ -363,11 +363,18 @@ export class AntigravityEngine implements Engine {
           `${this.apiBase}/interactions/${encodeURIComponent(interactionId)}`,
           { headers: { 'x-goog-api-key': this.apiKey }, signal: controller.signal },
         );
-        if (!res.ok) return;
+        if (!res.ok) {
+          emit.log(`[think-poll] poll #${pollsDone}: http ${res.status}`);
+          return;
+        }
         const data = (await res.json()) as {
           steps?: unknown[]; status?: string; output_text?: string;
         };
         const steps = Array.isArray(data?.steps) ? data.steps : [];
+        if (pollsDone === 1 && steps.length > 0 && steps[0] && typeof steps[0] === 'object') {
+          emit.log(`[think-poll] step keys: ${Object.keys(steps[0] as object).join(',')}`);
+        }
+        emit.log(`[think-poll] poll #${pollsDone}: steps=${steps.length} status=${data?.status ?? '?'}`);
         steps.forEach((s, i) => narratePolledStep(s, i));
         const st = data?.status;
         if (st === 'completed' || st === 'failed' || st === 'success') pollActive = false;
@@ -378,14 +385,18 @@ export class AntigravityEngine implements Engine {
 
     const pollLoop = (async (): Promise<void> => {
       // Wait for the first interaction id before polling.
+      emit.log('[think-poll] starting, waiting for interaction id');
       while (pollActive && !interactionId && !controller.signal.aborted) {
         await this.sleep(2000, controller.signal).catch(() => undefined);
       }
+      if (interactionId) emit.log(`[think-poll] polling ${interactionId.slice(0, 12)}…`);
+      else emit.log('[think-poll] no interaction id, polling disabled');
       while (pollActive && pollsDone < POLL_MAX && !controller.signal.aborted) {
         await this.sleep(5000, controller.signal).catch(() => undefined);
         if (!pollActive || controller.signal.aborted) break;
         await pollOnce();
       }
+      emit.log(`[think-poll] done, ${pollsDone} polls, ${seenStepIds.size} steps seen`);
     })();
     // ---- end live step polling ---------------------------------------------
 
