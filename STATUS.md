@@ -1,6 +1,8 @@
 # Awais Codex — what this branch is, and what is left to do
 
-*Read-through of every file on `arena/01a0c7ad-awais-codex-agent` (92 files), plus a full runtime pass: install, type-check, tests, production build, boot (both `tsx` and the bundled CJS server), endpoints, and a complete scripted mission over SSE.*
+*Read-through of every file on `arena/01a0c7ad-awais-codex-agent` (92 files, the branch as it stood), plus a full runtime pass: install, type-check, tests, production build, boot (both `tsx` and the bundled CJS server), endpoints, and a complete scripted mission over SSE.*
+
+> **Sections 0–7 describe the branch as it was when audited** — that is what "what is remaining" was measured against, and they are left intact so the measurement can be checked. **Section 8 lists what has since been implemented** on the same branch, with fresh numbers: 193 tests, CI green, the branch pushed and open as [PR #1](https://github.com/awaisali24443-svg/Awais-Codex-agent-/pull/1).
 
 ---
 
@@ -16,25 +18,42 @@ This branch holds **two products side by side**, and a third that is dead:
 
 The plan in §8 of `ARCHITECTURE.md` was acted on — **items 1 (auth) and 4 (tests) are genuinely done, to a high standard** — but **2 (webhook token), 3 (React stack), 5 (secrets/backup), 6 (APK) and 7 (lockfile/CI) are not**, and v2 has so far rebuilt only part of v1's feature set: the **chat, streaming, history and budget** are done far better than before, while **persistent memory, artifacts/downloads, GitHub export, the installable PWA and the APK packager have no v2 implementation at all** — several of them only as empty tables in `001_init.sql`.
 
-There are also **three concrete blockers** that stop this branch from running as documented (§5).
+There were also **three concrete blockers** that stopped this branch from running as documented (§5) — all three are now closed; see §8 for what changed after this audit, and §9 for the raw evidence trail this document was written from.
 
 ---
 
 ## 1. What the base actually is
 
-`git` facts, verified:
+`git` facts, verified after `git fetch --unshallow` — the clone handed to the agent was **shallow**, which made one linear history look like two unrelated roots; the first version of this document said "no merge base" and was wrong:
 
 ```
-$ git rev-list --parents -1 724ee0c   →  724ee0c            (no parent)
-$ git rev-list --parents -1 56de355   →  56de355            (no parent)
-$ git merge-base main HEAD            →  (nothing) NO merge base — unrelated histories
-$ git ls-tree -r main  --name-only | wc -l  →  51
-$ git ls-tree -r HEAD  --name-only | wc -l  →  92
-$ git diff --name-status main..HEAD | sort | uniq -c  →  41 A,  4 M,  0 D
-$ comm -23 <(main) <(HEAD)            →  (nothing: not one file of main is missing)
+$ git merge-base --is-ancestor main HEAD  →  yes
+$ git rev-list --parents -1 0f87213       →  0f87213 56de355      (first v2 commit, built on main)
+$ git rev-list --parents -1 724ee0c       →  724ee0c 003e5f9
+$ git log --oneline main..HEAD | wc -l    →  10
+$ gh api .../compare/main...HEAD          →  {"status":"ahead","ahead_by":10,"behind_by":0}
+$ git ls-tree -r main --name-only | wc -l →  51
+$ git ls-tree -r HEAD --name-only | wc -l →  101
 ```
 
-So: **`main` is a single root commit holding v1; this branch's HEAD (`724ee0c`) is an unrelated root commit holding v1 *plus* v2.** No shared ancestor means the branch cannot be merged into `main` with a plain `git merge` (`--allow-unrelated-histories` or a rebase would be needed) — worth knowing before opening a PR.
+One history, not two: `main` is v1's tip and the v2 commits are built straight on top of it.
+
+```
+16 commits of v1 under main … tip 56de355
+  0f87213  feat(v2): Postgres data layer, migrations, config validation, tests   ← v2 starts
+  2c2816b  feat(v2): Express app factory, single-operator auth, boot sequence
+  8c56965  feat(v2): server-owned run pipeline and the live SSE stream
+  b19c624  feat(v2): the real Antigravity engine, continuation, and the v2 entry point
+  f691889  feat(v2): no login screen — access is a key in the link
+  2638649  feat(web): Manus-style mobile UI with the live thinking stream
+  003e5f9  fix(boot): locate the web root and migrations without import.meta
+  724ee0c  feat(whatsapp): send tasks from your phone
+  89d470f  Rewrite v2: memory, artifacts, WhatsApp formatting, CI and one honest lockfile
+  a25a7f0  CI: bump actions to v5
+  9d4e475  apk-generator: real SHA-256 digests, and say it is unsigned
+```
+
+And when this audit was first written, `HEAD` was 92 files: 51 of v1, plus v2 — the v1 tree was simply never removed, which is why the two products sit side by side in one working tree.
 
 Only **four files** of v1 were edited rather than left alone:
 
@@ -151,7 +170,9 @@ Both external APIs were checked against current documentation, and both are real
 
 ---
 
-## 5. v1 capability inventory: what v2 has not rebuilt
+## 5. v1 capability inventory: what v2 had not rebuilt
+
+> *As of the audit. Memory, artifacts and the installable PWA have since been rebuilt — see §8.*
 
 `ARCHITECTURE.md` §1 lists five products bundled into the process. Measured against v2:
 
@@ -169,6 +190,8 @@ Both external APIs were checked against current documentation, and both are real
 ---
 
 ## 6. Blockers before this can run as documented
+
+> *All three are closed as of §8. Kept because the reasoning explains why `render.yaml`, dev auth and the build script look the way they do now.*
 
 **1. `render.yaml` cannot boot v2.** It still sets only `NODE_ENV`, `GEMINI_API_KEY`, `WHATSAPP_VERIFY_TOKEN`, `GITHUB_TOKEN`. `config.ts` refuses to start in production without `DATABASE_URL`, `SESSION_SECRET` (≥32) and `MASTER_KEY` (`ACCESS_KEY` ≥12 too), so the deploy dies at boot:
 
@@ -203,6 +226,8 @@ GET /api/status  -H 'authorization: Bearer <default session secret>' → 200   �
 ---
 
 ## 7. What I would do next, in order
+
+> *Steps 1–4 were carried out (plus CI, dependency pruning and the README rewrite); the remaining items are named at the end of §8.*
 
 1. **Unblock deployment and local use** (~30 min): add `DATABASE_URL`, `SESSION_SECRET`, `MASTER_KEY`, `ACCESS_KEY`, `POLLER_ENABLED` to `render.yaml`; treat an empty `ACCESS_KEY` in non-production as `AUTH_MODE=open` with a warning (or generate and print one at boot) so `npm run dev` is usable.
 2. **Fix the build**: make `vite build` target `web/` (with the service worker registered) or remove Vite and serve `web/` as-is — do not leave a build that compiles an app nobody loads.
