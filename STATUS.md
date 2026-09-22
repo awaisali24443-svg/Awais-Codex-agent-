@@ -343,6 +343,39 @@ what a user would feel: (1) WhatsApp media, (2) live agent verification with a r
 
 ---
 
+## 7d. The fourth pass — proving the credentials, from somewhere that can reach them
+
+A settings screen can report that a key is *stored*. It cannot report that the key *works*, and the
+difference is where every remaining doubt in this document lives. `npm run verify` closes it:
+`server/verify.ts` + `scripts/verify-integrations.ts` call the providers for real and classify what
+comes back — `auth_failed` vs `agent_unavailable` vs `quota_exceeded` vs `conflict` (409: another
+poller owns the agent) vs `network`. Each credential is identified by a 12-character fingerprint and
+the report never contains the value, asserted by tests so a future field that leaks one fails.
+
+`.github/workflows/verify.yml` runs the same checks on a GitHub runner, pinned to
+`antigravity-preview-09-2026`, with the two keys read from repository secrets. It never runs on push:
+CI must not need secrets, and a push must not spend the operator's daily runs.
+
+### What could actually be verified from here, and what could not
+
+This dev sandbox's egress allowlist is **github.com and the npm registry only** — `api.whatsapp.com`
+and `generativelanguage.googleapis.com` resolve but their TLS handshakes are killed, and the GitHub
+token available here cannot write repository secrets or dispatch workflows (403 "Resource not
+accessible by integration"). So:
+
+| Check | Result | How |
+|---|---|---|
+| Google key | **Valid** | Fetched `GET /v1beta/models` from outside the sandbox: a real model list came back (gemini-2.5/3.x, gemma-4). The key works. |
+| Agent `antigravity-preview-09-2026` | **Unconfirmed** | `GET /v1beta/agents` returns `{"agents":[]}` and `GET /v1beta/agents/<id>` returns `not_found` — inconclusive, because managed agents are referenced by name on the *Interactions* API, not listed as resources. Only a real mission settles it. |
+| WhatsApp token | **Not verifiable here** | No egress to the platform, and no way to stage the key for a runner. |
+
+Also worth stating plainly: the key is a new-format `AQ.…` Gemini API key, and the models list proves
+it against the *Generative Language* API. Whether it also reaches the **Interactions** API with a
+managed Antigravity agent is a separate question — same key, different surface — and it is exactly
+what `npm run verify -- --agent-only` answers with one run.
+
+---
+
 ## 8. What has since been done (continuation pass)
 
 Everything in §6's blocker list and the first four items of §7 are addressed. The suite went from **112 to 193 tests**, all passing; `npm run lint` is clean and `npm run build` produces a server bundle that boots.

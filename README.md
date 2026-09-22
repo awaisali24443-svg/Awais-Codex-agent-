@@ -207,6 +207,45 @@ and Markdown is converted to WhatsApp's own syntax (`*bold*`, not `**bold**`) at
 
 ---
 
+## Verifying your keys
+
+A settings panel can tell you a key was *stored*. Only the provider can tell you it *works*, and
+only from a machine that can reach them. That is what this does:
+
+```bash
+GEMINI_API_KEY=... WHATSAPP_TOKEN=... npm run verify            # key + agent + token (read-only)
+GEMINI_API_KEY=... WHATSAPP_TOKEN=... npm run verify -- --send  # ...and put a test message in the chat
+npm run verify -- --key-only                                    # one GET, spends nothing
+npm run verify -- --whatsapp-only                               # no mission, spends nothing
+```
+
+It calls the real APIs — no simulation — and reports each one separately, because *why* something
+failed is the useful part:
+
+| Verdict | What it means | What to do |
+|---|---|---|
+| `PASS` | The provider accepted it | — |
+| `auth_failed` | The key or token was rejected | Regenerate it (`Settings → Agents → … → API key` for WhatsApp) |
+| `agent_unavailable` | The key works, the agent id does not | Update `ANTIGRAVITY_AGENT` — its date suffix moves |
+| `quota_exceeded` / `rate_limited` | Out of allowance, or asking too often | Wait, or raise the plan |
+| `conflict` | Someone else is already polling this agent | Set `POLLER_ENABLED=false` on whichever host should be quiet |
+| `network` | Could not reach the provider at all | Run it somewhere with internet |
+| `not_configured` | Nothing to check — skipped, not failed | Set the variable |
+
+The report identifies each credential by a 12-character fingerprint and never contains the value,
+so it is safe to paste into a chat or an issue.
+
+It needs outbound internet, which a locked-down environment may not have — this project's own dev
+sandbox allows only `github.com` and the npm registry, so `npm run verify` there reports `network`
+for both providers while the keys are perfectly fine. Two places that always work:
+
+* **Your machine** — the commands above.
+* **GitHub Actions** — run the **Verify integrations** workflow (`.github/workflows/verify.yml`).
+  Add `GEMINI_API_KEY` and `WHATSAPP_TOKEN` under *Settings → Secrets and variables → Actions*,
+  then *Actions → Verify integrations → Run workflow*. It pins `antigravity-preview-09-2026`, runs
+  one real mission, and optionally sends the WhatsApp test message. Unlike CI, it never runs on
+  push, so no secret is needed for ordinary development.
+
 ## Where it stands
 
 Honest accounting, kept up to date with the code. "Built" means the feature exists with tests

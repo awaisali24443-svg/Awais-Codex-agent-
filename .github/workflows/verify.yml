@@ -1,0 +1,96 @@
+# Verify the real credentials, on demand.
+#
+# Every other workflow here runs without secrets, because the app is built to be
+# testable offline (PGlite, a fake WhatsApp platform, a fake agent). This one is
+# the exception and the point: it talks to Google and to WhatsApp, from a runner
+# that has internet, and it is the only place a credential can actually be
+# proven to work rather than merely stored.
+#
+# It never runs on push. No secret is needed for CI, and a push must not spend
+# the operator's daily runs.
+#
+# To use it:
+#   1. Add the secrets (repo → Settings → Secrets and variables → Actions):
+#        GEMINI_API_KEY   the Google AI Studio key
+#        WHATSAPP_TOKEN   the agent API key WhatsApp generated
+#      or, from a machine with the gh CLI and admin rights:
+#        gh secret set GEMINI_API_KEY   < gemini.txt
+#        gh secret set WHATSAPP_TOKEN   < whatsapp.txt
+#   2. Actions → "Verify integrations" → Run workflow.
+#   3. Delete the secrets afterwards if the keys are temporary.
+#
+# Nothing in the log contains a credential: the report identifies each key by a
+# 12-character fingerprint, and GitHub masks secret values in logs anyway.
+
+name: Verify integrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mission:
+        description: Run one real mission against the agent (spends one run of the daily quota)
+        type: boolean
+        default: true
+      send_message:
+        description: Send a test message into the agent's WhatsApp chat
+        type: boolean
+        default: true
+      prompt:
+        description: Prompt for the smoke-test mission
+        type: string
+        default: Reply with the single word: ready
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+      # Pinned deliberately: this app targets the managed Antigravity agent, and
+      # the date suffix is the one part of it that moves.
+      ANTIGRAVITY_AGENT: antigravity-preview-09-2026
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci --include=dev
+
+      - name: Explain what will be checked
+        run: |
+          {
+            echo "### Credential verification"
+            echo ""
+            echo "| check | how | spends |"
+            echo "|---|---|---|"
+            echo "| Gemini key | GET /v1beta/models | nothing |"
+            echo "| Agent \`$ANTIGRAVITY_AGENT\` | one real mission: \`${{ inputs.prompt }}\` | 1 run |"
+            echo "| WhatsApp token | read-only long poll | nothing |"
+            echo "| WhatsApp send | one message to the agent's chat | nothing |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the Gemini key and the agent
+        if: ${{ inputs.run_mission }}
+        run: npm run verify -- --agent-only --prompt "${{ inputs.prompt }}"
+
+      - name: Check the Gemini key only (no mission requested)
+        if: ${{ !inputs.run_mission }}
+        run: npm run verify -- --key-only
+
+      - name: Check the WhatsApp token
+        if: ${{ !inputs.send_message }}
+        run: npm run verify -- --whatsapp-only
+
+      - name: Check the WhatsApp token and send a test message
+        if: ${{ inputs.send_message }}
+        run: npm run verify -- --whatsapp-only --send
