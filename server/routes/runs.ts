@@ -38,6 +38,7 @@ import type { Db } from '../db.js';
 import type { EventBus, StreamEvent } from '../events.js';
 import type { RunExecutor } from '../executor.js';
 import { budgetSnapshot } from '../budget.js';
+import { listArtifacts } from '../artifacts.js';
 import { BUCKET_FOR_KIND, acceptRun } from '../accept.js';
 import {
   TERMINAL_STATUSES,
@@ -172,8 +173,23 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       res.status(404).json({ error: 'run_not_found' });
       return;
     }
-    const events = await readEvents(db, run.id, resumeFrom(req), MAX_REPLAY_EVENTS);
-    res.json({ run, events, streaming: executor.isRunning(run.id) });
+    const [events, artifacts] = await Promise.all([
+      readEvents(db, run.id, resumeFrom(req), MAX_REPLAY_EVENTS),
+      listArtifacts(db, run.id),
+    ]);
+    res.json({
+      run,
+      events,
+      streaming: executor.isRunning(run.id),
+      artifacts: artifacts.map((artifact) => ({
+        id: artifact.id,
+        name: artifact.name,
+        path: artifact.path,
+        mime: artifact.mime,
+        size: artifact.size,
+        downloadUrl: `/api/artifacts/${artifact.id}/download`,
+      })),
+    });
   });
 
   router.post('/runs/:id/cancel', async (req: Request, res: Response) => {

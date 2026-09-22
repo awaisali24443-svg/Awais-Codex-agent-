@@ -10,3 +10,6 @@ data/*.json
 data/*.tmp*
 !data/.gitkeep
 !data/agent-memory.example.json
+# Extracted sandbox snapshots and downloaded artifacts. These are whole
+# workspaces (and sometimes APKs); they must never be committed.
+data/artifacts/

@@ -37,6 +37,10 @@ const el = {
   scrim: $('scrim'),
   convos: $('convos'),
   budget: $('budget'),
+  memory: $('memory'),
+  memoryTitle: $('memory-title'),
+  memoryBody: $('memory-body'),
+  memoryToggle: $('memory-toggle'),
   topbarTitle: $('topbar-title'),
   statusDot: $('status-dot'),
   toast: $('toast'),
@@ -50,6 +54,7 @@ const state = {
   running: false,
   conversations: [],
   budget: null,
+  memory: null,
 };
 
 /* ------------------------------------------------------------------ api -- */
@@ -145,7 +150,7 @@ el.loginForm.addEventListener('submit', async (event) => {
 async function enter() {
   showApp();
   renderThread([]);
-  await Promise.allSettled([loadConversations(), loadBudget()]);
+  await Promise.allSettled([loadConversations(), loadBudget(), loadMemory()]);
 
   try {
     const { run } = await api('/api/runs/active');
@@ -265,7 +270,7 @@ function renderNotice(text, bad = false, icon = 'info') {
 }
 
 /* A run in progress is drawn as one card: thinking, then steps, then answer. */
-function createRunCard() {
+function createRunCard(runId = null) {
   const card = document.createElement('div');
   card.className = 'run';
 
@@ -287,12 +292,19 @@ function createRunCard() {
   const answer = document.createElement('div');
   answer.className = 'answer';
 
-  card.append(thinking, steps, answer);
+  // Filled at the end of the run, from the artifact record rather than from the
+  // stream, so a replayed or reopened conversation shows the same files.
+  const files = document.createElement('div');
+  files.className = 'files';
+
+  card.append(thinking, steps, answer, files);
   el.thread.append(card);
   scrollToEnd();
 
   return {
     card,
+    files,
+    runId,
     thinking,
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
@@ -446,6 +458,27 @@ function handleEvent(card, event, data) {
       }
       break;
 
+    case 'artifact':
+      addStep(card, `artifact:${data.id}`, {
+        name: `Built ${data.name || 'a file'}`,
+        detail: data.path ? String(data.path) : '',
+        icon: iconForTool(String(data.name || '')),
+        done: true,
+      });
+      break;
+
+    case 'memory.recall':
+      // Only worth a line when something was actually remembered, and phrased
+      // so it explains why the answer may sound like it knows you.
+      if (data.recalled > 0) {
+        addStep(card, 'memory', {
+          name: `Remembered ${data.recalled} thing${data.recalled === 1 ? '' : 's'} about you`,
+          icon: 'spark',
+          done: true,
+        });
+      }
+      break;
+
     case 'run.completed':
       finishCard(card, 'done');
       break;
@@ -479,6 +512,65 @@ function finishCard(card, outcome, data = {}) {
   setRunning(false);
   loadBudget();
   loadConversations();
+  loadArtifacts(card);
+  // Extraction runs after the run is closed, so give it a moment to land
+  // before asking what was learned — otherwise the list is always one behind.
+  setTimeout(loadMemory, 1_200);
+}
+
+/* Files the mission produced. Read from the artifact record, so it works the
+   same live, on replay, and months later from the history drawer — and a file
+   whose sandbox has expired still appears, with the reason it cannot be
+   fetched rather than a silently broken link. */
+async function loadArtifacts(card) {
+  if (!card.runId) return;
+  try {
+    const { artifacts } = await api(`/api/runs/${card.runId}/artifacts`);
+    card.files.innerHTML = '';
+    for (const artifact of artifacts) card.files.append(artifactChip(artifact));
+  } catch { /* the run is what matters; a missing file list is not fatal */ }
+}
+
+function artifactChip(artifact) {
+  const chip = document.createElement('button');
+  chip.className = 'file';
+  chip.type = 'button';
+  chip.innerHTML = `${iconFor('package')}<span></span>`;
+  const label = artifact.name + (artifact.size ? ` · ${formatBytes(artifact.size)}` : '');
+  chip.querySelector('span').textContent = label;
+
+  chip.addEventListener('click', async () => {
+    chip.classList.add('busy');
+    try {
+      const response = await fetch(artifact.downloadUrl, { credentials: 'same-origin' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        toast(body?.message || `Could not fetch ${artifact.name}.`);
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = artifact.name;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast(`Downloaded ${artifact.name}`);
+    } catch {
+      toast('Download failed — check your connection.');
+    } finally {
+      chip.classList.remove('busy');
+    }
+  });
+
+  return chip;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function humanError(type, message) {
@@ -520,7 +612,7 @@ function attach(runId, after = 0) {
   closeStream();
   state.runId = runId;
 
-  const card = createRunCard();
+  const card = createRunCard(runId);
   const url = `/api/runs/${runId}/stream${after ? `?after=${after}` : ''}`;
   const source = new EventSource(url, { withCredentials: true });
   state.source = source;
@@ -528,6 +620,7 @@ function attach(runId, after = 0) {
   const durable = [
     'run.started', 'log', 'tool.call', 'tool.result',
     'thinking.snapshot', 'text.snapshot', 'run.environment',
+    'artifact', 'memory.recall',
     'run.completed', 'run.failed', 'run.cancelled',
   ];
   for (const name of durable) {
@@ -788,9 +881,24 @@ function relativeTime(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/* ------------------------------------------------------------------ pwa -- */
+
+/* Installable, and usable with no network. The worker itself is network-first,
+   so this never serves a stale app while you are online — it only fills in when
+   the phone has nothing. Registration is best-effort: in an iframe, or on an
+   origin that refuses workers, the app carries on regardless. */
+function registerWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* not fatal */ });
+  });
+}
+
 /* ------------------------------------------------------------------ go --- */
 
 (async function start() {
+  registerWorker();
   try {
     await api('/api/auth/session');
     await enter();

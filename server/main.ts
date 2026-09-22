@@ -8,6 +8,7 @@
 import { loadConfig, type AppConfig } from './config.js';
 import { DISABLED_HEALTH } from './whatsapp/poller.js';
 import { createDb, markOrphanedRuns, pruneRunEvents, type Db } from './db.js';
+import { pruneArtifacts } from './artifacts.js';
 import { migrate } from './migrate.js';
 import { createApp } from './app.js';
 import { EventBus } from './events.js';
@@ -50,7 +51,10 @@ async function boot(): Promise<void> {
   const config: AppConfig = loadConfig();
 
   console.log('[boot] Awais Codex v2');
-  if (config.authMode === 'open') {
+  // Only the public case deserves a banner. A development box with no access
+  // key is open too, but nobody deployed it to the internet by accident, and
+  // config.ts has already said so once.
+  if (config.authMode === 'open' && config.isProduction) {
     console.warn('[boot] **********************************************************');
     console.warn('[boot] AUTH_MODE=open — this deployment is PUBLIC.');
     console.warn('[boot] Anyone with the URL can run missions on your quota.');
@@ -66,6 +70,13 @@ async function boot(): Promise<void> {
 
   const pruned = await pruneRunEvents(db, config.eventRetentionDays);
   if (pruned > 0) console.log(`[boot] pruned ${pruned} run event(s) older than ${config.eventRetentionDays}d`);
+
+  // Artifact files live on the ephemeral disk, so this is hygiene rather than
+  // storage management — but a disk that fills up takes the service with it.
+  const prunedArtifacts = await pruneArtifacts(db, config.artifactRetentionDays);
+  if (prunedArtifacts > 0) {
+    console.log(`[boot] pruned ${prunedArtifacts} artifact(s) older than ${config.artifactRetentionDays}d`);
+  }
 
   // Every in-flight run at boot is orphaned by definition: the process that
   // owned it is gone, and a mission cannot be resumed from a different process.
@@ -133,11 +144,16 @@ async function boot(): Promise<void> {
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[boot] listening on http://0.0.0.0:${config.port}`);
     console.log(`[boot] health: /healthz   readiness: /readyz   poller: ${poller ? 'running' : 'disabled'}`);
-    console.log(
-      config.authMode === 'open'
-        ? '[boot] access: open (no key needed)'
-        : '[boot] access: your saved ?k=... link, or the x-access-key header',
-    );
+    if (config.authMode === 'open') {
+      console.log('[boot] access: open — no key needed (set ACCESS_KEY to require one)');
+    } else {
+      console.log('[boot] access: your saved ?k=... link, or the x-access-key header');
+      // APP_URL is only useful for exactly this, so keep it honest: a real,
+      // clickable link rather than a description of where to find one.
+      if (config.appUrl) {
+        console.log(`[boot] your link: ${config.appUrl.replace(/\/+$/, '')}/?k=<ACCESS_KEY>`);
+      }
+    }
     if (!config.geminiApiKey) {
       console.warn('[boot] GEMINI_API_KEY is not set — agent runs will be refused until configured');
     }

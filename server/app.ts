@@ -14,6 +14,8 @@ import type { EventBus } from './events.js';
 import type { RunExecutor } from './executor.js';
 import { DISABLED_HEALTH, type PollerHealth } from './whatsapp/poller.js';
 import { createRunRoutes } from './routes/runs.js';
+import { createMemoryRoutes } from './routes/memory.js';
+import { createArtifactRoutes } from './routes/artifacts.js';
 import {
   checkAccessKey,
   claimAccessKey,
@@ -178,12 +180,34 @@ export function createApp(deps: AppDeps): Express {
   });
 
   app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config }));
+  app.use('/api', createMemoryRoutes({ db }));
+  app.use('/api', createArtifactRoutes({ db, config }));
 
   // ---- the app itself -----------------------------------------------------
 
   const webRoot = locateWebRoot();
   if (webRoot) {
-    app.use(express.static(webRoot, { index: false, maxAge: '1h' }));
+    app.use(
+      express.static(webRoot, {
+        index: false,
+        maxAge: '1h',
+        setHeaders: (res, filePath) => {
+          // The service worker must never be cached, or an update can be
+          // pinned for a year by a CDN or by the browser itself. The scope
+          // header lets /sw.js control the whole origin.
+          if (filePath.endsWith('sw.js')) {
+            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Service-Worker-Allowed', '/');
+            return;
+          }
+          if (filePath.endsWith('manifest.json')) {
+            res.setHeader('Content-Type', 'application/manifest+json');
+            res.setHeader('Cache-Control', 'no-cache');
+          }
+        },
+      }),
+    );
     // Any other GET is the single-page app. /api is excluded so a typo in an
     // endpoint still returns JSON rather than a page of HTML.
     app.use((req: Request, res: Response, next: NextFunction) => {

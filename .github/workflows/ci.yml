@@ -1,0 +1,64 @@
+# Continuous integration.
+#
+# Before this existed, the only gate was `npm run lint` run by hand — which
+# meant the 188-test suite, the thing that proves the stream, budget, memory and
+# WhatsApp paths still work, could be red for days without anyone noticing.
+#
+# No services, no secrets: the tests run against PGlite (PostgreSQL compiled to
+# WASM) in-process and a fake WhatsApp platform, so CI needs nothing but Node.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` is the point: it fails loudly when the lockfile and
+      # package.json disagree, which is how a "works on my machine" dependency
+      # drift gets caught before a deploy.
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build the server bundle
+        run: npm run build
+
+      # The bundle must actually run, not merely compile — the path bug this
+      # project already hit once (bundled CJS cannot see `import.meta.url`)
+      # only appears at runtime.
+      - name: Boot the built server
+        run: |
+          AUTH_MODE=open ENGINE=scripted PORT=3000 node dist/server.cjs &
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/healthz > /dev/null; then
+              echo "server is up"
+              curl -fsS http://127.0.0.1:3000/readyz
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server never became ready" >&2
+          exit 1

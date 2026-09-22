@@ -17,6 +17,7 @@ import type { EventBus, StreamEvent } from '../events.js';
 import { TERMINAL_STATUSES, getRun, readEvents } from '../runs.js';
 import type { Run } from '../runs.js';
 import type { WhatsAppSender } from './sender.js';
+import { toWhatsAppText } from './format.js';
 
 export interface RelayDeps {
   db: Db;
@@ -72,16 +73,25 @@ function elapsed(ms: number): string {
   return `${minutes}m ${seconds % 60}s`;
 }
 
-/** Compose the closing message for a terminal run. */
+/**
+ * Compose the closing message for a terminal run.
+ *
+ * The agent answers in Markdown and WhatsApp does not speak it, so the answer
+ * is converted on the way out (`format.ts`). Our own prefixes are plain text
+ * and deliberately pass through untouched — converting them would be a no-op at
+ * best and a mangled emoji-laden line at worst.
+ */
 export function closingMessage(
   outcome: RelayOutcome,
   text: string,
   errorMessage: string | null,
 ): string {
-  const body = text.trim();
+  const body = toWhatsAppText(text);
   switch (outcome) {
     case 'completed':
-      return body || '✅ Done — the agent finished without text output.';
+      // A mission can legitimately produce no prose (it built something and
+      // said nothing), and an empty bubble is worse than saying so.
+      return body || '✅ Done — the agent finished without a written answer.';
     case 'cancelled':
       return body ? `🛑 Cancelled. Partial answer:\n\n${body}` : '🛑 Cancelled.';
     case 'failed':

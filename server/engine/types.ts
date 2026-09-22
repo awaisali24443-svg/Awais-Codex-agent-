@@ -35,6 +35,12 @@ export interface EngineContext {
   toolResult(name: string, result: unknown): void;
   /** A line in the run log, surfaced in the thinking panel. */
   log(message: string, level?: LogLevel): void;
+  /**
+   * A file the mission produced — an `.apk`, `.zip`, `.tar`. Optional because
+   * not every engine has artifacts, and a context built by hand (a test, a new
+   * engine) should not have to stub one out.
+   */
+  artifact?(path: string): void;
 }
 
 export type LogLevel = 'info' | 'warn' | 'error';

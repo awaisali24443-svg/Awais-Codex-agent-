@@ -29,9 +29,39 @@ import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import { EngineAbortedError, type Engine, type EngineContext, type LogLevel } from './engine/types.js';
 import { emitEvent, finishRun, setRunStatus, type Run } from './runs.js';
+import {
+  applyMemory,
+  extractAndStoreMemories,
+  sourceForKind,
+  type MemoryProfile,
+} from './memory.js';
+import { recordArtifact } from './artifacts.js';
 
 /** How often the full text so far is written to Postgres while streaming. */
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
+
+/**
+ * Which profile fields the memory block actually carried.
+ *
+ * Recorded on the `memory.recall` event so "why did it answer like that?" has a
+ * visible answer. `updatedAt` is bookkeeping and is left out.
+ */
+function profileFieldsUsed(profile: MemoryProfile): string[] {
+  const fields: Array<[string, unknown]> = [
+    ['name', profile.name],
+    ['role', profile.role],
+    ['preferredLanguage', profile.preferredLanguage],
+    ['preferredFrameworks', profile.preferredFrameworks],
+    ['environment', profile.environment],
+    ['customDirectives', profile.customDirectives],
+  ];
+
+  return fields
+    .filter(([, value]) =>
+      Array.isArray(value) ? value.length > 0 : typeof value === 'string' && value.length > 0,
+    )
+    .map(([field]) => field);
+}
 
 export interface ExecutorDeps {
   db: Db;
@@ -213,12 +243,27 @@ export class RunExecutor {
 
     try {
       await setRunStatus(this.deps.db, run.id, 'running');
+
+      // Cross-session memory, recalled before the engine sees the prompt. The
+      // stored prompt stays exactly what the operator wrote — the memory block
+      // exists only on the wire to the model, so history and search never show
+      // a mission that "said" things the operator did not type.
+      const memory = await applyMemory(this.deps.db, run.prompt);
+
       await writer.write('run.started', {
         kind: run.kind,
         engine: engine.name,
         prompt: run.prompt,
         conversationId: run.conversationId,
       });
+
+      if (memory.applied) {
+        await writer.write('memory.recall', {
+          recalled: memory.recalled.length,
+          ids: memory.recalled.map((item) => item.id),
+          profileFields: profileFieldsUsed(memory.profile),
+        });
+      }
 
       const text = new FieldBuffer(this.snapshotIntervalMs, (value) =>
         writer.write('text.snapshot', { text: value }),
@@ -255,11 +300,32 @@ export class RunExecutor {
         log: (message, level: LogLevel = 'info') => {
           void writer.write('log', { message, level });
         },
+
+        /**
+         * A produced file. The row is written first so the durable event can
+         * carry its id — that is what lets the client offer a download link
+         * straight from the live stream instead of re-reading the whole run.
+         */
+        artifact: (filePath: string) => {
+          void recordArtifact(this.deps.db, run.id, filePath)
+            .then((artifact) => {
+              if (!artifact) return;
+              return writer.write('artifact', {
+                id: artifact.id,
+                name: artifact.name,
+                path: artifact.path,
+                mime: artifact.mime,
+              });
+            })
+            .catch((err: Error) => {
+              console.warn(`[executor] artifact record failed for ${run.id}:`, err.message);
+            });
+        },
       };
 
       let result;
       try {
-        result = await engine.run(run.prompt, ctx);
+        result = await engine.run(memory.prompt, ctx);
       } finally {
         // Runs even on failure: whatever the engine produced is still worth
         // keeping, and the closing event must not overtake it.
@@ -316,6 +382,10 @@ export class RunExecutor {
         aborted ? null : error.message,
       );
     } finally {
+      // Learning happens after the run is settled, on purpose: extraction can
+      // never delay a mission or fail one. It reads the operator's own words,
+      // so a cancelled mission teaches the same things a completed one does.
+      void extractAndStoreMemories(this.deps.db, run.prompt, sourceForKind(run.kind));
       this.active.delete(run.id);
     }
   }

@@ -371,6 +371,49 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .budget-fill { height: 100%; background: var(--ink); border-radius: 2px; transition: width .3s; }
 .budget-fill.low { background: var(--danger); }
 
+/* ---- memory: what the agent has learned about you ---- */
+.memory {
+  margin: 6px 0 4px;
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm); overflow: hidden;
+}
+.memory-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 11px 14px; font: inherit; font-size: 13px; color: var(--ink-soft);
+  background: transparent; border: 0; cursor: pointer;
+}
+.memory-title { flex: 1; text-align: left; }
+.memory-chevron { width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 2; transition: transform .2s; }
+.memory-head[aria-expanded="true"] .memory-chevron { transform: rotate(180deg); }
+.memory-body { padding: 0 14px 12px; }
+.memory-item {
+  padding: 7px 0; font-size: 13px; color: var(--ink-soft); line-height: 1.45;
+  border-top: 1px solid var(--line-soft);
+}
+.memory-item .tag {
+  display: inline-block; margin-right: 6px; padding: 1px 6px;
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); background: var(--surface-2); border-radius: 6px;
+}
+.memory-forget {
+  margin-top: 10px; padding: 7px 10px; width: 100%;
+  font: inherit; font-size: 12.5px; color: var(--danger);
+  background: transparent; border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
+}
+.memory-note { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+/* ---- artifact chips on a finished run ---- */
+.files { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.file {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; font-size: 13px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-pill); cursor: pointer; text-decoration: none;
+}
+.file:hover { background: var(--surface-2); }
+.file svg { width: 15px; height: 15px; fill: none; stroke: var(--ink-soft); stroke-width: 1.9; }
+.file.busy { opacity: .55; pointer-events: none; }
+
 .convos { flex: 1; overflow-y: auto; margin: 12px -6px 0; }
 .convo {
   display: block; width: 100%; text-align: left;

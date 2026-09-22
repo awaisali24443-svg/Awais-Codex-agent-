@@ -306,6 +306,30 @@ describe('config validation', () => {
     assert.equal(loadConfig({ ...productionEnv } as NodeJS.ProcessEnv).authMode, 'key');
   });
 
+  /**
+   * The local papercut this covers: with key mode and no key, `checkAccessKey`
+   * matches nothing, so `npm run dev` served a sign-in screen that could not be
+   * passed — every route 401, including the form that issues the session.
+   */
+  test('a local run with no key opens rather than locking you out', () => {
+    const config = loadConfig({ NODE_ENV: 'development' } as NodeJS.ProcessEnv);
+    assert.equal(config.authMode, 'open');
+    assert.equal(config.accessKey, '');
+  });
+
+  test('but asking for key mode explicitly without a key is an error', () => {
+    assert.throws(
+      () => loadConfig({ NODE_ENV: 'development', AUTH_MODE: 'key' } as NodeJS.ProcessEnv),
+      /ACCESS_KEY/,
+    );
+  });
+
+  test('a local run with a key keeps key mode', () => {
+    const config = loadConfig({ NODE_ENV: 'development', ACCESS_KEY: 'local-dev-key' } as NodeJS.ProcessEnv);
+    assert.equal(config.authMode, 'key');
+    assert.equal(config.accessKey, 'local-dev-key');
+  });
+
   test('an unknown AUTH_MODE is rejected rather than silently guessed', () => {
     assert.throws(
       () => loadConfig({ ...productionEnv, AUTH_MODE: 'yolo' } as NodeJS.ProcessEnv),

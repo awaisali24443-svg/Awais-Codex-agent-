@@ -349,6 +349,9 @@ export class AntigravityEngine implements Engine {
             if (artifact && !artifacts.has(artifact)) {
               artifacts.add(artifact);
               emit.log(`Artifact produced: ${artifact}`);
+              // First-class, not just a log line: the executor records it so
+              // the file can actually be downloaded later.
+              ctx.artifact?.(artifact);
             }
           }
 

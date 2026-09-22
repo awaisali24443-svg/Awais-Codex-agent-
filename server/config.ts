@@ -130,7 +130,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (authRaw !== 'key' && authRaw !== 'open') {
     problems.push(`AUTH_MODE must be "key" or "open" (got "${authRaw}")`);
   }
-  const authMode: AppConfig['authMode'] = authRaw === 'open' ? 'open' : 'key';
+  let authMode: AppConfig['authMode'] = authRaw === 'open' ? 'open' : 'key';
 
   // ACCESS_KEY is the name that matches what this is now. OPERATOR_PASSWORD is
   // still read so an environment configured earlier keeps working.
@@ -141,7 +141,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         'the public internet and your daily run quota. Generate one with `openssl rand -hex 24`.',
     );
   }
-  if (authMode === 'open') {
+
+  /**
+   * A key mode with no key is a locked door with no handle.
+   *
+   * `checkAccessKey` compares against an empty expected value and returns false
+   * for everything, so every request is refused and the sign-in screen can
+   * never be passed — `npm run dev` serves an app nobody can enter. Production
+   * is already covered above; this is the local case, where the honest fix is
+   * to open the door *loudly* rather than make someone debug a 401 on their own
+   * machine. Asking for key mode explicitly still gets you an error, so this
+   * can never quietly downgrade a deployment that meant to be protected.
+   */
+  if (!isProduction && authMode === 'key' && accessKey.length === 0) {
+    if (env.AUTH_MODE !== undefined) {
+      problems.push(
+        'AUTH_MODE=key needs ACCESS_KEY — set one, or use AUTH_MODE=open for a local run',
+      );
+    } else {
+      console.warn(
+        '[config] ACCESS_KEY is not set — development is running OPEN. Set ACCESS_KEY to require the ?k= link.',
+      );
+      authMode = 'open';
+    }
+  }
+
+  if (authMode === 'open' && !isProduction) {
     console.warn(
       '[config] AUTH_MODE=open — anyone who finds this URL can run missions and spend the daily quota',
     );

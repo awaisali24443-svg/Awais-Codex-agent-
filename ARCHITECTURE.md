@@ -1,5 +1,9 @@
 # Awais Codex Agent — Architecture & Code Review
 
+> **This document reviews v1** — the original single-process app (`server.ts`, `routes/`, `js/`, file-based storage). It is kept because its analysis of the engine protocol, the retry ladder, the WhatsApp webhook and the security gaps is still accurate and still useful.
+>
+> **The app that runs today is v2** (`server/`, `web/`, Postgres, `npm run dev`). `README.md` documents it, `STATUS.md` maps it file by file and tracks which of this review's recommendations have since been implemented. The v1 sources referenced below are still in the tree as legacy: nothing imports them, and nothing serves them.
+
 *Full read-through of every source file (8,080 lines of TS/JS + a 3,831-line HTML shell), verified by actually installing deps, type-checking, booting the server, and hitting its endpoints.*
 
 ---

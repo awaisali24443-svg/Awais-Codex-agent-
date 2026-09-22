@@ -27,6 +27,8 @@ export interface ScriptStep {
   toolResult?: unknown;
   log?: string;
   logLevel?: 'info' | 'warn' | 'error';
+  /** A file this step produced, e.g. a built `.apk`. */
+  artifact?: string;
   /** Make the run fail at this point, with this message. */
   fail?: string;
   errorType?: string;
@@ -107,6 +109,9 @@ export class ScriptedEngine implements Engine {
         ctx.tool(step.tool, step.toolArgs);
       }
       if (step.toolResult !== undefined) ctx.toolResult(lastTool, step.toolResult);
+      // Scripted missions can produce artifacts too, which is what lets the
+      // record → download path be tested without a real sandbox.
+      if (step.artifact) ctx.artifact?.(step.artifact);
       if (step.thinking) ctx.thinking(step.thinking);
       if (step.text) {
         text += step.text;
