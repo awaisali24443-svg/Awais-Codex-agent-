@@ -128,8 +128,8 @@ export const KNOWN_SECRETS: Record<SecretName, SecretSpec> = {
   },
   whatsapp_to: {
     name: 'whatsapp_to',
-    label: 'WhatsApp "done" ping recipient',
-    description: 'Your phone number in international format. Run-completion pings are sent here; without it the ping is silently skipped.',
+    label: 'WhatsApp "done" ping recipient (optional override)',
+    description: 'Normally auto-learned from your first WhatsApp message to the agent. Set manually only if you know the agent\u2019s user:<id> \u2014 a phone number will not work.',
     envVar: 'WHATSAPP_TO',
     usedBy: 'server/whatsapp/doneping.ts',
   },

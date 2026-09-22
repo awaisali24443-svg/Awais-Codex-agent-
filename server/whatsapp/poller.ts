@@ -46,6 +46,7 @@ import {
   markProcessed,
   noteError,
   recordMessage,
+  saveCreatorId,
   saveCursor,
 } from './store.js';
 
@@ -295,6 +296,16 @@ export class WhatsAppPoller {
     for (const status of updates.statuses) {
       this.receipts += 1;
       this.log(`[wa] receipt ${status.status} for ${status.id}`);
+    }
+
+    // Learn the creator's platform id from inbound traffic. The done-ping
+    // needs it as the explicit `to` on a proactive send, and the platform
+    // only accepts the `user:<id>` it gave us — never a phone number.
+    if (this.cursor) {
+      const from = updates.messages.find((m) => m.from)?.from;
+      if (from) {
+        await saveCreatorId(this.deps.db, this.cursor.agentId, from).catch(() => undefined);
+      }
     }
 
     for (const message of updates.messages) {

@@ -6,7 +6,7 @@
  * otherwise — no token, no ping; no opt-in, no ping; a WhatsApp run never
  * gets pinged on top of its relayed answer.
  */
-import test, { after, before, describe } from 'node:test';
+import test, { after, afterEach, before, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -15,9 +15,11 @@ import { createDb, type Db } from '../db.js';
 import { migrate } from '../migrate.js';
 import { createRun, emitEvent, getRun, setRunStatus, type Run, type TerminalStatus } from '../runs.js';
 import type { SecretName } from '../settings.js';
+import { saveCreatorId } from './store.js';
 import { composeDonePing, sendDonePing } from './doneping.js';
 
 const TOKEN = 'wa-agent-api-key-from-the-phone';
+const CREATOR = 'user:creator-01';
 
 let db: Db;
 
@@ -61,9 +63,14 @@ async function fakePlatform(): Promise<{ url: string; sends: CapturedSend[]; clo
   };
 }
 
-const secrets = (token: string | null, to: string | null = '+10000000000') => ({
+const secrets = (token: string | null, to: string | null = null) => ({
   get: (name: SecretName) => (name === 'whatsapp_to' ? to ?? '' : token ?? ''),
 });
+
+/** Learn the creator id the way the poller does — from inbound traffic. */
+async function learnCreator(id: string = CREATOR): Promise<void> {
+  await saveCreatorId(db, 'agent-test', id);
+}
 
 async function makeRun(notifyWhatsapp: boolean, kind: 'chat' | 'whatsapp' = 'chat'): Promise<Run> {
   const run = await createRun(db, {
@@ -85,6 +92,11 @@ before(async () => {
 
 after(async () => {
   await db.close();
+});
+
+// The creator id learned by one test must not leak into the next.
+afterEach(async () => {
+  await db.query(`DELETE FROM wa_state`);
 });
 
 describe('composeDonePing', () => {
@@ -109,10 +121,11 @@ describe('composeDonePing', () => {
 });
 
 describe('sendDonePing', () => {
-  test('sends one ping for an opted-in web run that completed', async (t) => {
+  test('sends one ping to the learned creator id for an opted-in web run', async (t) => {
     const platform = await fakePlatform();
     t.after(() => platform.close());
 
+    await learnCreator();
     const run = await makeRun(true);
     const ok = await sendDonePing(
       { db, secrets: secrets(TOKEN), baseUrl: platform.url },
@@ -125,10 +138,42 @@ describe('sendDonePing', () => {
     const payload = platform.sends[0].body;
     const text = (payload.text as { body?: string })?.body ?? '';
     assert.ok(text.includes('✅ Done — Summarise the quarterly report'));
-    assert.equal(payload.to, '+10000000000', 'the ping carries the configured recipient');
+    assert.equal(payload.to, CREATOR, 'the ping carries the learned creator id');
   });
 
-  test('stays silent without a configured recipient', async (t) => {
+  test('a valid user:<id> override wins over the learned id', async (t) => {
+    const platform = await fakePlatform();
+    t.after(() => platform.close());
+
+    await learnCreator();
+    const run = await makeRun(true);
+    const ok = await sendDonePing(
+      { db, secrets: secrets(TOKEN, 'user:manual-9'), baseUrl: platform.url },
+      run,
+      'completed',
+    );
+
+    assert.equal(ok, true);
+    assert.equal(platform.sends[0].body.to, 'user:manual-9');
+  });
+
+  test('a phone-number override is ignored in favour of the learned id', async (t) => {
+    const platform = await fakePlatform();
+    t.after(() => platform.close());
+
+    await learnCreator();
+    const run = await makeRun(true);
+    const ok = await sendDonePing(
+      { db, secrets: secrets(TOKEN, '+10000000000'), baseUrl: platform.url },
+      run,
+      'completed',
+    );
+
+    assert.equal(ok, true, 'the ping still goes out to the learned id');
+    assert.equal(platform.sends[0].body.to, CREATOR);
+  });
+
+  test('stays silent without a learned id or override', async (t) => {
     const platform = await fakePlatform();
     t.after(() => platform.close());
 
@@ -161,6 +206,7 @@ describe('sendDonePing', () => {
       false,
     );
 
+    await learnCreator();
     platform.failNext();
     assert.equal(
       await sendDonePing({ db, secrets: secrets(TOKEN), baseUrl: platform.url }, run, 'failed'),

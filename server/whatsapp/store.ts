@@ -137,3 +137,27 @@ export async function countUnprocessed(db: Db): Promise<number> {
   );
   return Number(rows[0]?.count ?? 0);
 }
+
+/**
+ * Remember the agent creator's platform id (`user:<id>`, the `from` on inbound
+ * messages). This is the only value the platform accepts as an explicit `to`
+ * on a proactive send — a phone number is rejected — so the done-ping reads it
+ * back from here. Idempotent: every batch re-learns the same id.
+ */
+export async function saveCreatorId(db: Db, agentId: string, creatorId: string): Promise<void> {
+  await db.query(
+    `INSERT INTO wa_state (agent_id, poll_offset, creator_id, updated_at)
+          VALUES ($1, 0, $2, now())
+     ON CONFLICT (agent_id)
+     DO UPDATE SET creator_id = $2, updated_at = now()`,
+    [agentId, creatorId],
+  );
+}
+
+/** The newest learned creator id across agents — normally there is exactly one. */
+export async function loadCreatorId(db: Db): Promise<string | null> {
+  const rows = await db.query<{ creator_id: string | null }>(
+    `SELECT creator_id FROM wa_state WHERE creator_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1`,
+  );
+  return rows[0]?.creator_id ?? null;
+}

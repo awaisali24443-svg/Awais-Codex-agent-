@@ -17,10 +17,11 @@
  *
  * This does not need the poller: outbound sends go straight to the platform.
  * The ping needs an explicit `to` — the platform requires it on this route —
- * so the operator configures their own number once (`whatsapp_to` secret /
- * `WHATSAPP_TO`), and the ping goes there and nowhere else. Without a
- * configured recipient the ping is skipped silently, the same as without a
- * token.
+ * so the poller learns the agent creator's platform id (`user:<id>`) from
+ * inbound traffic and the ping goes there and nowhere else. A manual
+ * `whatsapp_to` secret can override it, but it must also be a `user:<id>`:
+ * the platform rejects a phone number. With no learned id and no valid
+ * override the ping is skipped silently, the same as without a token.
  *
  * It never throws. A ping failure must not touch the run that just finished.
  */
@@ -29,6 +30,7 @@ import type { SecretsStore } from '../settings.js';
 import { finalTextOf } from './relay.js';
 import { WhatsAppClient } from './api.js';
 import { WhatsAppSender } from './sender.js';
+import { loadCreatorId } from './store.js';
 import { toWhatsAppText } from './format.js';
 import type { Run, TerminalStatus } from '../runs.js';
 
@@ -46,6 +48,29 @@ type PingOutcome = 'completed' | 'failed';
 
 /** How much of the final answer rides along in the ping. */
 const SUMMARY_CHARS = 1200;
+
+/**
+ * Who the ping goes to. The platform only accepts the `user:<id>` it assigned
+ * the agent's creator — learned from inbound traffic — so a phone number here
+ * is rejected by the platform. A manual `whatsapp_to` override must therefore
+ * also be a `user:<id>`; anything else is ignored with a warning and the
+ * learned id is used instead.
+ */
+async function resolveRecipient(
+  deps: DonePingDeps,
+  log: (message: string, level?: 'info' | 'warn' | 'error') => void,
+): Promise<string | null> {
+  const override = deps.secrets.get('whatsapp_to').trim();
+  if (override) {
+    if (override.startsWith('user:')) return override;
+    log(
+      `[doneping] ignoring whatsapp_to override — the platform needs the user:<id> learned from your WhatsApp messages, not a phone number`,
+      'warn',
+    );
+  }
+  const learned = await loadCreatorId(deps.db).catch(() => null);
+  return learned;
+}
 
 function titleOf(run: Run): string {
   const title = run.prompt.trim().replace(/\s+/g, ' ').slice(0, 80);
@@ -97,7 +122,7 @@ export async function sendDonePing(
 
   const token = deps.secrets.get('whatsapp_token');
   if (!token) return false;
-  const to = deps.secrets.get('whatsapp_to');
+  const to = await resolveRecipient(deps, log);
   if (!to) return false;
 
   try {
