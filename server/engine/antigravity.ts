@@ -355,8 +355,10 @@ export class AntigravityEngine implements Engine {
     };
 
     const pollOnce = async (): Promise<void> => {
-      // Nothing to poll yet, or nothing left worth narrating.
-      if (!interactionId || sawTerminal || streamed || !pollActive) return;
+      // Nothing to poll yet, or the run already reached a terminal state.
+      // Note: we keep polling even while answer text streams, because the
+      // agent may still be doing tool work (and narratable steps) mid-stream.
+      if (!interactionId || sawTerminal || !pollActive) return;
       pollsDone++;
       try {
         const res = await this.fetchImpl(
