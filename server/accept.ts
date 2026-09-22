@@ -42,6 +42,8 @@ export interface AcceptInput {
   conversationId?: string | null;
   /** Start a fresh sandbox instead of continuing the conversation's last one. */
   fresh?: boolean;
+  /** Opt-in: one WhatsApp "done" ping when a web-started run finishes. */
+  notifyWhatsapp?: boolean;
 }
 
 export type AcceptResult =
@@ -93,6 +95,7 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       engine: config.engineName,
       conversationId: input.conversationId ?? null,
       fresh: input.fresh ?? false,
+      notifyWhatsapp: input.notifyWhatsapp ?? false,
     });
   } catch (err) {
     if (err instanceof RunConflictError) {

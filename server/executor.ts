@@ -28,7 +28,7 @@
 import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import { EngineAbortedError, type Engine, type EngineContext, type LogLevel } from './engine/types.js';
-import { emitEvent, finishRun, setRunStatus, type Run } from './runs.js';
+import { emitEvent, finishRun, setRunStatus, type Run, type TerminalStatus } from './runs.js';
 import {
   applyMemory,
   extractAndStoreMemories,
@@ -68,6 +68,12 @@ export interface ExecutorDeps {
   bus: EventBus;
   engine: Engine;
   snapshotIntervalMs?: number;
+  /**
+   * Called once a run reaches a terminal state, after it is fully recorded.
+   * Fire-and-forget by contract: it must never throw into the run, and the
+   * executor guards that anyway. Used for the WhatsApp "done" ping.
+   */
+  onTerminal?: (run: Run, outcome: TerminalStatus) => void;
 }
 
 /**
@@ -336,7 +342,7 @@ export class RunExecutor {
 
       // A cancelled run is cancelled even if the engine returned normally.
       if (controller.signal.aborted) {
-        await this.settle(run.id, 'cancelled', text.text, null, null);
+        await this.settle(run, 'cancelled', text.text, null, null);
         return;
       }
 
@@ -363,6 +369,7 @@ export class RunExecutor {
         environmentId: result.environmentId ?? null,
       });
       bus.publish(run.id, { seq, type: 'run.completed', payload: { status: 'completed' } });
+      this.afterTerminal(run, 'completed');
       console.log(
         `[run] ${run.id} completed (${finalText.length} chars, ${thinking.text.length} chars thinking)`,
       );
@@ -375,7 +382,7 @@ export class RunExecutor {
       // rather than a bare stack-trace-shaped string.
       const type = aborted ? null : error.errorType ?? (error.name === 'Error' ? 'engine_error' : error.name);
       await this.settle(
-        run.id,
+        run,
         status,
         await this.snapshotOf(run.id),
         type,
@@ -391,6 +398,20 @@ export class RunExecutor {
   }
 
   /**
+   * A hook that runs after a terminal state is fully recorded. Wrapped so a
+   * buggy listener can log loudly but never take the executor down with it.
+   */
+  private afterTerminal(run: Run, outcome: TerminalStatus): void {
+    const hook = this.deps.onTerminal;
+    if (!hook) return;
+    try {
+      hook(run, outcome);
+    } catch (err) {
+      console.error(`[executor] onTerminal hook failed for ${run.id}:`, (err as Error).message);
+    }
+  }
+
+  /**
    * Close a run after a failure or cancellation.
    *
    * The partial text is recovered from the database rather than memory: the
@@ -398,12 +419,13 @@ export class RunExecutor {
    * is guaranteed to exist while an in-memory copy may not.
    */
   private async settle(
-    runId: string,
+    run: Run,
     status: 'failed' | 'cancelled',
     inMemoryText: string,
     errorType: string | null,
     errorMessage: string | null,
   ): Promise<void> {
+    const runId = run.id;
     const text = inMemoryText || (await this.snapshotOf(runId));
     try {
       const seq = await finishRun(this.deps.db, runId, {
@@ -413,6 +435,7 @@ export class RunExecutor {
         errorMessage,
       });
       this.deps.bus.publish(runId, { seq, type: `run.${status}`, payload: { status, errorType } });
+      this.afterTerminal(run, status);
       console.log(`[run] ${runId} ${status}${errorMessage ? `: ${errorMessage}` : ''}`);
     } catch (err) {
       console.error(`[run] ${runId} could not be closed as ${status}:`, (err as Error).message);

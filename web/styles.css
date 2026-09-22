@@ -326,6 +326,19 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .composer textarea::placeholder { color: var(--muted); }
 .composer-row { display: flex; align-items: center; margin-top: 8px; }
 .composer-row .icon-btn { margin-left: -6px; }
+
+/* WhatsApp "done" ping toggle. Quiet by default; lights up only when checked,
+   so an unchecked task never looks like it will make a sound. */
+.ping-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 4px; padding: 6px 8px; border-radius: 999px;
+  color: var(--text-2); font-size: 12px; cursor: pointer;
+  border: 1px solid transparent; user-select: none;
+}
+.ping-toggle svg { width: 18px; height: 18px; }
+.ping-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.ping-toggle:has(input:checked) { color: #25d366; border-color: #25d36655; background: #25d36614; }
+.ping-toggle:has(input:focus-visible) { outline: 2px solid var(--accent); }
 .send {
   margin-left: auto;
   display: grid; place-items: center;

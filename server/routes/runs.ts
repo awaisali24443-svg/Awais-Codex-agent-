@@ -100,7 +100,12 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
   // ---- create a run -------------------------------------------------------
 
   router.post('/runs', async (req: Request, res: Response) => {
-    const body = (req.body ?? {}) as { prompt?: unknown; kind?: unknown; conversationId?: unknown };
+    const body = (req.body ?? {}) as {
+      prompt?: unknown;
+      kind?: unknown;
+      conversationId?: unknown;
+      notifyWhatsapp?: unknown;
+    };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
 
     if (!prompt) {
@@ -125,6 +130,9 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         prompt,
         kind,
         conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+        // Opt-in WhatsApp "done" ping for this run. Strictly boolean: anything
+        // else is not an opt-in.
+        notifyWhatsapp: body.notifyWhatsapp === true,
       },
     );
 

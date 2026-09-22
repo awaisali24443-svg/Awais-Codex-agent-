@@ -36,6 +36,8 @@ export interface Run {
   previousInteractionId: string | null;
   errorType: string | null;
   errorMessage: string | null;
+  /** Opt-in: send one WhatsApp "done" ping when a web-started run finishes. */
+  notifyWhatsapp: boolean;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -75,6 +77,7 @@ interface RunRow {
   previous_interaction_id: string | null;
   error_type: string | null;
   error_message: string | null;
+  notify_whatsapp: boolean | null;
   started_at: Date | string;
   finished_at: Date | string | null;
 }
@@ -97,6 +100,7 @@ function mapRun(row: RunRow): Run {
     previousInteractionId: row.previous_interaction_id,
     errorType: row.error_type,
     errorMessage: row.error_message,
+    notifyWhatsapp: row.notify_whatsapp ?? false,
     startedAt: toIso(row.started_at) as string,
     finishedAt: toIso(row.finished_at),
   };
@@ -104,7 +108,8 @@ function mapRun(row: RunRow): Run {
 
 const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
                      interaction_id, environment_id, previous_interaction_id,
-                     error_type, error_message, started_at, finished_at`;
+                     error_type, error_message, notify_whatsapp,
+                     started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
 function isActiveConflict(err: unknown): boolean {
@@ -196,6 +201,8 @@ export interface CreateRunInput {
   conversationId?: string | null;
   /** Skip automatic continuation and start a fresh sandbox. */
   fresh?: boolean;
+  /** Opt-in: one WhatsApp "done" ping when a web-started run finishes. */
+  notifyWhatsapp?: boolean;
 }
 
 /**
@@ -220,8 +227,8 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
     await db.transaction(async (tx) => {
       await tx.query(
         `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine,
-                           previous_interaction_id, environment_id)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7)`,
+                           previous_interaction_id, environment_id, notify_whatsapp)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8)`,
         [
           id,
           conversationId,
@@ -230,6 +237,7 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
           input.engine,
           continuation?.interactionId ?? null,
           continuation?.environmentId ?? null,
+          input.notifyWhatsapp === true,
         ],
       );
       await tx.query(

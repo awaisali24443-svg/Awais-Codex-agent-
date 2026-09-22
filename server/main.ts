@@ -18,6 +18,7 @@ import { AntigravityEngine } from './engine/antigravity.js';
 import type { Engine } from './engine/types.js';
 import { acceptRun } from './accept.js';
 import { WhatsAppService } from './whatsapp/lifecycle.js';
+import { sendDonePing } from './whatsapp/doneping.js';
 
 /**
  * Pick the engine.
@@ -112,7 +113,16 @@ async function boot(): Promise<void> {
   }
 
   const bus = new EventBus();
-  const executor = new RunExecutor({ db, bus, engine: createEngine(config, secrets) });
+  const executor = new RunExecutor({
+    db,
+    bus,
+    engine: createEngine(config, secrets),
+    // The WhatsApp "done" ping for web-started runs. Fire-and-forget: the
+    // module never throws, and the executor guards the hook anyway.
+    onTerminal: (run, outcome) => {
+      void sendDonePing({ db, secrets }, run, outcome);
+    },
+  });
   console.log(`[boot] engine: ${config.engineName}`);
 
   // ---- WhatsApp -----------------------------------------------------------

@@ -54,6 +54,8 @@ const el = {
   statusDot: $('status-dot'),
   toast: $('toast'),
   note: $('composer-note'),
+  pingToggle: $('ping-wrap'),
+  pingCheck: $('ping-check'),
 };
 
 const state = {
@@ -178,6 +180,13 @@ async function enter() {
       return;
     }
   } catch { /* not fatal: just means nothing is running */ }
+
+  // The WhatsApp "done" ping toggle only appears when a key is configured —
+  // offering a ping we cannot send would be a lie.
+  try {
+    const status = await api('/api/status');
+    if (status.whatsappConfigured) el.pingToggle.hidden = false;
+  } catch { /* silent: the toggle just stays hidden */ }
 
   if (state.conversationId) {
     await openConversation(state.conversationId);
@@ -726,10 +735,14 @@ el.composer.addEventListener('submit', async (event) => {
   event.preventDefault();
   const prompt = el.prompt.value.trim();
   if (!prompt || state.running) return;
+  const notifyWhatsapp = el.pingCheck.checked;
 
   el.prompt.value = '';
   autoGrow();
   el.send.disabled = true;
+  // The ping is per task, not a sticky preference: reset it with the composer.
+  el.pingCheck.checked = false;
+  el.note.textContent = '';
   showHero(false);
   renderAsk(prompt);
   scrollToEnd(true);
@@ -737,7 +750,11 @@ el.composer.addEventListener('submit', async (event) => {
   try {
     const { run, budget } = await api('/api/runs', {
       method: 'POST',
-      body: JSON.stringify({ prompt, conversationId: state.conversationId }),
+      body: JSON.stringify({
+        prompt,
+        conversationId: state.conversationId,
+        notifyWhatsapp,
+      }),
     });
     state.conversationId = run.conversationId;
     if (budget) note(`${budget.remaining} of ${budget.limit} runs left today`);
@@ -761,6 +778,12 @@ el.composer.addEventListener('submit', async (event) => {
     }
     renderNotice(err.message || 'Could not start the task.', true, 'warn');
   }
+});
+
+el.pingCheck.addEventListener('change', () => {
+  el.note.textContent = el.pingCheck.checked
+    ? 'You’ll get a WhatsApp ping when this finishes.'
+    : '';
 });
 
 /* --------------------------------------------------------------- budget -- */

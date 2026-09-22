@@ -198,6 +198,10 @@ export function createApp(deps: AppDeps): Express {
       dailyRunBudget: config.dailyRunBudget,
       eventRetentionDays: config.eventRetentionDays,
       nodeEnv: config.nodeEnv,
+      // Whether a WhatsApp key is configured at all. The PWA uses this to
+      // decide whether to offer the "done" ping — a send needs no poller, so
+      // the poller state is the wrong signal.
+      whatsappConfigured: deps.secrets.get('whatsapp_token') !== '',
     });
   });
 
