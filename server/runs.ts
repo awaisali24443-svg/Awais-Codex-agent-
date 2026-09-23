@@ -472,7 +472,13 @@ export async function listConversations(db: Db, limit = 50): Promise<
     `SELECT c.id, c.title, c.source, c.updated_at,
             (SELECT count(*) FROM runs r WHERE r.conversation_id = c.id)::text AS run_count
        FROM conversations c
-      ORDER BY c.created_at DESC
+      -- Last activity, not creation time: a conversation bubbles to the top
+      -- whenever a new run lands in it. Conversations with no runs yet fall
+      -- back to their creation time.
+      ORDER BY COALESCE(
+               (SELECT max(r.started_at) FROM runs r WHERE r.conversation_id = c.id),
+               c.created_at
+             ) DESC
       LIMIT $1`,
     [Math.min(Math.max(limit, 1), 200)],
   );
