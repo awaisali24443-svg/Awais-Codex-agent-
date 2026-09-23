@@ -30,6 +30,7 @@ import {
   type SecretsStore,
   type SettingsStore,
 } from '../settings.js';
+import { checkAgent, checkGeminiKey } from '../verify.js';
 
 export interface SettingsRouteDeps {
   settings: SettingsStore;
@@ -38,6 +39,8 @@ export interface SettingsRouteDeps {
   pollerHealth?: () => PollerHealth;
   /** Lets the owner of a credential react to it changing. Never throws. */
   onCredentialChanged?: (name: string) => Promise<void> | void;
+  /** The configured Antigravity agent id, so the test hits the real target. */
+  agent?: string;
 }
 
 /** Wrap an async handler so a rejection becomes a 500 instead of a hung socket. */
@@ -59,6 +62,7 @@ export function createSettingsRoutes({
   secrets,
   pollerHealth,
   onCredentialChanged,
+  agent,
 }: SettingsRouteDeps): Router {
   const router = Router();
 
@@ -253,6 +257,34 @@ export function createSettingsRoutes({
         source,
         whatsapp: whatsappState(),
       });
+    }),
+  );
+
+  /**
+   * Test the *stored* Gemini key against the provider.
+   *
+   * The key is resolved here, at request time, from the secrets store (which
+   * is store-first with the environment as fallback) — and it never enters
+   * the response. What comes back is verify.ts's differential diagnosis only:
+   * key rejected, agent id gone, quota, rate limit or network. The agent leg
+   * runs a real mission through the real engine, so it costs one interaction;
+   * it only runs when the key itself is accepted.
+   */
+  router.post(
+    '/settings/verify/gemini-key',
+    handle(async (_req, res) => {
+      const key = secrets.get('gemini_api_key');
+      const keyCheck = await checkGeminiKey({ apiKey: key });
+      if (keyCheck.verdict !== 'ok') {
+        res.json({ ok: false, key: keyCheck, agent: null });
+        return;
+      }
+      const agentCheck = await checkAgent({
+        apiKey: key,
+        agent,
+        timeoutMs: 90_000,
+      });
+      res.json({ ok: agentCheck.verdict === 'ok', key: keyCheck, agent: agentCheck });
     }),
   );
 

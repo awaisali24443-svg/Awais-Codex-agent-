@@ -266,6 +266,7 @@ export function createApp(deps: AppDeps): Express {
       secrets: deps.secrets,
       pollerHealth,
       onCredentialChanged: deps.onCredentialChanged,
+      agent: config.antigravityAgent,
     }),
   );
 

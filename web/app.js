@@ -1191,6 +1191,9 @@ function renderSettings() {
         </div>
         <div class="secret-actions">
           <button class="primary" data-act="set" data-name="${escapeHtml(secret.name)}">Replace</button>
+          ${secret.name === 'gemini_api_key'
+            ? `<button data-act="test" data-name="${escapeHtml(secret.name)}">Test</button>`
+            : ''}
           ${secret.source === 'stored'
             ? `<button class="danger" data-act="remove" data-name="${escapeHtml(secret.name)}">Remove</button>`
             : ''}
@@ -1251,6 +1254,7 @@ function onSettingsClick(event) {
   const name = button.dataset.name;
   if (button.dataset.act === 'remove') void removeSecret(name);
   if (button.dataset.act === 'set') askSecret(button, name);
+  if (button.dataset.act === 'test' && name === 'gemini_api_key') void testGeminiKey(button);
 }
 
 /** The value is entered, sent, and forgotten by this screen — it is never shown again. */
@@ -1311,6 +1315,31 @@ async function removeSecret(name) {
     await loadSettings();
   } catch (err) {
     toast(err.message || 'Could not remove that key.');
+  }
+}
+
+/**
+ * Test the stored Gemini key against the provider. The server returns the
+ * diagnosis only — the key itself never comes back — so the summary shown
+ * here is safe to display verbatim.
+ */
+async function testGeminiKey(button) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = 'Testing…';
+  try {
+    const result = await api('/api/settings/verify/gemini-key', { method: 'POST' });
+    if (result.ok) {
+      toast(`Key works — ${result.key.summary} ${result.agent.summary}`, 9_000);
+    } else {
+      const failed = result.key.verdict !== 'ok' ? result.key : result.agent;
+      toast(`Key test: ${failed ? failed.summary : 'unknown error'}`, 12_000);
+    }
+  } catch (err) {
+    toast(err.message || 'Key test failed.', 9_000);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
   }
 }
 
