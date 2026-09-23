@@ -868,26 +868,26 @@ function finishCard(card, outcome, data = {}) {
     if (data.errorType === 'interrupted') {
       // The server restarted mid-mission. Resume continues from the first
       // unfinished step; retry starts over. Both are offered, resume first.
-      noticeNode.append(runActionButtons(card, { resume: true, retry: true, edit: true, notice: noticeNode }));
+      noticeNode.append(runActionButtons(card, { resume: true, retry: true, edit: true, share: true, notice: noticeNode }));
     } else {
       // A failed complex task is usually worth one more attempt, not a retyped
       // prompt. The retry starts a fresh run with the same prompt in the same
       // conversation; it costs one daily run like any other mission.
-      noticeNode.append(runActionButtons(card, { retry: true, edit: true, notice: noticeNode }));
+      noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, notice: noticeNode }));
     }
   } else if (outcome === 'paused') {
     // The token budget ran out. Pausing is not terminal: the partial answer
     // stands and the operator resumes the same run with a higher cap.
     const noticeNode = renderNotice(humanError('token_budget'), false, 'warn');
-    noticeNode.append(runActionButtons(card, { resume: true, edit: true, notice: noticeNode }));
+    noticeNode.append(runActionButtons(card, { resume: true, edit: true, share: true, notice: noticeNode }));
   } else if (outcome === 'cancelled') {
     const noticeNode = renderNotice('Stopped. Whatever it produced is kept below.', false, 'info');
-    noticeNode.append(runActionButtons(card, { edit: true }));
+    noticeNode.append(runActionButtons(card, { edit: true, share: true }));
   } else {
     // A finished task can be re-run as-is or tweaked in the composer and
     // re-sent.
     const noticeNode = renderNotice('Done.', false, 'check');
-    noticeNode.append(runActionButtons(card, { retry: true, edit: true, notice: noticeNode }));
+    noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, notice: noticeNode }));
   }
 
   setRunning(false);
@@ -1120,7 +1120,7 @@ function openInlineEditor(node, message) {
 }
 
 /* The button group appended to a finished run's notice. */
-function runActionButtons(card, { retry = false, resume = false, edit = false, notice = null } = {}) {
+function runActionButtons(card, { retry = false, resume = false, edit = false, share = false, notice = null } = {}) {
   const group = document.createElement('span');
   group.className = 'run-btns';
   if (resume) {
@@ -1147,7 +1147,57 @@ function runActionButtons(card, { retry = false, resume = false, edit = false, n
     editBtn.addEventListener('click', () => editPrompt(card));
     group.append(editBtn);
   }
+  if (share) {
+    // Shareable replay: one tap enables the public link and copies it; the
+    // operator can copy it again or revoke it from the same spot.
+    const shareBtn = document.createElement('button');
+    shareBtn.type = 'button';
+    shareBtn.className = 'retry-btn';
+    shareBtn.textContent = '🔗 Share replay';
+    shareBtn.addEventListener('click', () => shareReplay(card, shareBtn, group));
+    group.append(shareBtn);
+  }
   return group;
+}
+
+/* Share a finished run as a public read-only replay page. Enabling is
+   idempotent server-side, so tapping twice just copies the same link again.
+   A "Revoke link" button appears once shared; revoking makes the URL 404. */
+async function shareReplay(card, button, group) {
+  button.disabled = true;
+  try {
+    const { url } = await api(`/api/runs/${card.runId}/share`, { method: 'POST' });
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Replay link copied — anyone with the link can view it.');
+    } catch {
+      toast(`Replay link: ${url}`);
+    }
+    button.textContent = '🔗 Copy replay link';
+    if (!group.querySelector('[data-revoke-share]')) {
+      const revokeBtn = document.createElement('button');
+      revokeBtn.type = 'button';
+      revokeBtn.className = 'retry-btn';
+      revokeBtn.textContent = 'Revoke link';
+      revokeBtn.setAttribute('data-revoke-share', '');
+      revokeBtn.addEventListener('click', async () => {
+        revokeBtn.disabled = true;
+        try {
+          await api(`/api/runs/${card.runId}/share`, { method: 'DELETE' });
+          toast('Replay link revoked.');
+          button.textContent = '🔗 Share replay';
+          revokeBtn.remove();
+        } catch {
+          toast('Could not revoke the link.');
+          revokeBtn.disabled = false;
+        }
+      });
+      group.append(revokeBtn);
+    }
+  } catch {
+    toast('Could not create the replay link.');
+  }
+  button.disabled = false;
 }
 
 /* Files the mission produced. Read from the artifact record, so it works the

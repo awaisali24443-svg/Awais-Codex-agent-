@@ -73,6 +73,12 @@ export interface Run {
    * mission had nothing checkable and verification was skipped.
    */
   verification: VerificationCheck[] | null;
+  /**
+   * Public replay token. Null unless the operator shared this run: the token
+   * IS the auth for GET /share/:token (unguessable by construction).
+   * Only the authenticated operator ever sees it via the API.
+   */
+  shareToken: string | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -119,6 +125,7 @@ interface RunRow {
   resume_from_step: number | null;
   plan_json: unknown;
   verification_json: unknown;
+  share_token: string | null;
   started_at: Date | string;
   finished_at: Date | string | null;
 }
@@ -163,6 +170,7 @@ function mapRun(row: RunRow): Run {
     resumeFromStep: row.resume_from_step ?? null,
     plan: parsePlan(row.plan_json),
     verification: parseVerification(row.verification_json),
+    shareToken: row.share_token ?? null,
     startedAt: toIso(row.started_at) as string,
     finishedAt: toIso(row.finished_at),
   };
@@ -173,6 +181,7 @@ const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
                      error_type, error_message, notify_whatsapp,
                      deep_research, research_budget_minutes,
                      token_budget, resume_from_step, plan_json, verification_json,
+                     share_token,
                      started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
@@ -405,6 +414,28 @@ export async function updateRunPlan(db: Db, runId: string, labels: string[]): Pr
     [runId, JSON.stringify(steps)],
   );
   return rows.length ? parsePlan(rows[0].plan_json) : null;
+}
+
+/**
+ * Enable or revoke the public replay link for a run. Revoking is setting the
+ * token to null — the old link 404s immediately.
+ */
+export async function setShareToken(db: Db, runId: string, token: string | null): Promise<void> {
+  await db.query('UPDATE runs SET share_token = $2 WHERE id = $1', [runId, token]);
+}
+
+/**
+ * Find a run by its public share token. The token IS the auth, so this is
+ * only ever called from the public /share/:token route with a well-formed
+ * token — never with operator input that reaches anything else.
+ */
+export async function getRunByShareToken(db: Db, token: string): Promise<Run | null> {
+  if (!token) return null;
+  const rows = await db.query<RunRow>(
+    `SELECT ${RUN_COLUMNS} FROM runs WHERE share_token = $1`,
+    [token],
+  );
+  return rows[0] ? mapRun(rows[0]) : null;
 }
 
 export async function readEvents(

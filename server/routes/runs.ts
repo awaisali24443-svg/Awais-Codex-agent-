@@ -52,11 +52,13 @@ import {
   listRuns,
   readEvents,
   updateRunPlan,
+  setShareToken,
   type RunKind,
   type RunStatus,
 } from '../runs.js';
 import { forkBranch, listBranches } from '../branches.js';
 import { getMissionSteps, resumeFromStep } from '../mission_steps.js';
+import { canShareRun, newShareToken, shareUrl } from '../share.js';
 
 export interface RunRouteDeps {
   db: Db;
@@ -491,6 +493,47 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     await emitEvent(db, run.id, 'run.plan_updated', { plan: steps });
     const updated = await getRun(db, run.id);
     res.json({ run: updated ?? run, plan: steps });
+  });
+
+  // ---- shareable replays ------------------------------------------------
+
+  /**
+   * Share a finished run: enable (or return) its public replay link.
+   *
+   * Idempotent — tapping Share twice returns the same URL instead of
+   * rotating the token. Only a finished run qualifies; an in-flight mission
+   * must never be shareable.
+   */
+  router.post('/runs/:id/share', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    if (!canShareRun(run)) {
+      res.status(400).json({
+        error: 'not_finished',
+        message: `Only a finished run can be shared (this one is ${run.status})`,
+      });
+      return;
+    }
+    const token = run.shareToken ?? newShareToken();
+    if (!run.shareToken) await setShareToken(db, run.id, token);
+    res.json({ url: shareUrl(config, token), token });
+  });
+
+  /**
+   * Revoke a run's replay link. The token is cleared, so the old URL 404s
+   * immediately.
+   */
+  router.delete('/runs/:id/share', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    await setShareToken(db, run.id, null);
+    res.json({ ok: true });
   });
 
   // ---- the live stream ----------------------------------------------------

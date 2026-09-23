@@ -23,6 +23,8 @@ import { createSettingsRoutes } from './routes/settings.js';
 import { createGitHubRoutes } from './routes/github.js';
 import { createLinkedInRoutes } from './routes/linkedin.js';
 import { createGoogleRoutes } from './routes/google.js';
+import { buildShareData, canShareRun, renderSharePage } from './share.js';
+import { getRunByShareToken } from './runs.js';
 import type { SecretsStore, SettingsStore } from './settings.js';
 import {
   checkAccessKey,
@@ -112,6 +114,27 @@ export function createApp(deps: AppDeps): Express {
   });
 
   // ---- public endpoints ---------------------------------------------------
+
+  // Public mission replays. The share token IS the auth (unguessable by
+  // construction), so this deliberately lives in the public section with no
+  // session: anyone with the link can view, nobody can guess one. Only a
+  // finished run is served — if the run was resumed after sharing, the link
+  // 404s until it finishes again. Unknown, malformed, or revoked tokens 404
+  // with no hint about which.
+  app.get('/share/:token', async (req: Request, res: Response) => {
+    const token = req.params.token ?? '';
+    if (!/^[A-Za-z0-9_-]{24,64}$/.test(token)) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+    const run = await getRunByShareToken(db, token);
+    if (!run || !canShareRun(run)) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+    const data = await buildShareData(db, run);
+    res.type('text/html; charset=utf-8').send(renderSharePage(data));
+  });
 
   app.get('/healthz', (_req: Request, res: Response) => {
     res.json({
