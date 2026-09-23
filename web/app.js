@@ -1709,6 +1709,26 @@ function attach(runId, after = 0) {
   });
 }
 
+// A backgrounded phone can miss a run's terminal event: the EventSource dies
+// (or the OS pauses it) and its reconnect replays from a Last-Event-ID the
+// server has already tidied away, leaving an empty timeline. On return to the
+// foreground, ask the server for the truth — if the run finished while away,
+// refresh the whole conversation instead of resuming the dead position.
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!state.running || !state.runId) return;
+  let run = null;
+  try {
+    ({ run } = await api(`/api/runs/${state.runId}`));
+  } catch { return; } // keep the stream; a later event will reconcile
+  if (run && ['completed', 'failed', 'cancelled'].includes(run.status)) {
+    closeStream();
+    setRunning(false);
+    state.runId = null;
+    await openConversation(run.conversationId);
+  }
+});
+
 /* ------------------------------------------------------------- composer -- */
 
 function setRunning(on) {

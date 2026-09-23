@@ -21,7 +21,6 @@ import { WhatsAppService } from './whatsapp/lifecycle.js';
 import { sendDonePing } from './whatsapp/doneping.js';
 import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
 import { fireDueScheduledTasks } from './scheduler.js';
-import { selfPingTarget, startSelfPing } from './selfping.js';
 import { recoverOrphanedRuns } from './recovery.js';
 
 /**
@@ -229,24 +228,6 @@ async function boot(): Promise<void> {
     console.log('[boot] scheduler: on (60s tick)');
   } else {
     console.log('[boot] scheduler: off — set SCHEDULER_ENABLED=true to fire scheduled tasks');
-  }
-
-  // ---- self-ping --------------------------------------------------------------
-  // Render's free plan sleeps the process after ~15 min with no inbound
-  // traffic. A timer cannot wake a sleeping process, but a GET to our own
-  // /healthz every 14 minutes resets the idle clock so it never sleeps —
-  // keeping the scheduler, reminders, and WhatsApp poller alive overnight.
-  if (config.selfPingEnabled) {
-    const target = selfPingTarget(config.appUrl);
-    if (target) {
-      startSelfPing(target, (m) => console.log(m));
-    } else {
-      console.log(
-        '[boot] selfping: off — set APP_URL (or RENDER_EXTERNAL_URL) so the service knows what to ping',
-      );
-    }
-  } else {
-    console.log('[boot] selfping: off — set SELF_PING_ENABLED=true to keep the free tier awake');
   }
 
   const server = app.listen(config.port, '0.0.0.0', () => {

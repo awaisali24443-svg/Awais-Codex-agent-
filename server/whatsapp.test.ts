@@ -516,7 +516,7 @@ describe('whatsapp intake', () => {
     await waitFor(() => platform.to('/messages').length > 0);
 
     const reply = sentText();
-    assert.match(reply, /Daily whatsapp run budget exhausted/);
+    assert.match(reply, /Daily run budget exhausted/);
     assert.match(reply, /Resets at/);
 
     // The run row exists only to be closed: it never reaches the engine, so a

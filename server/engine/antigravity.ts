@@ -18,6 +18,8 @@
  *                          is rejected as an unknown parameter). If the API
  *                          rejects the field, the 400 fallback drops exactly
  *                          that field and the run continues without summaries.
+ *                          The verdict is remembered, so later missions skip
+ *                          the doomed first attempt.
  *   agent_config               optional hard token ceiling
  *
  * ## The three rules this file obeys
@@ -146,6 +148,15 @@ export class AntigravityEngine implements Engine {
   private readonly rateLimitMaxWaitMs: number;
   private readonly fetchImpl: typeof fetch;
 
+  /**
+   * What the backend taught us about `thinking_summaries`. The engine is a
+   * process singleton, so this remembers across missions: once the backend
+   * rejects the field (or accepts only the qualified enum), later missions
+   * skip the doomed first attempt instead of wasting a round-trip every
+   * time. Per-instance rather than module-level so tests stay isolated.
+   */
+  private thinkingSummaries: 'unknown' | 'qualified' | 'rejected' = 'unknown';
+
   constructor(private readonly options: AntigravityEngineOptions) {
     this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
@@ -257,7 +268,14 @@ export class AntigravityEngine implements Engine {
     if (this.options.maxTotalTokens && this.options.maxTotalTokens > 0) {
       agentConfig.max_total_tokens = this.options.maxTotalTokens;
     }
-    agentConfig.thinking_summaries = 'auto';
+    // The backend's verdict is remembered on the instance: never re-send a
+    // form it already rejected — each wasted first attempt costs a round-trip.
+    if (this.thinkingSummaries === 'unknown') {
+      agentConfig.thinking_summaries = 'auto';
+    } else if (this.thinkingSummaries === 'qualified') {
+      agentConfig.thinking_summaries = 'THINKING_SUMMARIES_AUTO';
+    }
+    // 'rejected': the backend already said no — send nothing.
     payload.agent_config = agentConfig;
     if (ctx.previousInteractionId) {
       payload.previous_interaction_id = ctx.previousInteractionId;
@@ -293,6 +311,9 @@ export class AntigravityEngine implements Engine {
         ctx.log('Still thinking — retrying the request.', 'warn');
         agentConfigForLadder.thinking_summaries = 'THINKING_SUMMARIES_AUTO';
         await repost();
+        // The qualified form worked: remember it so the next mission sends
+        // it on the first attempt instead of re-trying 'auto'.
+        if (response.ok) this.thinkingSummaries = 'qualified';
       }
     }
 
@@ -342,6 +363,9 @@ export class AntigravityEngine implements Engine {
           }
         }
         if (droppedNamed) {
+          // Remember the rejection: the next mission must not send a field
+          // the backend already refused — that retry is always doomed.
+          if (named === 'thinking_summaries') this.thinkingSummaries = 'rejected';
           ctx.log('Still thinking — retrying the request.', 'warn');
         } else {
           ctx.log(`Retrying without optional fields: ${message}`, 'warn');

@@ -181,7 +181,7 @@ describe('fenced drafts', () => {
     const answer = `Here is your post:\n\n\`\`\`linkedin-post\nBuilding in public is fun.\n\`\`\``;
     const id = await recordLinkedInDraft(db, run.id, answer);
     assert.ok(id);
-    const drafts = await listPendingDrafts(db, run.conversationId);
+    const drafts = await listPendingDrafts(db, run.conversationId!);
     assert.equal(drafts.length, 1);
     assert.equal(drafts[0].text, 'Building in public is fun.');
     assert.equal(drafts[0].status, 'pending');
@@ -191,7 +191,7 @@ describe('fenced drafts', () => {
     const run = await createRun(db, { prompt: 'what is the weather', engine: 'scripted' });
     const id = await recordLinkedInDraft(db, run.id, 'Sunny, 22 degrees.');
     assert.equal(id, null);
-    assert.deepEqual(await listPendingDrafts(db, run.conversationId), []);
+    assert.deepEqual(await listPendingDrafts(db, run.conversationId!), []);
   });
 
   test('extractLinkedInDraft ignores empty fences', () => {
