@@ -256,11 +256,22 @@ describe('config validation', () => {
     assert.equal(loadConfig({ ...productionEnv } as NodeJS.ProcessEnv).engineName, 'antigravity');
   });
 
-  test('production refuses to boot the real engine without a key', () => {
+  test('production boots the real engine without an env key — it warns, the key can come from Settings', () => {
     const { GEMINI_API_KEY: _omitted, ...withoutKey } = productionEnv;
-    assert.throws(
-      () => loadConfig({ ...withoutKey } as NodeJS.ProcessEnv),
-      /GEMINI_API_KEY/,
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      const config = loadConfig({ ...withoutKey } as NodeJS.ProcessEnv);
+      assert.equal(config.engineName, 'antigravity');
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.ok(
+      warnings.some((w) => w.includes('GEMINI_API_KEY')),
+      'the missing key is warned about, not silently ignored',
     );
   });
 
