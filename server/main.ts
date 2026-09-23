@@ -21,6 +21,7 @@ import { WhatsAppService } from './whatsapp/lifecycle.js';
 import { sendDonePing } from './whatsapp/doneping.js';
 import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
 import { fireDueScheduledTasks } from './scheduler.js';
+import { selfPingTarget, startSelfPing } from './selfping.js';
 
 /**
  * Pick the engine.
@@ -206,9 +207,8 @@ async function boot(): Promise<void> {
   // ---- scheduled tasks ------------------------------------------------------
   // Recurring jobs. Each fire goes through the normal acceptance path (one run
   // at a time, daily budget), so a busy agent or a spent budget defers the
-  // task to the next tick instead of dropping it. On the free tier the process
-  // sleeps when idle, so this loop alone cannot fire overnight — pair it with
-  // an external cron hitting POST /api/scheduled-tasks/tick (see DEPLOY.md).
+  // task to the next tick instead of dropping it. Overnight firing relies on
+  // the self-ping below keeping the process awake on the free tier.
   if (config.schedulerEnabled) {
     const tickScheduled = (): Promise<void> =>
       fireDueScheduledTasks({ db, executor, config }, (m) => console.log(m)).then(() => {});
@@ -218,6 +218,24 @@ async function boot(): Promise<void> {
     console.log('[boot] scheduler: on (60s tick)');
   } else {
     console.log('[boot] scheduler: off — set SCHEDULER_ENABLED=true to fire scheduled tasks');
+  }
+
+  // ---- self-ping --------------------------------------------------------------
+  // Render's free plan sleeps the process after ~15 min with no inbound
+  // traffic. A timer cannot wake a sleeping process, but a GET to our own
+  // /healthz every 14 minutes resets the idle clock so it never sleeps —
+  // keeping the scheduler, reminders, and WhatsApp poller alive overnight.
+  if (config.selfPingEnabled) {
+    const target = selfPingTarget(config.appUrl);
+    if (target) {
+      startSelfPing(target, (m) => console.log(m));
+    } else {
+      console.log(
+        '[boot] selfping: off — set APP_URL (or RENDER_EXTERNAL_URL) so the service knows what to ping',
+      );
+    }
+  } else {
+    console.log('[boot] selfping: off — set SELF_PING_ENABLED=true to keep the free tier awake');
   }
 
   const server = app.listen(config.port, '0.0.0.0', () => {

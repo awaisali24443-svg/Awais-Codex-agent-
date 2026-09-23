@@ -68,6 +68,12 @@ export interface AppConfig {
    */
   schedulerEnabled: boolean;
   /**
+   * Keep-alive ping: GET our own /healthz every 14 minutes so Render's free
+   * tier never idles the process to sleep. Set SELF_PING_ENABLED=false to
+   * turn it off (service then sleeps when idle).
+   */
+  selfPingEnabled: boolean;
+  /**
    * 'key'  - the API needs a session, obtained once from a ?k= link.
    * 'open' - no check at all. Public internet plus a spendable daily quota.
    */
@@ -284,6 +290,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     schedulerEnabled: !['0', 'false', 'no', 'off'].includes(
       (env.SCHEDULER_ENABLED ?? '').trim().toLowerCase(),
+    ),
+    selfPingEnabled: !['0', 'false', 'no', 'off'].includes(
+      (env.SELF_PING_ENABLED ?? '').trim().toLowerCase(),
     ),
     authMode,
     accessKey,
