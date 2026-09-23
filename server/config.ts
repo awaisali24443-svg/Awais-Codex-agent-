@@ -61,6 +61,13 @@ export interface AppConfig {
    */
   remindersEnabled: boolean;
   /**
+   * Whether the scheduled-task loop runs. On by default: the operator asked
+   * for scheduled tasks, and each fire still spends from the daily budget, so
+   * a runaway schedule cannot cost more than the day allows. Set
+   * SCHEDULER_ENABLED=false to turn the 60-second firing loop off.
+   */
+  schedulerEnabled: boolean;
+  /**
    * 'key'  - the API needs a session, obtained once from a ?k= link.
    * 'open' - no check at all. Public internet plus a spendable daily quota.
    */
@@ -274,6 +281,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     pollerEnabled: pollerMode !== 'off' && hasEnvToken,
     remindersEnabled: ['1', 'true', 'yes', 'on'].includes(
       (env.REMINDERS_ENABLED ?? '').trim().toLowerCase(),
+    ),
+    schedulerEnabled: !['0', 'false', 'no', 'off'].includes(
+      (env.SCHEDULER_ENABLED ?? '').trim().toLowerCase(),
     ),
     authMode,
     accessKey,

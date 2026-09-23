@@ -8,8 +8,8 @@
  *   - Opt-in per run. `runs.notify_whatsapp` is set at creation; there is no
  *     global "always ping" switch, so nothing the operator did not ask for
  *     ever makes a sound.
- *   - Web runs only. A WhatsApp-started run already gets its answer through
- *     the relay; pinging that too would double every reply.
+ *   - Web runs and scheduled tasks only. A WhatsApp-started run already gets
+ *     its answer through the relay; pinging that too would double every reply.
  *   - Completed or failed only. A cancellation was the operator's own doing,
  *     in the app, seconds ago — pinging it would be noise.
  *   - Silent without a token. No WhatsApp key means no ping, no error, no
@@ -115,8 +115,11 @@ export async function sendDonePing(
 ): Promise<boolean> {
   const log = deps.log ?? ((m: string) => console.log(m));
 
-  // The opt-in checks, cheapest first.
-  if (run.kind !== 'chat') return false;
+  // The opt-in checks, cheapest first. 'chat' covers web runs; 'api' covers
+  // scheduled tasks the operator explicitly marked "deliver to WhatsApp" —
+  // the same shape of opt-in, so the same ping. WhatsApp-started runs are
+  // still excluded: they already get their answer through the relay.
+  if (run.kind !== 'chat' && run.kind !== 'api') return false;
   if (!run.notifyWhatsapp) return false;
   if (outcome !== 'completed' && outcome !== 'failed') return false;
 

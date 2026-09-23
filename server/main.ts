@@ -20,6 +20,7 @@ import { acceptRun } from './accept.js';
 import { WhatsAppService } from './whatsapp/lifecycle.js';
 import { sendDonePing } from './whatsapp/doneping.js';
 import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
+import { fireDueScheduledTasks } from './scheduler.js';
 
 /**
  * Pick the engine.
@@ -200,6 +201,23 @@ async function boot(): Promise<void> {
     console.log('[boot] reminders: scheduler on (60s tick)');
   } else {
     console.log('[boot] reminders: scheduler off — set REMINDERS_ENABLED=true to fire reminders');
+  }
+
+  // ---- scheduled tasks ------------------------------------------------------
+  // Recurring jobs. Each fire goes through the normal acceptance path (one run
+  // at a time, daily budget), so a busy agent or a spent budget defers the
+  // task to the next tick instead of dropping it. On the free tier the process
+  // sleeps when idle, so this loop alone cannot fire overnight — pair it with
+  // an external cron hitting POST /api/scheduled-tasks/tick (see DEPLOY.md).
+  if (config.schedulerEnabled) {
+    const tickScheduled = (): Promise<void> =>
+      fireDueScheduledTasks({ db, executor, config }, (m) => console.log(m)).then(() => {});
+    const scheduledTimer = setInterval(() => void tickScheduled(), 60_000);
+    scheduledTimer.unref?.();
+    void tickScheduled();
+    console.log('[boot] scheduler: on (60s tick)');
+  } else {
+    console.log('[boot] scheduler: off — set SCHEDULER_ENABLED=true to fire scheduled tasks');
   }
 
   const server = app.listen(config.port, '0.0.0.0', () => {

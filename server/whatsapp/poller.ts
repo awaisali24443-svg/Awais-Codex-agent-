@@ -39,6 +39,11 @@ import { WhatsAppError, type InboundMessage, type Updates, type WhatsAppClient }
 import { relayRun } from './relay.js';
 import type { WhatsAppSender } from './sender.js';
 import {
+  getScheduledTask,
+  listScheduledTasks,
+  setTaskEnabled,
+} from '../scheduler.js';
+import {
   attachRun,
   countUnprocessed,
   latestWhatsappConversation,
@@ -119,6 +124,9 @@ const HELP = [
   '/status — what is running right now',
   '/cancel — stop the current task',
   '/new <task> — start a fresh sandbox, with no memory of before',
+  '/schedules — list recurring scheduled tasks',
+  '/schedule-off <id> — pause a scheduled task',
+  '/schedule-on <id> — resume a scheduled task',
   '/help — this message',
 ].join('\n');
 
@@ -461,6 +469,20 @@ export class WhatsAppPoller {
         await this.cancel(message);
         return;
 
+      case '/schedules':
+        await this.schedules(message);
+        return;
+
+      case '/schedule-off':
+      case '/schedule-on': {
+        if (!argument) {
+          await this.reply(message, `Give me the task id, like:\n${command} sch_abc123\n\nSee /schedules for the ids.`);
+          return;
+        }
+        await this.scheduleToggle(message, argument, command === '/schedule-on');
+        return;
+      }
+
       default:
         await this.reply(message, `I do not know ${rawCommand}.\n\n${HELP}`);
     }
@@ -507,6 +529,49 @@ export class WhatsAppPoller {
       return;
     }
     await this.reply(message, `Stopping "${truncate(active.prompt, 100)}"…`);
+  }
+
+  private describeCadence(task: {
+    cadence: string;
+    intervalMinutes: number | null;
+    timeOfDay: string | null;
+    weekday: number | null;
+  }): string {
+    if (task.cadence === 'interval') return `every ${task.intervalMinutes} min`;
+    const at = task.timeOfDay ?? '';
+    if (task.cadence === 'daily') return `daily at ${at}`;
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return `${days[task.weekday ?? 0]}s at ${at}`;
+  }
+
+  private async schedules(message: InboundMessage): Promise<void> {
+    const tasks = await listScheduledTasks(this.deps.db);
+    if (tasks.length === 0) {
+      await this.reply(
+        message,
+        'No scheduled tasks. Create one in the web app — the Scheduled section of the drawer.',
+      );
+      return;
+    }
+    const lines = tasks.map(
+      (t) =>
+        `${t.enabled ? '●' : '○'} ${t.name} — ${this.describeCadence(t)} → ${t.deliver}\n  ${t.id}`,
+    );
+    await this.reply(message, `Scheduled tasks:\n\n${lines.join('\n\n')}`);
+  }
+
+  private async scheduleToggle(
+    message: InboundMessage,
+    id: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const task = await getScheduledTask(this.deps.db, id);
+    if (!task) {
+      await this.reply(message, `No scheduled task with id ${id}. See /schedules for the ids.`);
+      return;
+    }
+    await setTaskEnabled(this.deps.db, id, enabled);
+    await this.reply(message, `"${task.name}" is now ${enabled ? 'on' : 'paused'}.`);
   }
 
   private async startTask(message: InboundMessage, prompt: string, fresh: boolean): Promise<void> {

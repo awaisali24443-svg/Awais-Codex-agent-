@@ -93,6 +93,23 @@ no redeploy. Same for the WhatsApp agent key, and storing that one **starts the 
   live in Settings.
 * **Retention**: run events are pruned after 14 days, artifact files after 7 — both configurable.
 
+### Scheduled tasks on the free tier
+
+The in-process scheduler ticks every 60 seconds, but **it cannot fire while the service sleeps**.
+If you want a task to run overnight or on a strict schedule, wake the service with a free
+external cron:
+
+1. Sign up at [cron-job.org](https://cron-job.org) (free).
+2. Create a cron job: **every 15 minutes**, URL
+   `https://<your-service>.onrender.com/api/scheduled-tasks/tick`, method **POST**,
+   with header `x-access-key: <your ACCESS_KEY>`.
+3. Done. Each ping wakes the service if it slept and fires whatever is due; tasks
+   whose time passed while asleep fire on the next ping.
+
+Every fire still spends one run from the daily budget, and a fire that lands while the
+agent is busy retries a few minutes later instead of being dropped. Set
+`SCHEDULER_ENABLED=false` to turn the loop off entirely.
+
 ## One poller, always
 
 The platform allows exactly **one** long-polling client per agent, and a second one kills the first

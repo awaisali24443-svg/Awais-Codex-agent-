@@ -66,6 +66,7 @@ describe('migrations', () => {
       'reminders',
       'run_events',
       'runs',
+      'scheduled_tasks',
       'schema_migrations',
       'secrets',
       'settings',

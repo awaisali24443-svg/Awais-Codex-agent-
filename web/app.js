@@ -50,6 +50,10 @@ const el = {
   settingsTitle: $('settings-title'),
   settingsBody: $('settings-body'),
   settingsToggle: $('settings-toggle'),
+  schedules: $('schedules'),
+  schedulesTitle: $('schedules-title'),
+  schedulesBody: $('schedules-body'),
+  schedulesToggle: $('schedules-toggle'),
   topbarTitle: $('topbar-title'),
   statusDot: $('status-dot'),
   toast: $('toast'),
@@ -71,6 +75,7 @@ const state = {
   budget: null,
   memory: null,
   settings: null,
+  scheduled: null,
 };
 
 /* ------------------------------------------------------------------ api -- */
@@ -171,7 +176,7 @@ el.loginForm.addEventListener('submit', async (event) => {
 async function enter() {
   showApp();
   renderThread([]);
-  await Promise.allSettled([loadConversations(), loadBudget(), loadMemory(), loadSettings()]);
+  await Promise.allSettled([loadConversations(), loadBudget(), loadMemory(), loadSettings(), loadScheduled()]);
 
   try {
     const { run } = await api('/api/runs/active');
@@ -1376,6 +1381,154 @@ async function testGeminiKey(button) {
   }
 }
 
+/* -------------------------------------------------------------- scheduled -- */
+
+/* Recurring tasks. The panel is deliberately boring: name, what to do, when,
+   where the answer goes. Each fire spends one of the day's runs, and a fire
+   that lands while the agent is busy just retries in a few minutes. */
+
+async function loadScheduled() {
+  try {
+    const { tasks } = await api('/api/scheduled-tasks');
+    state.scheduled = tasks;
+    renderScheduled();
+  } catch { /* the app works without the panel */ }
+}
+
+function describeTask(task) {
+  if (task.cadence === 'interval') return `every ${task.intervalMinutes} min`;
+  const at = task.timeOfDay || '';
+  if (task.cadence === 'daily') return `daily at ${at}`;
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return `${days[task.weekday ?? 0]}s at ${at}`;
+}
+
+function nextIn(iso) {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return 'due soon';
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `in ${hours}h`;
+  return `in ${Math.round(hours / 24)}d`;
+}
+
+function renderScheduled() {
+  const tasks = state.scheduled;
+  if (!tasks) return;
+  el.schedules.hidden = false;
+  el.schedulesTitle.textContent = tasks.length ? `Scheduled (${tasks.length})` : 'Scheduled';
+
+  const rows = tasks.map((task) => `
+    <div class="memory-item">
+      <span class="tag">${task.enabled ? 'on' : 'off'}</span>
+      <b>${escapeHtml(task.name)}</b> — ${escapeHtml(describeTask(task))}
+      → ${task.deliver === 'whatsapp' ? 'WhatsApp' : 'here'}
+      <span class="memory-note">${task.enabled ? `next ${nextIn(task.nextRunAt)}` : 'paused'}${task.lastRunAt ? ` · last ${relativeTime(task.lastRunAt)}` : ''}</span>
+      <span class="secret-actions">
+        <button data-sch-act="toggle" data-id="${escapeHtml(task.id)}">${task.enabled ? 'Pause' : 'Resume'}</button>
+        <button class="danger" data-sch-act="delete" data-id="${escapeHtml(task.id)}">Delete</button>
+      </span>
+    </div>`);
+
+  el.schedulesBody.innerHTML = `
+    <form id="sch-new" class="setting-note">
+      <input class="setting-input" id="sch-name" maxlength="80" placeholder="Name — e.g. Morning news" />
+      <textarea class="setting-input" id="sch-prompt" maxlength="2000" rows="2"
+        placeholder="What should the agent do each time?"></textarea>
+      <div class="secret-actions" style="margin:6px 0">
+        <select class="setting-input" id="sch-cadence">
+          <option value="daily">Daily at…</option>
+          <option value="interval">Every…</option>
+          <option value="weekly">Weekly on…</option>
+        </select>
+        <input class="setting-input" id="sch-interval" type="number" min="5" max="10080" value="60"
+          title="minutes" hidden />
+        <input class="setting-input" id="sch-time" type="time" value="09:00" />
+        <select class="setting-input" id="sch-weekday" hidden>
+          <option value="1">Monday</option><option value="2">Tuesday</option>
+          <option value="3">Wednesday</option><option value="4">Thursday</option>
+          <option value="5">Friday</option><option value="6">Saturday</option>
+          <option value="0">Sunday</option>
+        </select>
+        <select class="setting-input" id="sch-deliver" title="Where the answer goes">
+          <option value="web">Answer here</option>
+          <option value="whatsapp">Send to WhatsApp</option>
+        </select>
+      </div>
+      <button class="primary" type="submit">Schedule it</button>
+    </form>
+    ${rows.join('') || '<p class="memory-note">Nothing scheduled yet.</p>'}`;
+
+  const cadence = el.schedulesBody.querySelector('#sch-cadence');
+  const interval = el.schedulesBody.querySelector('#sch-interval');
+  const time = el.schedulesBody.querySelector('#sch-time');
+  const weekday = el.schedulesBody.querySelector('#sch-weekday');
+  const syncFields = () => {
+    interval.hidden = cadence.value !== 'interval';
+    time.hidden = cadence.value === 'interval';
+    weekday.hidden = cadence.value !== 'weekly';
+  };
+  cadence.addEventListener('change', syncFields);
+
+  el.schedulesBody.querySelector('#sch-new').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = el.schedulesBody.querySelector('#sch-name').value.trim();
+    const prompt = el.schedulesBody.querySelector('#sch-prompt').value.trim();
+    if (!name || !prompt) {
+      toast('Give it a name and tell it what to do.');
+      return;
+    }
+    const body = {
+      name,
+      prompt,
+      cadence: cadence.value,
+      deliver: el.schedulesBody.querySelector('#sch-deliver').value,
+    };
+    if (cadence.value === 'interval') body.intervalMinutes = Number(interval.value);
+    else body.timeOfDay = time.value;
+    if (cadence.value === 'weekly') body.weekday = Number(weekday.value);
+    try {
+      const created = await api('/api/scheduled-tasks', { method: 'POST', body: JSON.stringify(body) });
+      toast(`Scheduled — first run ${nextIn(created.task.nextRunAt)}.`);
+      await loadScheduled();
+    } catch (err) {
+      toast(err.message || 'Could not schedule that.');
+    }
+  });
+
+  // Bound once: renderScheduled re-runs on every change, and a second binding
+  // would fire pause and delete twice.
+  if (!el.schedulesBody.dataset.bound) {
+    el.schedulesBody.dataset.bound = '1';
+    el.schedulesBody.addEventListener('click', onScheduledClick);
+  }
+}
+
+async function onScheduledClick(event) {
+  const button = event.target.closest('button[data-sch-act]');
+  if (!button) return;
+  const { schAct: act, id } = button.dataset;
+  button.disabled = true;
+  try {
+    if (act === 'delete') {
+      await api(`/api/scheduled-tasks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      toast('Deleted.');
+    } else {
+      const task = state.scheduled.find((t) => t.id === id);
+      await api(`/api/scheduled-tasks/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: !task.enabled }),
+      });
+      toast(task.enabled ? 'Paused.' : 'Resumed.');
+    }
+    await loadScheduled();
+  } catch (err) {
+    toast(err.message || 'That did not work.');
+    button.disabled = false;
+  }
+}
+
 /* --------------------------------------------------------------- drawer -- */
 
 function openDrawer() {
@@ -1406,6 +1559,7 @@ function bindPanel(toggle, body) {
 
 bindPanel(el.memoryToggle, el.memoryBody);
 bindPanel(el.settingsToggle, el.settingsBody);
+bindPanel(el.schedulesToggle, el.schedulesBody);
 $('btn-close-drawer').addEventListener('click', closeDrawer);
 el.scrim.addEventListener('click', closeDrawer);
 
