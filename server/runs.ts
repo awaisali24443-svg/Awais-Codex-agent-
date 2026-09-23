@@ -10,6 +10,8 @@
  *   - events are appended with the sequence allocated inside the same
  *     transaction that holds the advisory lock, so no two writers can pick the
  *     same number
+ *   - `finishRun` compacts intermediate `*.snapshot` events (they are
+ *     cumulative, so only the first and last of each stream are kept)
  */
 import crypto from 'crypto';
 
@@ -411,6 +413,45 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
         [newId('msg'), text, runId],
       );
     }
+
+    // Compact intermediate snapshots. Each `*.snapshot` event carries the full
+    // cumulative text, so a long run's event log grows with the square of its
+    // output (a 6s task with a 20KB answer wrote 114KB of events). Snapshots
+    // are cumulative — every one supersedes the ones before it — so dropping
+    // the intermediates loses nothing: keep the first and last of each stream
+    // (the last holds the complete answer) plus the terminal `run.*` event
+    // above, which is not a snapshot and is never touched.
+    await tx.query(
+      `DELETE FROM run_events e
+         USING (
+           SELECT seq,
+                  ROW_NUMBER() OVER (PARTITION BY type ORDER BY seq ASC) AS rn_asc,
+                  ROW_NUMBER() OVER (PARTITION BY type ORDER BY seq DESC) AS rn_desc
+             FROM run_events
+            WHERE run_id = $1 AND type LIKE '%.snapshot'
+         ) doomed
+        WHERE e.run_id = $1
+          AND e.seq = doomed.seq
+          AND doomed.rn_asc > 1
+          AND doomed.rn_desc > 1`,
+      [runId],
+    );
+
+    // Close the gaps the deletion left: the event log is gap-free by
+    // contract ("the event log must be gap-free or replay cannot be
+    // trusted"). Renumber in two steps — negate first, then assign 1..N —
+    // so no transient duplicate key can fire mid-statement. All inside this
+    // transaction, so no client ever sees the intermediate state.
+    await tx.query(`UPDATE run_events SET seq = -seq WHERE run_id = $1 AND seq > 0`, [runId]);
+    await tx.query(
+      `WITH ordered AS (
+         SELECT seq AS old_seq, ROW_NUMBER() OVER (ORDER BY seq DESC) AS new_seq
+           FROM run_events WHERE run_id = $1
+       )
+       UPDATE run_events e SET seq = ordered.new_seq
+         FROM ordered WHERE e.run_id = $1 AND e.seq = ordered.old_seq`,
+      [runId],
+    );
 
     return allocated;
   });
