@@ -28,7 +28,10 @@ async function makeRun(id: string, status = 'running', startedAt?: string): Prom
 before(async () => {
   db = await createDb('');
   const result = await migrate(db);
-  assert.deepEqual(result.applied, [1, 2, 3, 4], 'fresh database should apply migrations 001-004');
+  // Derived from the migrations directory itself, so adding a new migration
+  // file can never stale this assertion again.
+  const expected = loadMigrations(resolveMigrationsDir()).map((m) => m.version);
+  assert.deepEqual(result.applied, expected, `fresh database should apply migrations ${expected.join(', ')}`);
 });
 
 after(async () => {
@@ -39,7 +42,8 @@ describe('migrations', () => {
   test('are idempotent', async () => {
     const again = await migrate(db);
     assert.deepEqual(again.applied, [], 'second run applies nothing');
-    assert.deepEqual(again.skipped, [1, 2, 3, 4]);
+    const expected = loadMigrations(resolveMigrationsDir()).map((m) => m.version);
+    assert.deepEqual(again.skipped, expected, 'every migration on disk is skipped');
   });
 
   test('filenames follow NNN_name.sql and sort numerically', () => {
