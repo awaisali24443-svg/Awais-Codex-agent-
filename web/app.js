@@ -772,6 +772,21 @@ function handleEvent(card, event, data) {
       break;
     }
 
+    case 'verification.checked': {
+      const failed = Array.isArray(data.failed) ? data.failed : [];
+      const checked = Number(data.checked) || 0;
+      const passed = Number(data.passed) || 0;
+      addStep(card, 'verification', {
+        name: failed.length === 0
+          ? `Verified — ${checked} check${checked === 1 ? '' : 's'} passed`
+          : `Verification — ${passed} of ${checked} checks passed`,
+        detail: failed.join(', '),
+        icon: failed.length === 0 ? 'check' : 'warn',
+        done: true,
+      });
+      break;
+    }
+
     case 'memory.recall':
       // Only worth a line when something was actually remembered, and phrased
       // so it explains why the answer may sound like it knows you.
@@ -812,6 +827,20 @@ function finishCard(card, outcome, data = {}) {
   card.thinkingLabel.textContent = 'Thinking';
   drawThinking(card);
   drawAnswer(card, false);
+
+  // Prove-it's-done: the checks the server ran before closing the mission,
+  // rendered as checklist lines. Present on both done and failed finishes —
+  // a failed verification lists exactly which checks failed.
+  if (Array.isArray(data.verification) && data.verification.length > 0) {
+    for (const check of data.verification) {
+      const passed = check && check.passed === true;
+      addStep(card, `proof:${check && check.name}`, {
+        name: `${passed ? '✓' : '✗'} ${check && check.name} — ${check && check.evidence}`,
+        icon: passed ? 'check' : 'warn',
+        done: true,
+      });
+    }
+  }
 
   if (outcome === 'failed') {
     const message = humanError(data.errorType, data.errorMessage);
@@ -1231,6 +1260,7 @@ function humanError(type, message) {
     orphaned: 'The server restarted mid-task. Nothing was lost — retry to continue.',
     interrupted: 'The server restarted mid-task. Finished steps are saved — resume to continue where it left off.',
     token_budget: 'Paused: the token budget ran out. Finished steps are saved — resume to continue with a higher budget.',
+    verification_failed: 'The agent said it was done, but the checks failed. The failed checks are listed above — retry to run it again.',
   };
   return known[type] || type ? `${known[type] || type}: ${message || ''}`.trim() : message || 'The task failed.';
 }
@@ -1270,7 +1300,7 @@ function attach(runId, after = 0) {
     'thinking.snapshot', 'text.snapshot', 'run.environment',
     'artifact', 'memory.recall', 'plan.milestone',
     'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
-    'research.started', 'research.pass',
+    'research.started', 'research.pass', 'verification.checked',
     'run.completed', 'run.failed', 'run.cancelled',
   ];
   for (const name of durable) {

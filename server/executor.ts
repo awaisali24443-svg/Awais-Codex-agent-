@@ -40,6 +40,11 @@ import {
   isTokenBudgetSpent,
   recordMissionStep,
 } from './mission_steps.js';
+import {
+  verifyMission,
+  verificationPassed,
+  type VerificationCheck,
+} from './mission_verify.js';
 
 /** How often the full text so far is written to Postgres while streaming. */
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
@@ -359,6 +364,11 @@ export class RunExecutor {
     // Declared outside the try so the catch below can tell a budget abort
     // apart from a real engine failure.
     let budgetBreached = false;
+    // Every milestone checkpoint is fired without awaiting (a slow database
+    // must not stall the mission), but the pre-close verification below reads
+    // mission_steps — so the promises are collected here and settled there,
+    // closing the race between the last checkpoint and the check.
+    const checkpointWrites: Array<Promise<void>> = [];
 
     try {
       await setRunStatus(this.deps.db, run.id, 'running');
@@ -452,8 +462,10 @@ export class RunExecutor {
           const milestone = parseMilestone(message);
           if (milestone) {
             void writer.write('plan.milestone', { ...milestone });
-            void recordMissionStep(this.deps.db, run.id, milestone).catch((err: Error) =>
-              console.warn(`[run] ${run.id} checkpoint failed:`, err.message),
+            checkpointWrites.push(
+              recordMissionStep(this.deps.db, run.id, milestone).catch((err: Error) =>
+                console.warn(`[run] ${run.id} checkpoint failed:`, err.message),
+              ),
             );
           }
         },
@@ -545,6 +557,46 @@ export class RunExecutor {
         interactionId: result.interactionId ?? null,
         environmentId: result.environmentId ?? null,
       });
+      // Prove-it's-done: re-check the output against the durable record
+      // before the run is marked done. Deterministic only — no engine calls,
+      // so verification can never blow the token budget. A run whose checks
+      // fail is failed, never silently marked done.
+      //
+      // Settle the milestone checkpoints first: they are fired without
+      // awaiting during the mission, and the checks below read the same
+      // table — verifying before the last checkpoint lands would check
+      // stale state.
+      await Promise.allSettled(checkpointWrites);
+      const checks = await verifyMission(this.deps.db, run.id, finalText).catch(
+        (err: Error) => {
+          // A verifier that throws must not take the mission down: degrade
+          // to "skipped" and log it loudly.
+          console.error(`[run] ${run.id} verification errored:`, err.message);
+          return [] as VerificationCheck[];
+        },
+      );
+      const verification: VerificationCheck[] | null = checks.length > 0 ? checks : null;
+      if (verification) {
+        await writer.write('verification.checked', {
+          checked: verification.length,
+          passed: verification.filter((c) => c.passed).length,
+          failed: verification.filter((c) => !c.passed).map((c) => c.name),
+        });
+      }
+      if (verification && !verificationPassed(verification)) {
+        const failed = verification.filter((c) => !c.passed);
+        await this.settle(
+          run,
+          'failed',
+          finalText,
+          'verification_failed',
+          `The agent said it was done, but the checks failed: ${failed
+            .map((c) => `${c.name} — ${c.evidence}`)
+            .join('; ')}.`,
+          verification,
+        );
+        return;
+      }
       const seq = await finishRun(this.deps.db, run.id, {
         status: 'completed',
         text: finalText,
@@ -554,6 +606,7 @@ export class RunExecutor {
         // starting a new one and losing the agent's workspace.
         interactionId: result.interactionId ?? null,
         environmentId: result.environmentId ?? null,
+        verification,
       });
       // LinkedIn drafts: the agent may end a "post this on LinkedIn" mission
       // with a fenced draft. Best-effort, like memory extraction below — a
@@ -567,7 +620,7 @@ export class RunExecutor {
       bus.publish(run.id, {
         seq,
         type: 'run.completed',
-        payload: { status: 'completed', linkedInDraft: linkedInDraft ?? null },
+        payload: { status: 'completed', linkedInDraft: linkedInDraft ?? null, verification },
       });
       this.afterTerminal(run, 'completed');
       console.log(
@@ -758,6 +811,7 @@ export class RunExecutor {
     inMemoryText: string,
     errorType: string | null,
     errorMessage: string | null,
+    verification: VerificationCheck[] | null = null,
   ): Promise<void> {
     const runId = run.id;
     const text = inMemoryText || (await this.snapshotOf(runId));
@@ -767,8 +821,13 @@ export class RunExecutor {
         text,
         errorType,
         errorMessage,
+        verification,
       });
-      this.deps.bus.publish(runId, { seq, type: `run.${status}`, payload: { status, errorType } });
+      this.deps.bus.publish(runId, {
+        seq,
+        type: `run.${status}`,
+        payload: { status, errorType, verification },
+      });
       this.afterTerminal(run, status);
       console.log(`[run] ${runId} ${status}${errorMessage ? `: ${errorMessage}` : ''}`);
     } catch (err) {

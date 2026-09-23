@@ -17,6 +17,7 @@ import crypto from 'crypto';
 
 import { appendEvent, type Db } from './db.js';
 import { CHAIN_VISIBLE, chainCte, ensureMainBranch } from './branches.js';
+import { parseVerification, type VerificationCheck } from './mission_verify.js';
 
 export type RunKind = 'chat' | 'whatsapp' | 'api';
 export type RunStatus = 'queued' | 'running' | 'paused' | 'awaiting_plan' | 'completed' | 'failed' | 'cancelled';
@@ -67,6 +68,11 @@ export interface Run {
   resumeFromStep: number | null;
   /** The operator-visible plan, set by the planning pass; null until then. */
   plan: PlanStep[] | null;
+  /**
+   * Prove-it's-done results, set when a mission closes. Null when the
+   * mission had nothing checkable and verification was skipped.
+   */
+  verification: VerificationCheck[] | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -112,6 +118,7 @@ interface RunRow {
   token_budget: number | null;
   resume_from_step: number | null;
   plan_json: unknown;
+  verification_json: unknown;
   started_at: Date | string;
   finished_at: Date | string | null;
 }
@@ -155,6 +162,7 @@ function mapRun(row: RunRow): Run {
     tokenBudget: row.token_budget ?? null,
     resumeFromStep: row.resume_from_step ?? null,
     plan: parsePlan(row.plan_json),
+    verification: parseVerification(row.verification_json),
     startedAt: toIso(row.started_at) as string,
     finishedAt: toIso(row.finished_at),
   };
@@ -164,7 +172,7 @@ const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
                      interaction_id, environment_id, previous_interaction_id,
                      error_type, error_message, notify_whatsapp,
                      deep_research, research_budget_minutes,
-                     token_budget, resume_from_step, plan_json,
+                     token_budget, resume_from_step, plan_json, verification_json,
                      started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
@@ -460,6 +468,8 @@ export interface FinishRunInput {
   /** Engine handles, stored so the next follow-up can continue this sandbox. */
   interactionId?: string | null;
   environmentId?: string | null;
+  /** Prove-it's-done results; stored on the run so the finish card can show them. */
+  verification?: VerificationCheck[] | null;
 }
 
 /**
@@ -477,6 +487,7 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
       status: input.status,
       errorType: input.errorType ?? null,
       errorMessage: input.errorMessage ?? null,
+      verification: input.verification ?? null,
     });
 
     await tx.query(
@@ -488,6 +499,7 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
               tokens_out = $6,
               interaction_id = COALESCE($7, interaction_id),
               environment_id = COALESCE($8, environment_id),
+              verification_json = COALESCE($9, verification_json),
               finished_at = now()
         WHERE id = $1`,
       [
@@ -499,6 +511,7 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
         input.tokensOut ?? null,
         input.interactionId ?? null,
         input.environmentId ?? null,
+        input.verification ? JSON.stringify(input.verification) : null,
       ],
     );
 

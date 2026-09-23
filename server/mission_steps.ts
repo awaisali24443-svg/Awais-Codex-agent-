@@ -27,46 +27,51 @@ function newStepId(): string {
 /**
  * File one announced milestone. "Step k/N: label" creates/updates the row;
  * "Step k/N done: outcome" marks it done with the outcome as the summary.
- * Idempotent: a re-announced step updates rather than duplicates.
+ *
+ * One UPSERT per call, so two milestones announced in the same tick cannot
+ * lose each other: the old SELECT-then-INSERT raced (both SELECTs ran before
+ * either INSERT, and the second INSERT died on the unique index, silently
+ * dropping the step). Postgres serializes concurrent upserts on the
+ * (run_id, seq) index; the loser takes the conflict path instead of failing.
+ *
+ * State machine, preserved exactly:
+ * - a "done" announcement always lands the step in 'done'; the first done
+ *   summary wins (a re-done after resume keeps its summary, filling it only
+ *   when it was never recorded)
+ * - a plan announcement refreshes label/total but never moves the status —
+ *   a step already done stays done
  */
 export async function recordMissionStep(db: Db, runId: string, milestone: Milestone): Promise<void> {
-  const rows = await db.query<{ id: string; status: string }>(
-    `SELECT id, status FROM mission_steps WHERE run_id = $1 AND seq = $2`,
-    [runId, milestone.index],
-  );
   if (milestone.done) {
-    if (rows[0]) {
-      await db.query(
-        `UPDATE mission_steps
-            SET status = 'done', result_summary = $2, label = $3, total = $4, updated_at = now()
-          WHERE id = $1 AND status <> 'done'`,
-        [rows[0].id, milestone.label.slice(0, 500), milestone.label.slice(0, 140), milestone.total],
-      );
-      // A step re-done after a resume keeps its summary: only fill when empty.
-      await db.query(
-        `UPDATE mission_steps SET result_summary = $2, updated_at = now()
-          WHERE id = $1 AND result_summary IS NULL`,
-        [rows[0].id, milestone.label.slice(0, 500)],
-      );
-    } else {
-      await db.query(
-        `INSERT INTO mission_steps (id, run_id, seq, total, label, status, result_summary)
-         VALUES ($1, $2, $3, $4, $5, 'done', $6)`,
-        [newStepId(), runId, milestone.index, milestone.total, milestone.label.slice(0, 140), milestone.label.slice(0, 500)],
-      );
-    }
-  } else if (rows[0]) {
     await db.query(
-      `UPDATE mission_steps SET label = $2, total = $3, updated_at = now() WHERE id = $1`,
-      [rows[0].id, milestone.label.slice(0, 140), milestone.total],
+      `INSERT INTO mission_steps (id, run_id, seq, total, label, status, result_summary)
+       VALUES ($1, $2, $3, $4, $5, 'done', $6)
+       ON CONFLICT (run_id, seq) DO UPDATE SET
+         status = 'done',
+         label = EXCLUDED.label,
+         total = EXCLUDED.total,
+         result_summary = COALESCE(mission_steps.result_summary, EXCLUDED.result_summary),
+         updated_at = now()`,
+      [
+        newStepId(),
+        runId,
+        milestone.index,
+        milestone.total,
+        milestone.label.slice(0, 140),
+        milestone.label.slice(0, 500),
+      ],
     );
-  } else {
-    await db.query(
-      `INSERT INTO mission_steps (id, run_id, seq, total, label, status)
-       VALUES ($1, $2, $3, $4, $5, 'pending')`,
-      [newStepId(), runId, milestone.index, milestone.total, milestone.label.slice(0, 140)],
-    );
+    return;
   }
+  await db.query(
+    `INSERT INTO mission_steps (id, run_id, seq, total, label, status)
+     VALUES ($1, $2, $3, $4, $5, 'pending')
+     ON CONFLICT (run_id, seq) DO UPDATE SET
+       label = EXCLUDED.label,
+       total = EXCLUDED.total,
+       updated_at = now()`,
+    [newStepId(), runId, milestone.index, milestone.total, milestone.label.slice(0, 140)],
+  );
 }
 
 export async function getMissionSteps(db: Db, runId: string): Promise<MissionStep[]> {

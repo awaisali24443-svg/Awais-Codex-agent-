@@ -73,6 +73,21 @@ describe('mission step checkpoints', () => {
     assert.equal(await firstPendingStep(db, run.id), 2);
   });
 
+  test('two milestones in the same tick do not lose each other', async () => {
+    // The executor fires checkpoints without awaiting, so a plan line and
+    // its done line can race. The loser must take the conflict path, not die
+    // on the unique index and silently drop the step.
+    const run = await createRun(db, { prompt: 'build the thing', engine: 'scripted' });
+    await Promise.all([
+      recordMissionStep(db, run.id, milestone('Step 1/1: scaffold the project')),
+      recordMissionStep(db, run.id, milestone('Step 1/1 done: scaffolded')),
+    ]);
+    const steps = await getMissionSteps(db, run.id);
+    assert.equal(steps.length, 1);
+    assert.equal(steps[0].status, 'done');
+    assert.equal(steps[0].resultSummary, 'scaffolded');
+  });
+
   test('re-announcing a step updates it instead of duplicating', async () => {
     const run = await createRun(db, { prompt: 'build the thing', engine: 'scripted' });
     await recordMissionStep(db, run.id, milestone('Step 1/2: draft'));
