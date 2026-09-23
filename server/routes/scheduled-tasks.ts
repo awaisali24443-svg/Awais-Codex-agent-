@@ -20,11 +20,13 @@ import {
   type Cadence,
   type CreateTaskInput,
   type Deliver,
+  type TaskKind,
 } from '../scheduler.js';
 
 function parseTaskInput(body: Record<string, unknown>): CreateTaskInput {
   const cadence = body.cadence as Cadence;
   const deliver = (body.deliver ?? 'web') as Deliver;
+  const kind = (typeof body.kind === 'string' ? body.kind : 'task') as TaskKind;
   return {
     name: typeof body.name === 'string' ? body.name : '',
     prompt: typeof body.prompt === 'string' ? body.prompt : '',
@@ -32,8 +34,10 @@ function parseTaskInput(body: Record<string, unknown>): CreateTaskInput {
     intervalMinutes: typeof body.intervalMinutes === 'number' ? body.intervalMinutes : undefined,
     timeOfDay: typeof body.timeOfDay === 'string' ? body.timeOfDay : undefined,
     weekday: typeof body.weekday === 'number' ? body.weekday : undefined,
+    dayOfMonth: typeof body.dayOfMonth === 'number' ? body.dayOfMonth : undefined,
     timezone: typeof body.timezone === 'string' ? body.timezone : undefined,
     deliver,
+    kind,
   };
 }
 
@@ -93,6 +97,8 @@ export function createScheduledTaskRoutes(deps: { db: Db } & Partial<AcceptDeps>
       db,
       executor: deps.executor,
       config: deps.config,
+      // Message-only schedules need the WhatsApp token to send their note.
+      secrets: deps.secrets,
     });
     res.json(summary);
   });

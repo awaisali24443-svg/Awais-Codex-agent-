@@ -5,6 +5,8 @@
  * in main.ts (or a `POST /api/scheduled-tasks/tick` from an external cron)
  * claims due tasks and fires each through `acceptRun`, the same path every
  * other channel uses: one run at a time, one daily-budget claim per fire.
+ * A task whose kind is 'message' instead sends its prompt as one WhatsApp
+ * note — no run, no budget, ever.
  *
  * Claiming is two-phase like reminders: `claimDueTasks` advances `next_run_at`
  * atomically (`FOR UPDATE SKIP LOCKED`), and a fire that cannot start (agent
@@ -19,9 +21,18 @@
 import type { Db } from './db.js';
 import { newId } from './runs.js';
 import { acceptRun, type AcceptDeps } from './accept.js';
+import { WhatsAppClient } from './whatsapp/api.js';
+import { WhatsAppSender } from './whatsapp/sender.js';
+import { resolveRecipient } from './whatsapp/doneping.js';
 
-export type Cadence = 'interval' | 'daily' | 'weekly';
+export type Cadence = 'interval' | 'daily' | 'weekly' | 'monthly';
 export type Deliver = 'web' | 'whatsapp';
+/**
+ * What a fire does. 'task' runs the agent through the normal acceptance path
+ * (one run, one daily-budget claim); 'message' just sends the prompt text to
+ * WhatsApp — no run, no budget, ever.
+ */
+export type TaskKind = 'task' | 'message';
 
 export interface ScheduledTask {
   id: string;
@@ -31,8 +42,12 @@ export interface ScheduledTask {
   intervalMinutes: number | null;
   timeOfDay: string | null;
   weekday: number | null;
+  /** Day of the month (1–28) for the monthly cadence. */
+  dayOfMonth: number | null;
   timezone: string;
   deliver: Deliver;
+  /** 'task' does agent work (costs budget); 'message' just sends a WhatsApp note. */
+  kind: TaskKind;
   enabled: boolean;
   nextRunAt: string;
   lastRunAt: string | null;
@@ -47,8 +62,11 @@ export interface CreateTaskInput {
   intervalMinutes?: number;
   timeOfDay?: string;
   weekday?: number;
+  dayOfMonth?: number;
   timezone?: string;
   deliver?: Deliver;
+  /** Defaults to 'task'; 'message' sends the prompt as a WhatsApp note. */
+  kind?: TaskKind;
 }
 
 export const MAX_TASK_NAME_CHARS = 80;
@@ -65,8 +83,10 @@ interface TaskRow {
   interval_minutes: number | null;
   time_of_day: string | null;
   weekday: number | null;
+  day_of_month: number | null;
   timezone: string;
   deliver: Deliver;
+  kind: TaskKind;
   enabled: boolean;
   next_run_at: Date | string;
   last_run_at: Date | string | null;
@@ -87,8 +107,10 @@ function mapTask(row: TaskRow): ScheduledTask {
     intervalMinutes: row.interval_minutes,
     timeOfDay: row.time_of_day,
     weekday: row.weekday,
+    dayOfMonth: row.day_of_month,
     timezone: row.timezone,
     deliver: row.deliver,
+    kind: row.kind,
     enabled: row.enabled,
     nextRunAt: toIso(row.next_run_at),
     lastRunAt: row.last_run_at ? toIso(row.last_run_at) : null,
@@ -173,11 +195,41 @@ export function nextInterval(from: Date, intervalMinutes: number): Date {
   return new Date(from.getTime() + intervalMinutes * 60_000);
 }
 
+/**
+ * Next day-of-month `dayOfMonth` (1–28) at HH:MM strictly after `from`, in
+ * `timeZone`. Capped at 28 so every month has the day — no February edge
+ * cases, no skipped months.
+ */
+export function nextMonthly(
+  from: Date,
+  dayOfMonth: number,
+  timeOfDay: string,
+  timeZone: string,
+): Date {
+  const [hh, mm] = timeOfDay.split(':').map(Number);
+  const wall = wallClock(from, timeZone);
+  let target = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), dayOfMonth, hh, mm, 0, 0);
+  if (target <= wall.getTime()) {
+    const nextMonth = wall.getUTCMonth() + 1;
+    target = Date.UTC(
+      wall.getUTCFullYear() + Math.floor(nextMonth / 12),
+      nextMonth % 12,
+      dayOfMonth,
+      hh,
+      mm,
+      0,
+      0,
+    );
+  }
+  return fromWallClock(target, timeZone);
+}
+
 export interface CadenceSpec {
   cadence: Cadence;
   intervalMinutes: number | null;
   timeOfDay: string | null;
   weekday: number | null;
+  dayOfMonth: number | null;
   timezone: string;
 }
 
@@ -190,6 +242,13 @@ export function computeNextRun(spec: CadenceSpec, from: Date): Date {
       return nextDaily(from, spec.timeOfDay as string, spec.timezone);
     case 'weekly':
       return nextWeekly(from, spec.weekday as number, spec.timeOfDay as string, spec.timezone);
+    case 'monthly':
+      return nextMonthly(
+        from,
+        spec.dayOfMonth as number,
+        spec.timeOfDay as string,
+        spec.timezone,
+      );
   }
 }
 
@@ -212,8 +271,10 @@ export interface NormalizedTaskInput {
   intervalMinutes: number | null;
   timeOfDay: string | null;
   weekday: number | null;
+  dayOfMonth: number | null;
   timezone: string;
   deliver: Deliver;
+  kind: TaskKind;
 }
 
 export function normalizeTaskInput(input: CreateTaskInput): NormalizedTaskInput {
@@ -229,8 +290,8 @@ export function normalizeTaskInput(input: CreateTaskInput): NormalizedTaskInput 
       `scheduler: prompt is ${prompt.length} chars; the limit is ${MAX_TASK_PROMPT_CHARS}`,
     );
   }
-  if (!['interval', 'daily', 'weekly'].includes(input.cadence)) {
-    throw new Error('scheduler: cadence must be interval, daily, or weekly');
+  if (!['interval', 'daily', 'weekly', 'monthly'].includes(input.cadence)) {
+    throw new Error('scheduler: cadence must be interval, daily, weekly, or monthly');
   }
   const cadence = input.cadence;
   const timezone = (input.timezone ?? DEFAULT_TIMEZONE).trim() || DEFAULT_TIMEZONE;
@@ -239,6 +300,7 @@ export function normalizeTaskInput(input: CreateTaskInput): NormalizedTaskInput 
   let intervalMinutes: number | null = null;
   let timeOfDay: string | null = null;
   let weekday: number | null = null;
+  let dayOfMonth: number | null = null;
 
   if (cadence === 'interval') {
     const n = input.intervalMinutes;
@@ -257,6 +319,13 @@ export function normalizeTaskInput(input: CreateTaskInput): NormalizedTaskInput 
       }
       weekday = w as number;
     }
+    if (cadence === 'monthly') {
+      const d = input.dayOfMonth;
+      if (!Number.isInteger(d) || (d as number) < 1 || (d as number) > 28) {
+        throw new Error('scheduler: dayOfMonth must be a whole day of the month from 1 to 28');
+      }
+      dayOfMonth = d as number;
+    }
   }
 
   const deliver = input.deliver ?? 'web';
@@ -264,7 +333,12 @@ export function normalizeTaskInput(input: CreateTaskInput): NormalizedTaskInput 
     throw new Error('scheduler: deliver must be web or whatsapp');
   }
 
-  return { name, prompt, cadence, intervalMinutes, timeOfDay, weekday, timezone, deliver };
+  const kind = input.kind ?? 'task';
+  if (kind !== 'task' && kind !== 'message') {
+    throw new Error('scheduler: kind must be task or message');
+  }
+
+  return { name, prompt, cadence, intervalMinutes, timeOfDay, weekday, dayOfMonth, timezone, deliver, kind };
 }
 
 /* ------------------------------------------------------------------ crud -- */
@@ -275,8 +349,9 @@ export async function createScheduledTask(db: Db, input: CreateTaskInput): Promi
   const nextRunAt = computeNextRun(v, new Date());
   await db.query(
     `INSERT INTO scheduled_tasks
-       (id, name, prompt, cadence, interval_minutes, time_of_day, weekday, timezone, deliver, next_run_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       (id, name, prompt, cadence, interval_minutes, time_of_day, weekday, day_of_month,
+        timezone, deliver, kind, next_run_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       id,
       v.name,
@@ -285,8 +360,10 @@ export async function createScheduledTask(db: Db, input: CreateTaskInput): Promi
       v.intervalMinutes,
       v.timeOfDay,
       v.weekday,
+      v.dayOfMonth,
       v.timezone,
       v.deliver,
+      v.kind,
       nextRunAt.toISOString(),
     ],
   );
@@ -346,6 +423,7 @@ export async function claimDueTasks(db: Db, limit = 5): Promise<ScheduledTask[]>
           intervalMinutes: row.interval_minutes,
           timeOfDay: row.time_of_day,
           weekday: row.weekday,
+          dayOfMonth: row.day_of_month,
           timezone: row.timezone,
         },
         now,
@@ -367,6 +445,13 @@ export async function markTaskFired(db: Db, id: string, runId: string): Promise<
   );
 }
 
+/** A message-only fire: no run exists, so only the time is recorded. */
+export async function markMessageFired(db: Db, id: string): Promise<void> {
+  await db.query(`UPDATE scheduled_tasks SET last_run_at = now(), last_run_id = NULL WHERE id = $1`, [
+    id,
+  ]);
+}
+
 /** The run could not start (agent busy, budget spent): retry soon, not in a full interval. */
 export async function deferTask(db: Db, id: string): Promise<void> {
   const retryAt = new Date(Date.now() + DEFERRED_RETRY_MINUTES * 60_000);
@@ -377,17 +462,91 @@ export async function deferTask(db: Db, id: string): Promise<void> {
 }
 
 export interface FireSummary {
-  fired: { taskId: string; taskName: string; runId: string }[];
+  /** runId is '' for message-only fires — they never create a run. */
+  fired: { taskId: string; taskName: string; runId: string; kind: TaskKind }[];
   deferred: { taskId: string; taskName: string; reason: string }[];
+}
+
+/** Test seam for message-only fires: replaces the WhatsApp HTTP layer. */
+export interface FireSeams {
+  fetchImpl?: typeof fetch;
+}
+
+/** The reminder text, plain: a header naming the schedule, then the note. */
+export function composeReminderMessage(task: Pick<ScheduledTask, 'name' | 'prompt'>): string {
+  return `⏰ ${task.name}\n\n${task.prompt.trim()}`;
+}
+
+/**
+ * Fire a message-only schedule: send the reminder text as one WhatsApp
+ * message and never create a run or touch the budget.
+ *
+ * The anti-spam rules, like the morning digest's:
+ *
+ *   - Silent without a token. No `whatsapp_token` (or no resolvable
+ *     recipient) means no message, no error, no throw — and the fire is still
+ *     consumed: `next_run_at` was already advanced by the claim, so there is
+ *     no retry storm.
+ *   - Claimed before sending. The claim in `claimDueTasks` advanced
+ *     `next_run_at` atomically, so a restart or redeploy between claim and
+ *     send can never double-send the same fire.
+ *   - A failed send still consumes the fire. Retrying every 60 seconds until
+ *     it works would be notification spam; the next scheduled fire comes on
+ *     its own cadence.
+ *   - Never throws. The message is decoration next to the agent — a send
+ *     failure must not touch anything else in the process.
+ */
+async function fireMessageTask(
+  deps: AcceptDeps & FireSeams,
+  task: ScheduledTask,
+  summary: FireSummary,
+  log: (message: string) => void,
+): Promise<void> {
+  const { db } = deps;
+  const logLine = (message: string): void => {
+    log(`[scheduler] ${message}`);
+  };
+  const done = async (sent: boolean): Promise<void> => {
+    await markMessageFired(db, task.id).catch(() => {});
+    summary.fired.push({ taskId: task.id, taskName: task.name, runId: '', kind: 'message' });
+    log(
+      sent
+        ? `[scheduler] messaged "${task.name}" on WhatsApp`
+        : `[scheduler] "${task.name}" message-only: skipped silently (no WhatsApp token or recipient)`,
+    );
+  };
+  try {
+    const secrets = deps.secrets;
+    const token = secrets?.get('whatsapp_token') ?? '';
+    if (!token || !secrets) {
+      await done(false);
+      return;
+    }
+    const to = await resolveRecipient({ db, secrets }, logLine).catch(() => null);
+    if (!to) {
+      await done(false);
+      return;
+    }
+    const client = new WhatsAppClient({ token, fetchImpl: deps.fetchImpl });
+    const sender = new WhatsAppSender(client, logLine);
+    const sent = await sender.send(composeReminderMessage(task), { to });
+    if (!sent) log(`[scheduler] "${task.name}" message-only send failed: ${sender.error ?? 'unknown'}`);
+    await done(sent);
+  } catch (err) {
+    log(`[scheduler] "${task.name}" message-only fire failed: ${(err as Error).message}`);
+    await done(false);
+  }
 }
 
 /**
  * One tick of the scheduler: claim what is due, fire each through the normal
  * acceptance path. A task whose run cannot start is deferred, never dropped.
- * Never throws — a bad tick must not kill the loop that owns it.
+ * Message-only schedules bypass the agent entirely: one WhatsApp note, no
+ * run, no budget. Never throws — a bad tick must not kill the loop that owns
+ * it.
  */
 export async function fireDueScheduledTasks(
-  deps: AcceptDeps,
+  deps: AcceptDeps & FireSeams,
   log: (message: string) => void = () => {},
 ): Promise<FireSummary> {
   const { db } = deps;
@@ -400,15 +559,23 @@ export async function fireDueScheduledTasks(
     return summary;
   }
   for (const task of due) {
+    if (task.kind === 'message') {
+      await fireMessageTask(deps, task, summary, log);
+      continue;
+    }
     try {
       const result = await acceptRun(deps, {
         prompt: task.prompt,
         kind: 'api',
         notifyWhatsapp: task.deliver === 'whatsapp',
+        // The fired run lands in its own conversation titled with the
+        // schedule's name, so the operator can see at a glance which queued
+        // work produced which mission.
+        conversationTitle: `⏰ ${task.name}`,
       });
       if (result.ok) {
         await markTaskFired(db, task.id, result.run.id);
-        summary.fired.push({ taskId: task.id, taskName: task.name, runId: result.run.id });
+        summary.fired.push({ taskId: task.id, taskName: task.name, runId: result.run.id, kind: 'task' });
         log(`[scheduler] fired "${task.name}" as ${result.run.id}`);
       } else {
         await deferTask(db, task.id);

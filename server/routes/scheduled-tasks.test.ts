@@ -164,6 +164,54 @@ describe('crud', () => {
   });
 });
 
+describe('message-only kind', () => {
+  test('creates a message-only reminder', async () => {
+    const created = await post('/api/scheduled-tasks', {
+      name: 'Drink water',
+      prompt: 'Drink a glass of water',
+      cadence: 'interval',
+      intervalMinutes: 120,
+      kind: 'message',
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.task.kind, 'message');
+  });
+
+  test('rejects an unknown kind', async () => {
+    const created = await post('/api/scheduled-tasks', { ...dailyTask, kind: 'carrier-pigeon' });
+    assert.equal(created.status, 400);
+    assert.match(created.body.message, /kind must be task or message/);
+  });
+
+  test('tick fires a message-only task silently with no token: no run, no budget', async () => {
+    const runsBefore = Number((await db.query<{ n: string }>(`SELECT count(*) AS n FROM runs`))[0].n);
+    const created = await post('/api/scheduled-tasks', {
+      name: 'Quiet reminder',
+      prompt: 'this needs no agent',
+      cadence: 'interval',
+      intervalMinutes: 60,
+      kind: 'message',
+    });
+    const id = created.body.task.id;
+    await db.query(`UPDATE scheduled_tasks SET next_run_at = now() - interval '1 minute' WHERE id = $1`, [id]);
+
+    // No whatsapp_token is configured in this test app, so the fire must be
+    // silent: consumed, but no send, no run, no throw.
+    const ticked = await post('/api/scheduled-tasks/tick', {});
+    assert.equal(ticked.body.fired.length, 1);
+    assert.equal(ticked.body.fired[0].kind, 'message');
+    assert.equal(ticked.body.fired[0].runId, '');
+
+    const runsAfter = Number((await db.query<{ n: string }>(`SELECT count(*) AS n FROM runs`))[0].n);
+    assert.equal(runsAfter, runsBefore, 'no run created by a message-only fire');
+    const rows = await db.query<{ next_run_at: Date }>(
+      `SELECT next_run_at FROM scheduled_tasks WHERE id = $1`,
+      [id],
+    );
+    assert.ok(new Date(rows[0].next_run_at).getTime() > Date.now(), 'fire consumed');
+  });
+});
+
 describe('tick', () => {
   test('fires a due task and advances its next run', async () => {
     const created = await post('/api/scheduled-tasks', {

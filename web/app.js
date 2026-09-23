@@ -2514,8 +2514,10 @@ async function testGeminiKey(button) {
 /* -------------------------------------------------------------- scheduled -- */
 
 /* Recurring tasks. The panel is deliberately boring: name, what to do, when,
-   where the answer goes. Each fire spends one of the day's runs, and a fire
-   that lands while the agent is busy just retries in a few minutes. */
+   where the answer goes. Each 'run the task' fire spends one of the day's
+   runs, and a fire that lands while the agent is busy just retries in a few
+   minutes. A 'just message me' reminder costs nothing — at the scheduled
+   time it only sends a WhatsApp note. */
 
 async function loadScheduled() {
   try {
@@ -2553,7 +2555,7 @@ function renderScheduled() {
     <div class="memory-item">
       <span class="tag">${task.enabled ? 'on' : 'off'}</span>
       <b>${escapeHtml(task.name)}</b> — ${escapeHtml(describeTask(task))}
-      → ${task.deliver === 'whatsapp' ? 'WhatsApp' : 'here'}
+      → ${task.kind === 'message' ? 'WhatsApp message 💬' : task.deliver === 'whatsapp' ? 'WhatsApp' : 'here'}
       <span class="memory-note">${task.enabled ? `next ${nextIn(task.nextRunAt)}` : 'paused'}${task.lastRunAt ? ` · last ${relativeTime(task.lastRunAt)}` : ''}</span>
       <span class="secret-actions">
         <button data-sch-act="toggle" data-id="${escapeHtml(task.id)}">${task.enabled ? 'Pause' : 'Resume'}</button>
@@ -2585,6 +2587,10 @@ function renderScheduled() {
           <option value="web">Answer here</option>
           <option value="whatsapp">Send to WhatsApp</option>
         </select>
+        <select class="setting-input" id="sch-kind" title="What happens at the scheduled time">
+          <option value="task">Run the task</option>
+          <option value="message">Just message me</option>
+        </select>
       </div>
       <button class="primary" type="submit">Schedule it</button>
     </form>
@@ -2609,18 +2615,24 @@ function renderScheduled() {
       toast('Give it a name and tell it what to do.');
       return;
     }
+    const kind = el.schedulesBody.querySelector('#sch-kind').value;
     const body = {
       name,
       prompt,
       cadence: cadence.value,
       deliver: el.schedulesBody.querySelector('#sch-deliver').value,
+      kind,
     };
     if (cadence.value === 'interval') body.intervalMinutes = Number(interval.value);
     else body.timeOfDay = time.value;
     if (cadence.value === 'weekly') body.weekday = Number(weekday.value);
     try {
       const created = await api('/api/scheduled-tasks', { method: 'POST', body: JSON.stringify(body) });
-      toast(`Scheduled — first run ${nextIn(created.task.nextRunAt)}.`);
+      toast(
+        kind === 'message'
+          ? `Reminder set — first message ${nextIn(created.task.nextRunAt)}.`
+          : `Scheduled — first run ${nextIn(created.task.nextRunAt)}.`,
+      );
       await loadScheduled();
     } catch (err) {
       toast(err.message || 'Could not schedule that.');

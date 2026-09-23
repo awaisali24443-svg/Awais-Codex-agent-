@@ -221,13 +221,14 @@ async function boot(): Promise<void> {
   }
 
   // ---- scheduled tasks ------------------------------------------------------
-  // Recurring jobs. Each fire goes through the normal acceptance path (one run
-  // at a time, daily budget), so a busy agent or a spent budget defers the
-  // task to the next tick instead of dropping it. Overnight firing relies on
-  // the self-ping below keeping the process awake on the free tier.
+  // Recurring jobs. A 'task' fire goes through the normal acceptance path
+  // (one run at a time, daily budget), so a busy agent or a spent budget
+  // defers the task to the next tick instead of dropping it. A 'message'
+  // fire just sends a WhatsApp note — no run, no budget. Overnight firing
+  // relies on the self-ping below keeping the process awake on the free tier.
   if (config.schedulerEnabled) {
     const tickScheduled = (): Promise<void> =>
-      fireDueScheduledTasks({ db, executor, config }, (m) => console.log(m)).then(() => {});
+      fireDueScheduledTasks({ db, executor, config, secrets }, (m) => console.log(m)).then(() => {});
     const scheduledTimer = setInterval(() => void tickScheduled(), 60_000);
     scheduledTimer.unref?.();
     void tickScheduled();

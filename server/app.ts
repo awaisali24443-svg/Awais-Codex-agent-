@@ -280,7 +280,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api', createReminderRoutes({ db }));
   app.use(
     '/api',
-    createScheduledTaskRoutes({ db, executor: deps.executor, config: deps.config }),
+    createScheduledTaskRoutes({ db, executor: deps.executor, config: deps.config, secrets: deps.secrets }),
   );
   app.use('/api', createBriefingRoutes({ db }));
   app.use('/api', createMemoryRoutes({ db }));
