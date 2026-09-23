@@ -174,9 +174,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   const geminiApiKey = (env.GEMINI_API_KEY ?? '').trim();
   if (isProduction && engineRaw === 'antigravity' && !geminiApiKey) {
-    problems.push(
-      'ENGINE=antigravity needs GEMINI_API_KEY, or every mission will fail with auth_failed. ' +
-        'Set the key, or set ENGINE=scripted to run without one.',
+    // Warn, don't die. The key can live in Settings instead of the
+    // environment: main.ts resolves it per request, and the engine refuses
+    // runs honestly when no key exists anywhere. Dying here would contradict
+    // DEPLOY.md, which lets the operator leave the env var empty.
+    console.warn(
+      '[config] ENGINE=antigravity but GEMINI_API_KEY is empty — agent runs will be ' +
+        'refused until a key is stored in Settings.',
     );
   }
 
