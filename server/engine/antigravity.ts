@@ -92,7 +92,13 @@ export interface AntigravityEngineOptions {
 const DEFAULT_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RECOVERY_ATTEMPTS = 4;
-const DEFAULT_RATE_LIMIT_BASE_DELAY_MS = 30_000;
+/**
+ * First wait after a 429, measured from the refusal itself. TPM windows are
+ * per-minute: 65s guarantees every token counted against the refused request
+ * has slid out of a rolling window, and crosses at least one boundary of a
+ * fixed window. Later waits keep doubling from here (capped below).
+ */
+const DEFAULT_RATE_LIMIT_BASE_DELAY_MS = 65_000;
 const DEFAULT_RATE_LIMIT_MAX_WAIT_MS = 30 * 60_000;
 /** Longest single wait between rate-limit retries. TPM windows clear per minute. */
 const MAX_RATE_LIMIT_DELAY_MS = 2 * 60_000;

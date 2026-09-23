@@ -419,6 +419,12 @@ describe('failures', () => {
     );
   });
 
+  test('the default first rate-limit wait clears a full TPM minute window', () => {
+    const engine = new AntigravityEngine({ apiKey: 'k', agent: 'antigravity-preview-09-2026' });
+    const baseDelay = (engine as unknown as { rateLimitBaseDelayMs: number }).rateLimitBaseDelayMs;
+    assert.equal(baseDelay, 65_000, 'first wait is 65s measured from the 429, not 30s');
+  });
+
   test('a mid-stream 429 resumes the stored interaction instead of restarting', async () => {
     let calls = 0;
     fake = await startFake((_req, res, body) => {
