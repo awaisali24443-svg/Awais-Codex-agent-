@@ -104,4 +104,62 @@ describe('web/app.js', () => {
       `index.html has ${toggles.length} collapsible panel(s) but app.js binds ${bound.length}`,
     );
   });
+
+  // The markdown renderer is a set of pure functions inside app.js (no DOM),
+  // so the tests evaluate just that slice instead of the whole browser script.
+  function loadMarkdown(): (source: string) => string {
+    const start = source.indexOf('function escapeHtml(text) {');
+    const end = source.indexOf('\nfunction relativeTime(iso) {');
+    assert.ok(start !== -1 && end > start, 'markdown helpers not found in app.js');
+    return new Function(`${source.slice(start, end)}; return { markdown };`)().markdown;
+  }
+
+  test('markdown() renders a table instead of raw pipe text', () => {
+    const markdown = loadMarkdown();
+    const out = markdown('| Factor | What to Expect |\n| --- | --- |\n| Payback | 6 to 10 years |');
+    assert.match(out, /<table>/);
+    assert.match(out, /<th>Factor<\/th>/);
+    assert.match(out, /<td>6 to 10 years<\/td>/);
+    assert.doesNotMatch(out, /\| --- \|/);
+  });
+
+  test('markdown() renders a table that follows intro text in the same block', () => {
+    const markdown = loadMarkdown();
+    const out = markdown('Summary\n| A | B |\n|---|---|\n| 1 | 2 |');
+    assert.match(out, /<p>Summary<\/p>/);
+    assert.match(out, /<table>.*<th>A<\/th>.*<td>2<\/td>.*<\/table>/s);
+  });
+
+  test('markdown() honours alignment-style separator rows and inline markup in cells', () => {
+    const markdown = loadMarkdown();
+    const out = markdown('| A | B |\n|:---|---:|\n| **x** | `y` |');
+    assert.match(out, /<table>/);
+    assert.match(out, /<td><strong>x<\/strong><\/td>/);
+    assert.match(out, /<td><code>y<\/code><\/td>/);
+  });
+
+  test('markdown() leaves pipe text without a separator row alone', () => {
+    const markdown = loadMarkdown();
+    const out = markdown('| not | a table |');
+    assert.doesNotMatch(out, /<table>/);
+    assert.match(out, /\| not \| a table \|/);
+  });
+
+  test('markdown() still renders headings and lists', () => {
+    const markdown = loadMarkdown();
+    assert.match(markdown('# Hi'), /<h1>Hi<\/h1>/);
+    assert.match(markdown('- a\n- b'), /<ul>.*<li>a<\/li>.*<li>b<\/li>.*<\/ul>/s);
+    assert.match(markdown('1. a\n2. b'), /<ol>.*<li>a<\/li>.*<li>b<\/li>.*<\/ol>/s);
+  });
+
+  test('settings templates keep spaces around inline elements', () => {
+    // A 2026-09-23 QA pass reported fused words ("connectedas",
+    // "onlyreadyour") in the Settings panel. The templates are correctly
+    // spaced today; this scan fails the build if a word ever abuts an
+    // inline <b>/<code>/<i> tag again.
+    const fused: string[] = [];
+    for (const m of source.matchAll(/[A-Za-z0-9]<(?:b|code|i)>/g)) fused.push(m[0]);
+    for (const m of source.matchAll(/<\/(?:b|code|i)>[A-Za-z0-9]/g)) fused.push(m[0]);
+    assert.deepEqual(fused, [], `words fused across inline tags: ${fused.join(', ')}`);
+  });
 });

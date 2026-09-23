@@ -2721,11 +2721,63 @@ function inline(text) {
 }
 
 /**
- * A deliberately small markdown subset: headings, lists, fences, inline code
- * and emphasis. It escapes first, so model output can never inject markup into
- * the page — the cost of a full markdown library is not worth its attack
- * surface here.
+ * A deliberately small markdown subset: headings, lists, tables, fences,
+ * inline code and emphasis. It escapes first, so model output can never inject
+ * markup into the page — the cost of a full markdown library is not worth its
+ * attack surface here.
  */
+
+/* Tables: a run of `| cell |` lines whose second line is a separator row
+   (`| --- | --- |`) renders as a real table instead of raw pipe text. */
+function isTableRow(line) {
+  return /^\s*\|.*\|\s*$/.test(line);
+}
+function isSeparatorRow(line) {
+  const cells = line.trim().replace(/^\||\|$/g, '').split('|');
+  return cells.length > 0 && cells.every((c) => /-/.test(c) && /^[\s:|-]+$/.test(c));
+}
+function tableCells(line) {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map((c) => inline(c.trim()));
+}
+function renderTable(rows) {
+  const head = tableCells(rows[0]).map((c) => `<th>${c}</th>`).join('');
+  const body = rows.slice(2)
+    .map((r) => `<tr>${tableCells(r).map((c) => `<td>${c}</td>`).join('')}</tr>`)
+    .join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/* Renders the lines of one block: table runs become <table>, everything else
+   keeps the list/paragraph handling. */
+function renderBlockLines(lines) {
+  let html = '';
+  let text = [];
+  const flushText = () => {
+    if (!text.length) return;
+    if (text.every((l) => /^\s*[-*+]\s+/.test(l))) {
+      html += `<ul>${text.map((l) => `<li>${inline(l.replace(/^\s*[-*+]\s+/, ''))}</li>`).join('')}</ul>`;
+    } else if (text.every((l) => /^\s*\d+[.)]\s+/.test(l))) {
+      html += `<ol>${text.map((l) => `<li>${inline(l.replace(/^\s*\d+[.)]\s+/, ''))}</li>`).join('')}</ol>`;
+    } else {
+      html += `<p>${inline(text.join('\n')).replace(/\n/g, '<br />')}</p>`;
+    }
+    text = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (isTableRow(lines[i]) && isTableRow(lines[i + 1] || '') && isSeparatorRow(lines[i + 1])) {
+      let j = i + 2;
+      while (j < lines.length && isTableRow(lines[j])) j++;
+      flushText();
+      html += renderTable(lines.slice(i, j));
+      i = j - 1;
+    } else {
+      text.push(lines[i]);
+    }
+  }
+  flushText();
+  return html;
+}
+
 function markdown(source) {
   const text = escapeHtml(source || '').replace(/\r\n/g, '\n');
   const parts = text.split(/```/);
@@ -2750,16 +2802,7 @@ function markdown(source) {
       }
 
       const lines = trimmed.split('\n');
-      if (lines.every((l) => /^\s*[-*+]\s+/.test(l))) {
-        html += `<ul>${lines.map((l) => `<li>${inline(l.replace(/^\s*[-*+]\s+/, ''))}</li>`).join('')}</ul>`;
-        continue;
-      }
-      if (lines.every((l) => /^\s*\d+[.)]\s+/.test(l))) {
-        html += `<ol>${lines.map((l) => `<li>${inline(l.replace(/^\s*\d+[.)]\s+/, ''))}</li>`).join('')}</ol>`;
-        continue;
-      }
-
-      html += `<p>${inline(trimmed).replace(/\n/g, '<br />')}</p>`;
+      html += renderBlockLines(lines);
     }
   });
 

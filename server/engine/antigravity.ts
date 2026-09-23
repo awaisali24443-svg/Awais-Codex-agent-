@@ -290,7 +290,7 @@ export class AntigravityEngine implements Engine {
     ) {
       const message = await failureDetail();
       if (/unknown enum|invalid enum/i.test(message)) {
-        ctx.log(`Retrying with THINKING_SUMMARIES_AUTO: ${message}`, 'warn');
+        ctx.log('Still thinking — retrying the request.', 'warn');
         agentConfigForLadder.thinking_summaries = 'THINKING_SUMMARIES_AUTO';
         await repost();
       }
@@ -342,7 +342,7 @@ export class AntigravityEngine implements Engine {
           }
         }
         if (droppedNamed) {
-          ctx.log(`The API rejected request field '${named}' — dropped it and retrying.`, 'warn');
+          ctx.log('Still thinking — retrying the request.', 'warn');
         } else {
           ctx.log(`Retrying without optional fields: ${message}`, 'warn');
         }

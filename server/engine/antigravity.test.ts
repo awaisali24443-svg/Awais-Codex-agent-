@@ -457,8 +457,8 @@ describe('failures', () => {
     );
     assert.equal(retryBody.agent_config?.type, 'antigravity', 'the rest of agent_config survives');
     assert.ok(
-      seen.logs.some((l) => /rejected request field 'thinking_summaries'/i.test(l)),
-      'the drop is logged so the operator knows summaries are off',
+      seen.logs.some((l) => /still thinking — retrying the request/i.test(l)),
+      'the drop is logged in plain words, not API jargon',
     );
   });
 
@@ -748,7 +748,7 @@ describe('live thinking summaries', () => {
 
     assert.equal(calls, 2, 'exactly one enum retry, then the mission runs');
     assert.equal(result.interactionId, 'int_abc');
-    assert.ok(seen.logs.some((l) => /THINKING_SUMMARIES_AUTO/i.test(l)), 'the retry is logged');
+    assert.ok(seen.logs.some((l) => /still thinking — retrying the request/i.test(l)), 'the retry is logged');
   });
 
   test('extractContentText tolerates odd shapes', async () => {
