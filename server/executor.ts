@@ -32,6 +32,7 @@ import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type Run, type T
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withPlanning } from './planning.js';
+import { extractUrls, checkSources } from './sources.js';
 
 /** How often the full text so far is written to Postgres while streaming. */
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
@@ -81,8 +82,9 @@ function researchSynthesisPrompt(remainingMinutes: number): string {
     `Write the final synthesized report now:\n` +
     `- the question and the bottom-line answer up front\n` +
     `- findings organised by theme with clear headings\n` +
+    `- every factual claim carries its source as an inline link [label](url); a claim without a verifiable URL is marked uncertain, never stated as fact\n` +
     `- confidence on key claims: verified / single-source / uncertain\n` +
-    `- the sources that matter, then open questions and recommended next steps`
+    `- a Sources section listing every URL you cite, then open questions and recommended next steps`
   );
 }
 
@@ -425,6 +427,19 @@ export class RunExecutor {
       const authoritative = result.text ?? '';
       const finalText = authoritative.length >= streamed.length ? authoritative : streamed;
       await writer.write('text.snapshot', { text: finalText, final: true });
+      // Source check before the run closes: every URL in the final text is
+      // fetched (HEAD, short timeout, capped concurrency) and the verdict is
+      // recorded as an event, so the UI can show "3 links dead" instead of
+      // shipping unverified citations. Never rejects and never fails the run;
+      // it only delays "done" by the checks themselves.
+      const sourceChecks = await checkSources(extractUrls(finalText));
+      if (sourceChecks.length > 0) {
+        await writer.write('sources.checked', {
+          checked: sourceChecks.length,
+          alive: sourceChecks.filter((s) => s.ok).length,
+          dead: sourceChecks.filter((s) => !s.ok).map((s) => s.url),
+        });
+      }
       await writer.write('run.environment', {
         interactionId: result.interactionId ?? null,
         environmentId: result.environmentId ?? null,

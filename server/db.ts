@@ -205,16 +205,29 @@ export async function pruneRunEvents(db: Db, keepDays = 14): Promise<number> {
 
 /** Orphan recovery on boot: a run left 'running' by a crash can never finish. */
 export async function markOrphanedRuns(db: Db, maxAgeMinutes = 60): Promise<number> {
-  const rows = await db.query<{ id: string }>(
-    `UPDATE runs
-        SET status = 'failed',
-            error_type = 'orphaned',
-            error_message = 'Server restarted while this run was in flight',
-            finished_at = now()
-      WHERE status IN ('queued', 'running', 'paused')
-        AND started_at < now() - ($1 || ' minutes')::interval
-      RETURNING id`,
-    [String(maxAgeMinutes)],
-  );
-  return rows.length;
+  return db.transaction(async (tx) => {
+    const rows = await tx.query<{ id: string }>(
+      `UPDATE runs
+          SET status = 'failed',
+              error_type = 'orphaned',
+              error_message = 'Server restarted while this run was in flight',
+              finished_at = now()
+        WHERE status IN ('queued', 'running', 'paused')
+          AND started_at < now() - ($1 || ' minutes')::interval
+        RETURNING id`,
+      [String(maxAgeMinutes)],
+    );
+    // A stream that reconnects after a restart replays run_events. Without a
+    // terminal event the client waits on a dead run forever: no failure
+    // notice, no retry button, no live updates. Record the failure the same
+    // way a live failure would, so replay terminates the card properly.
+    for (const row of rows) {
+      await appendEvent(tx, row.id, 'run.failed', {
+        status: 'failed',
+        errorType: 'orphaned',
+        errorMessage: 'Server restarted while this run was in flight',
+      });
+    }
+    return rows.length;
+  });
 }

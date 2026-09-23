@@ -246,7 +246,12 @@ function renderConversations() {
 
 async function openConversation(id) {
   state.conversationId = id;
-  el.topbarTitle.textContent = state.conversations.find((c) => c.id === id)?.title ?? 'Codex';
+  // A run in flight owns the title ("Working…"); opening the conversation
+  // must not clobber it back, or the header says idle while the stop button
+  // says busy.
+  el.topbarTitle.textContent = state.running
+    ? 'Working…'
+    : (state.conversations.find((c) => c.id === id)?.title ?? 'Codex');
   showHero(false);
   renderThread([]);
 
@@ -567,6 +572,20 @@ function handleEvent(card, event, data) {
       });
       break;
 
+    case 'sources.checked': {
+      const dead = Array.isArray(data.dead) ? data.dead : [];
+      const checked = Number(data.checked) || 0;
+      addStep(card, 'sources', {
+        name: dead.length === 0
+          ? `Sources checked — ${checked} link${checked === 1 ? '' : 's'} alive`
+          : `Sources checked — ${checked - dead.length} alive, ${dead.length} dead`,
+        detail: dead.slice(0, 5).join(', '),
+        icon: dead.length === 0 ? 'check' : 'warn',
+        done: true,
+      });
+      break;
+    }
+
     case 'memory.recall':
       // Only worth a line when something was actually remembered, and phrased
       // so it explains why the answer may sound like it knows you.
@@ -818,6 +837,7 @@ function humanError(type, message) {
     budget_exceeded: "You have used today's runs. It resets at midnight UTC.",
     network_error: 'Lost the connection to the agent.',
     truncated: 'The agent finished without producing an answer.',
+    orphaned: 'The server restarted mid-task. Nothing was lost — retry to continue.',
   };
   return known[type] || type ? `${known[type] || type}: ${message || ''}`.trim() : message || 'The task failed.';
 }
@@ -875,9 +895,22 @@ function attach(runId, after = 0) {
     try { handleEvent(card, 'thinking.delta', JSON.parse(m.data)); } catch { /* ignore */ }
   });
 
-  source.addEventListener('end', () => {
+  source.addEventListener('end', async () => {
     source.close();
     if (state.source === source) state.source = null;
+    // The stream can end without a terminal event reaching the card — a
+    // restart between replay and live, a dropped bus publish. Ask the server
+    // for the truth instead of leaving the card spinning forever.
+    if (!state.running || state.runId !== runId) return;
+    try {
+      const { run } = await api(`/api/runs/${runId}`);
+      if (run && ['completed', 'failed', 'cancelled'].includes(run.status)) {
+        handleEvent(card, `run.${run.status}`, {
+          errorType: run.errorType,
+          errorMessage: run.errorMessage,
+        });
+      }
+    } catch { /* keep waiting; a later refresh will reconcile */ }
   });
 
   source.addEventListener('error', () => {
