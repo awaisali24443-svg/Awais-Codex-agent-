@@ -117,6 +117,8 @@ export interface Artifact {
   size: number | null;
   sha256: string | null;
   storageKey: string | null;
+  /** Public download token; null means no public link. */
+  shareToken: string | null;
   createdAt: string;
 }
 
@@ -129,10 +131,12 @@ interface ArtifactRow {
   size: string | number | null;
   sha256: string | null;
   storage_key: string | null;
+  share_token: string | null;
   created_at: Date | string;
 }
 
-const ARTIFACT_COLUMNS = 'id, run_id, name, path, mime, size, sha256, storage_key, created_at';
+const ARTIFACT_COLUMNS =
+  'id, run_id, name, path, mime, size, sha256, storage_key, share_token, created_at';
 
 function mapArtifact(row: ArtifactRow): Artifact {
   return {
@@ -144,6 +148,7 @@ function mapArtifact(row: ArtifactRow): Artifact {
     size: row.size === null || row.size === undefined ? null : Number(row.size),
     sha256: row.sha256,
     storageKey: row.storage_key,
+    shareToken: row.share_token ?? null,
     createdAt:
       row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
   };
@@ -247,6 +252,33 @@ export async function getArtifact(db: Db, id: string): Promise<Artifact | null> 
   const rows = await db.query<ArtifactRow>(
     `SELECT ${ARTIFACT_COLUMNS} FROM artifacts WHERE id = $1`,
     [id],
+  );
+  return rows[0] ? mapArtifact(rows[0]) : null;
+}
+
+/**
+ * Enable or revoke the public download link for an artifact. Revoking is
+ * setting the token to null — the old link 404s immediately. Mirrors the run
+ * share-token pattern: the token IS the auth.
+ */
+export async function setArtifactShareToken(
+  db: Db,
+  id: string,
+  token: string | null,
+): Promise<void> {
+  await db.query('UPDATE artifacts SET share_token = $2 WHERE id = $1', [id, token]);
+}
+
+/**
+ * Find an artifact by its public share token. Only ever called from the
+ * public /a/:token route with a well-formed token — never with operator
+ * input that reaches anything else.
+ */
+export async function getArtifactByShareToken(db: Db, token: string): Promise<Artifact | null> {
+  if (!token) return null;
+  const rows = await db.query<ArtifactRow>(
+    `SELECT ${ARTIFACT_COLUMNS} FROM artifacts WHERE share_token = $1 LIMIT 1`,
+    [token],
   );
   return rows[0] ? mapArtifact(rows[0]) : null;
 }

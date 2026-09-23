@@ -5,6 +5,11 @@
  *   GET /api/artifacts/:id/download  the bytes, fetched from the sandbox on demand
  *   GET /api/artifacts/:id/preview   a website artifact, rendered live (the
  *                                    HTML entry page plus its relative assets)
+ *   POST /api/artifacts/:id/share    mint a public download link for the file
+ *   GET /a/:token                    the public download itself — no session.
+ *                                    Texted to the phone, WhatsApp auto-links
+ *                                    the URL, so a build output like an APK
+ *                                    reaches the phone without the web UI.
  *
  * The download is lazy on purpose. Pulling a whole workspace snapshot when
  * nobody has asked for the file wastes bandwidth, disk and time — and on the
@@ -25,12 +30,15 @@ import type { SecretsStore } from '../settings.js';
 import {
   artifactsRoot,
   getArtifact,
+  getArtifactByShareToken,
   isHtmlArtifactName,
   listArtifacts,
   materializeArtifact,
   mimeFor,
+  setArtifactShareToken,
 } from '../artifacts.js';
 import { getRun } from '../runs.js';
+import { artifactShareUrl, canShareRun, newShareToken } from '../share.js';
 
 export interface ArtifactRouteDeps {
   db: Db;
@@ -78,6 +86,12 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
         size: artifact.size,
         createdAt: artifact.createdAt,
         downloadUrl: `/api/artifacts/${artifact.id}/download`,
+        /**
+         * Public download link, once minted via POST …/share. Null until
+         * then — the UI mints on demand so links are never created by
+         * accident.
+         */
+        shareUrl: artifact.shareToken ? artifactShareUrl(config, artifact.shareToken) : null,
         /**
          * A website the mission built: the UI renders this one live in a
          * sandboxed iframe instead of offering only a download. Named from
@@ -236,6 +250,96 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
 
   router.get('/artifacts/:id/preview', servePreview);
   router.get('/artifacts/:id/preview/*', servePreview);
+
+  /**
+   * Mint a public download link for a file a mission produced. Same gate as
+   * mission replays: only a finished run's files get a link, and minting is
+   * idempotent — the token survives, so an existing link never breaks.
+   */
+  router.post('/artifacts/:id/share', async (req: Request, res: Response) => {
+    const artifact = await getArtifact(db, req.params.id);
+    if (!artifact) {
+      res.status(404).json({ error: 'artifact_not_found' });
+      return;
+    }
+    const run = await getRun(db, artifact.runId);
+    if (!run || !canShareRun(run)) {
+      res.status(400).json({
+        error: 'not_finished',
+        message: 'Only a finished mission\u2019s files can get a public link',
+      });
+      return;
+    }
+    const token = artifact.shareToken ?? newShareToken();
+    if (!artifact.shareToken) await setArtifactShareToken(db, artifact.id, token);
+    res.json({ url: artifactShareUrl(config, token), token });
+  });
+
+  return router;
+}
+
+/**
+ * Public artifact downloads — mounted with no session, next to /share/:token.
+ * The token IS the auth (unguessable by construction); unknown, malformed or
+ * revoked tokens 404 with no hint about which. A link for a run that was
+ * resumed after sharing 404s until the run finishes again, exactly like
+ * replays.
+ */
+export function createPublicArtifactRoutes({
+  db,
+  config,
+  secrets,
+  fetchImpl,
+}: ArtifactRouteDeps): Router {
+  const router = Router();
+
+  const resolveApiKey = () =>
+    secrets ? secrets.get('gemini_api_key') : config.geminiApiKey;
+
+  router.get('/a/:token', async (req: Request, res: Response) => {
+    const token = req.params.token ?? '';
+    if (!/^[A-Za-z0-9_-]{24,64}$/.test(token)) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+    const artifact = await getArtifactByShareToken(db, token);
+    if (!artifact) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+    const run = await getRun(db, artifact.runId);
+    if (!run || !canShareRun(run)) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+
+    const materialized = await materializeArtifact(
+      {
+        db,
+        apiKey: resolveApiKey(),
+        environmentId: run.environmentId ?? '',
+        fetchImpl,
+      },
+      artifact,
+    );
+
+    if (!materialized) {
+      res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+
+    res.setHeader('Content-Type', artifact.mime ?? 'application/octet-stream');
+    res.setHeader('Content-Length', String(materialized.size));
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${safeFilename(artifact.name)}"`,
+    );
+    res.sendFile(materialized.absolutePath, (err) => {
+      if (err && !res.headersSent) {
+        res.status(500).type('text/plain').send('Not found');
+      }
+    });
+  });
 
   return router;
 }

@@ -28,6 +28,17 @@ export function shareUrl(config: AppConfig, token: string): string {
   return `${base}/share/${token}`;
 }
 
+/**
+ * Public download link for a mission artifact. Same unguessable-token scheme
+ * as replays: anyone with the link downloads the file, nobody can guess one.
+ * Texted to the phone, WhatsApp auto-links it, so a build output reaches the
+ * phone without the web UI.
+ */
+export function artifactShareUrl(config: AppConfig, token: string): string {
+  const base = (config.appUrl || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+  return `${base}/a/${token}`;
+}
+
 /** Only a finished mission may be shared — never an in-flight one. */
 export function canShareRun(run: Run): boolean {
   return (

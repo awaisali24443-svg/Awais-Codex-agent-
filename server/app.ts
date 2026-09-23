@@ -18,7 +18,7 @@ import { createReminderRoutes } from './routes/reminders.js';
 import { createScheduledTaskRoutes } from './routes/scheduled-tasks.js';
 import { createBriefingRoutes } from './routes/briefing.js';
 import { createMemoryRoutes } from './routes/memory.js';
-import { createArtifactRoutes } from './routes/artifacts.js';
+import { createArtifactRoutes, createPublicArtifactRoutes } from './routes/artifacts.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createGitHubRoutes } from './routes/github.js';
 import { createLinkedInRoutes } from './routes/linkedin.js';
@@ -135,6 +135,13 @@ export function createApp(deps: AppDeps): Express {
     const data = await buildShareData(db, run);
     res.type('text/html; charset=utf-8').send(renderSharePage(data));
   });
+
+  // Public artifact downloads — same unguessable-token scheme as replays, so
+  // this deliberately lives in the public section with no session. A link
+  // texted to the phone downloads the file straight from the chat.
+  app.use(
+    createPublicArtifactRoutes({ db, config, secrets: deps.secrets }),
+  );
 
   app.get('/healthz', (_req: Request, res: Response) => {
     res.json({
