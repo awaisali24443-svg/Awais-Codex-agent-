@@ -39,7 +39,7 @@ import type { EventBus, StreamEvent } from '../events.js';
 import type { RunExecutor } from '../executor.js';
 import { budgetSnapshot } from '../budget.js';
 import { listArtifacts } from '../artifacts.js';
-import { BUCKET_FOR_KIND, acceptRun, type AcceptResult } from '../accept.js';
+import { BUCKET_FOR_KIND, acceptRun, estimateRunCost, type AcceptResult } from '../accept.js';
 import {
   TERMINAL_STATUSES,
   finishRun,
@@ -53,6 +53,7 @@ import {
   type RunStatus,
 } from '../runs.js';
 import { forkBranch, listBranches } from '../branches.js';
+import { getMissionSteps, resumeFromStep } from '../mission_steps.js';
 
 export interface RunRouteDeps {
   db: Db;
@@ -168,6 +169,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       notifyWhatsapp?: unknown;
       deepResearch?: unknown;
       researchBudgetMinutes?: unknown;
+      tokenBudget?: unknown;
     };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
 
@@ -207,10 +209,41 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         notifyWhatsapp: body.notifyWhatsapp === true,
         deepResearch: research.deepResearch,
         researchBudgetMinutes: research.researchBudgetMinutes,
+        // Optional per-mission token cap. A non-number is not a cap.
+        tokenBudget:
+          typeof body.tokenBudget === 'number' && Number.isFinite(body.tokenBudget) && body.tokenBudget > 0
+            ? Math.round(body.tokenBudget)
+            : null,
       },
     );
 
     sendAccepted(res, result, config);
+  });
+
+  /**
+   * Pre-flight cost estimate for the composer: "≈8k tokens". Read-only —
+   * estimating never spends budget and never starts anything.
+   */
+  router.post('/runs/estimate', async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { prompt?: unknown; deepResearch?: unknown; researchBudgetMinutes?: unknown };
+    const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) {
+      res.status(400).json({ error: 'prompt_required' });
+      return;
+    }
+    let research: { deepResearch: boolean; researchBudgetMinutes: number | null };
+    try {
+      research = parseResearchBudget(body);
+    } catch (err) {
+      res.status(400).json({ error: 'invalid_research_budget', message: (err as Error).message });
+      return;
+    }
+    const estimate = await estimateRunCost(db, {
+      prompt,
+      deepResearch: research.deepResearch,
+      researchBudgetMinutes: research.researchBudgetMinutes,
+    });
+    res.json(estimate);
   });
 
   // ---- read ---------------------------------------------------------------
@@ -330,6 +363,61 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       },
     );
     sendAccepted(res, result, config, branchRows[0]?.branch_id ?? null);
+  });
+
+  /**
+   * Resume a run: same run row, continued from the first unfinished step.
+   *
+   * Qualifies: a run 'paused' by its token budget, or 'failed' with
+   * error_type 'interrupted' (the server restarted mid-mission). Anything
+   * else is a retry, not a resume. A resume does not spend a new daily run —
+   * the mission was already counted when it first started — but it still
+   * obeys one-at-a-time.
+   */
+  router.post('/runs/:id/resume', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    const resumable =
+      run.status === 'paused' ||
+      (run.status === 'failed' && run.errorType === 'interrupted');
+    if (!resumable) {
+      res.status(400).json({
+        error: 'not_resumable',
+        message: `Only a paused or interrupted run can be resumed (this one is ${run.status})`,
+      });
+      return;
+    }
+    // One at a time — but the run being resumed holds its own slot while
+    // paused, so it does not count as "another mission".
+    const active = await getActiveRun(db);
+    if (active && active.id !== run.id) {
+      res.status(409).json({
+        error: 'in_progress',
+        message: 'Another mission is already running — wait for it to finish, then resume.',
+      });
+      return;
+    }
+
+    const fromStep = await resumeFromStep(db, run.id);
+    const steps = await getMissionSteps(db, run.id);
+    await db.query(
+      `UPDATE runs
+          SET status = 'queued', resume_from_step = $2,
+              error_type = NULL, error_message = NULL
+        WHERE id = $1`,
+      [run.id, fromStep],
+    );
+    const resumed = await getRun(db, run.id);
+    if (!resumed) {
+      res.status(500).json({ error: 'resume_failed' });
+      return;
+    }
+    executor.start(resumed);
+    console.log(`[run] ${run.id} resumed from step ${fromStep} (${steps.filter((s) => s.status === 'done').length} done)`);
+    res.json({ run: resumed, fromStep });
   });
 
   // ---- the live stream ----------------------------------------------------

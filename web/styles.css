@@ -458,6 +458,17 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   min-height: 17px;
 }
 
+/* Pre-flight cost line: the estimate plus the optional per-task token cap. */
+.estimate-line {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--muted); white-space: nowrap;
+}
+.cap-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.cap-toggle input {
+  width: 44px; padding: 2px 4px; font-size: 12px; border-radius: 6px;
+  border: 1px solid var(--line, #ddd); background: transparent; color: inherit;
+}
+
 /* --------------------------------------------------------------- drawer --- */
 
 .scrim {

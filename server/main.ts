@@ -6,7 +6,7 @@
  * and no one-off jobs, so schema setup must happen here on every boot.
  */
 import { loadConfig, type AppConfig } from './config.js';
-import { createDb, markOrphanedRuns, pruneRunEvents, type Db } from './db.js';
+import { createDb, pruneRunEvents, type Db } from './db.js';
 import { pruneArtifacts } from './artifacts.js';
 import { createStores, type SecretsStore } from './settings.js';
 import { migrate } from './migrate.js';
@@ -22,6 +22,7 @@ import { sendDonePing } from './whatsapp/doneping.js';
 import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
 import { fireDueScheduledTasks } from './scheduler.js';
 import { selfPingTarget, startSelfPing } from './selfping.js';
+import { recoverOrphanedRuns } from './recovery.js';
 
 /**
  * Pick the engine.
@@ -82,12 +83,10 @@ async function boot(): Promise<void> {
     console.log(`[boot] pruned ${prunedArtifacts} artifact(s) older than ${config.artifactRetentionDays}d`);
   }
 
-  // Every in-flight run at boot is orphaned by definition: the process that
-  // owned it is gone, and a mission cannot be resumed from a different process.
-  // The age window is set to zero so a run left behind seconds ago does not
-  // block new missions for the next hour.
-  const orphaned = await markOrphanedRuns(db, 0);
-  if (orphaned > 0) console.log(`[boot] recovered ${orphaned} orphaned run(s)`);
+  // Crash-resume happens after the executor exists, because the newest
+  // orphan with finished checkpoints is restarted, not failed. 'paused'
+  // runs are left alone — pausing was a decision, not a crash.
+  let orphaned = 0;
 
   // ---- settings & secrets ------------------------------------------------
   // Loaded after migrations (the tables must exist) and before anything reads
@@ -127,6 +126,14 @@ async function boot(): Promise<void> {
     },
   });
   console.log(`[boot] engine: ${config.engineName}`);
+
+  const recovery = await recoverOrphanedRuns(db, executor);
+  orphaned = recovery.resumed + recovery.failed;
+  if (orphaned > 0) {
+    console.log(
+      `[boot] orphans: ${recovery.resumed} resumed, ${recovery.failed} marked interrupted`,
+    );
+  }
 
   // ---- WhatsApp -----------------------------------------------------------
   // Polling is driven by the credential, not by a variable: the service starts

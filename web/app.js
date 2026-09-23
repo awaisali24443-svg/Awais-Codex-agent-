@@ -59,6 +59,9 @@ const el = {
   statusDot: $('status-dot'),
   toast: $('toast'),
   note: $('composer-note'),
+  estimateLine: $('estimate-line'),
+  estimateText: $('estimate-text'),
+  tokenCap: $('token-cap'),
   pingToggle: $('ping-wrap'),
   pingCheck: $('ping-check'),
   researchWrap: $('research-wrap'),
@@ -657,6 +660,10 @@ function handleEvent(card, event, data) {
       finishCard(card, 'failed', data);
       break;
 
+    case 'run.paused':
+      finishCard(card, 'paused');
+      break;
+
     case 'run.cancelled':
       finishCard(card, 'cancelled');
       break;
@@ -675,10 +682,21 @@ function finishCard(card, outcome, data = {}) {
   if (outcome === 'failed') {
     const message = humanError(data.errorType, data.errorMessage);
     const noticeNode = renderNotice(message, true, 'warn');
-    // A failed complex task is usually worth one more attempt, not a retyped
-    // prompt. The retry starts a fresh run with the same prompt in the same
-    // conversation; it costs one daily run like any other mission.
-    noticeNode.append(runActionButtons(card, { retry: true, edit: true, notice: noticeNode }));
+    if (data.errorType === 'interrupted') {
+      // The server restarted mid-mission. Resume continues from the first
+      // unfinished step; retry starts over. Both are offered, resume first.
+      noticeNode.append(runActionButtons(card, { resume: true, retry: true, edit: true, notice: noticeNode }));
+    } else {
+      // A failed complex task is usually worth one more attempt, not a retyped
+      // prompt. The retry starts a fresh run with the same prompt in the same
+      // conversation; it costs one daily run like any other mission.
+      noticeNode.append(runActionButtons(card, { retry: true, edit: true, notice: noticeNode }));
+    }
+  } else if (outcome === 'paused') {
+    // The token budget ran out. Pausing is not terminal: the partial answer
+    // stands and the operator resumes the same run with a higher cap.
+    const noticeNode = renderNotice(humanError('token_budget'), false, 'warn');
+    noticeNode.append(runActionButtons(card, { resume: true, edit: true, notice: noticeNode }));
   } else if (outcome === 'cancelled') {
     const noticeNode = renderNotice('Stopped. Whatever it produced is kept below.', false, 'info');
     noticeNode.append(runActionButtons(card, { edit: true }));
@@ -720,6 +738,28 @@ async function retryRun(card, opts) {
   }
 }
 
+/* Resume a paused or interrupted run: the SAME run continues from its first
+   unfinished step — finished work is kept, and it costs no new daily run.
+   @param {{ runId: string }} card
+   @param {{ button: HTMLButtonElement, notice?: { remove(): void } | null }} opts */
+async function resumeRun(card, opts) {
+  const { button, notice } = opts;
+  button.disabled = true;
+  try {
+    const { run, branchId } = await api(`/api/runs/${card.runId}/resume`, { method: 'POST' });
+    if (branchId) state.branchId = branchId;
+    state.conversationId = run.conversationId;
+    if (notice) notice.remove();
+    setRunning(true);
+    attach(run.id, 0);
+    loadConversations();
+    loadBudget();
+  } catch (err) {
+    button.disabled = false;
+    toast(err.body?.message || err.message || 'Could not resume.');
+  }
+}
+
 /* Load a run's prompt back into the composer so it can be edited and re-sent.
    The prompt is captured from `run.started` when the card is drawn, so it is
    exactly what the run was asked — including for retried runs. */
@@ -752,16 +792,20 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
     editBtn.title = 'Edit this message — forks the conversation';
     editBtn.addEventListener('click', () => openInlineEditor(node, message));
     row.append(editBtn);
-  } else if (message.runId && (message.runStatus === 'completed' || message.runStatus === 'failed')) {
-    const retryBtn = document.createElement('button');
-    retryBtn.type = 'button';
-    retryBtn.className = 'msg-btn';
-    retryBtn.textContent = '↻ Retry';
-    retryBtn.title = 'Run this task again';
-    retryBtn.addEventListener('click', async () => {
-      retryBtn.disabled = true;
+  } else if (message.runId && (message.runStatus === 'completed' || message.runStatus === 'failed' || message.runStatus === 'paused')) {
+    // A paused run, or one the server killed mid-mission, resumes from its
+    // first unfinished step. Everything else gets the plain retry.
+    const resumable = message.runStatus === 'paused' || message.runErrorType === 'interrupted';
+    const actionBtn = document.createElement('button');
+    actionBtn.type = 'button';
+    actionBtn.className = 'msg-btn';
+    actionBtn.textContent = resumable ? '▶ Resume' : '↻ Retry';
+    actionBtn.title = resumable ? 'Continue from the last finished step' : 'Run this task again';
+    actionBtn.addEventListener('click', async () => {
+      actionBtn.disabled = true;
       try {
-        const { run, branchId } = await api(`/api/runs/${message.runId}/retry`, { method: 'POST' });
+        const endpoint = resumable ? 'resume' : 'retry';
+        const { run, branchId } = await api(`/api/runs/${message.runId}/${endpoint}`, { method: 'POST' });
         if (branchId) state.branchId = branchId;
         state.conversationId = run.conversationId;
         row.remove();
@@ -770,11 +814,11 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
         loadConversations();
         loadBudget();
       } catch (err) {
-        retryBtn.disabled = false;
-        toast(err.body?.message || err.message || 'Could not retry.');
+        actionBtn.disabled = false;
+        toast(err.body?.message || err.message || (resumable ? 'Could not resume.' : 'Could not retry.'));
       }
     });
-    row.append(retryBtn);
+    row.append(actionBtn);
   }
   // A ```linkedin-post block the agent filed as a pending draft. Publishing
   // is always the operator's tap — never automatic.
@@ -864,9 +908,17 @@ function openInlineEditor(node, message) {
 }
 
 /* The button group appended to a finished run's notice. */
-function runActionButtons(card, { retry = false, edit = false, notice = null } = {}) {
+function runActionButtons(card, { retry = false, resume = false, edit = false, notice = null } = {}) {
   const group = document.createElement('span');
   group.className = 'run-btns';
+  if (resume) {
+    const resumeBtn = document.createElement('button');
+    resumeBtn.type = 'button';
+    resumeBtn.className = 'retry-btn';
+    resumeBtn.textContent = 'Resume from last finished step';
+    resumeBtn.addEventListener('click', () => resumeRun(card, { button: resumeBtn, notice }));
+    group.append(resumeBtn);
+  }
   if (retry) {
     const retryBtn = document.createElement('button');
     retryBtn.type = 'button';
@@ -1018,6 +1070,8 @@ function humanError(type, message) {
     network_error: 'Lost the connection to the agent.',
     truncated: 'The agent finished without producing an answer.',
     orphaned: 'The server restarted mid-task. Nothing was lost — retry to continue.',
+    interrupted: 'The server restarted mid-task. Finished steps are saved — resume to continue where it left off.',
+    token_budget: 'Paused: the token budget ran out. Finished steps are saved — resume to continue with a higher budget.',
   };
   return known[type] || type ? `${known[type] || type}: ${message || ''}`.trim() : message || 'The task failed.';
 }
@@ -1132,7 +1186,43 @@ el.stop.addEventListener('click', async () => {
 el.prompt.addEventListener('input', () => {
   autoGrow();
   el.send.disabled = state.running || !el.prompt.value.trim();
+  scheduleEstimate();
 });
+
+/* Pre-flight cost estimate: a debounced read of the operator's own history,
+   shown under the composer. Never starts anything, never spends budget. */
+let estimateTimer = null;
+function scheduleEstimate() {
+  clearTimeout(estimateTimer);
+  const prompt = el.prompt.value.trim();
+  if (!prompt || state.running) {
+    el.estimateLine.hidden = true;
+    return;
+  }
+  estimateTimer = setTimeout(async () => {
+    try {
+      const deepResearch = el.researchCheck.checked;
+      const est = await api('/api/runs/estimate', {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt,
+          ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: researchBudgetMinutes() } : {}),
+        }),
+      });
+      el.estimateText.textContent = `≈${formatTokens(est.estimatedTokens)} tokens`;
+      el.estimateLine.hidden = false;
+    } catch {
+      el.estimateLine.hidden = true;
+    }
+  }, 500);
+}
+el.researchCheck.addEventListener('change', scheduleEstimate);
+
+function formatTokens(n) {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return `${k >= 10 ? Math.round(k) : k.toFixed(1)}k`;
+}
 
 el.prompt.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -1197,20 +1287,26 @@ el.composer.addEventListener('submit', async (event) => {
   // Read before the reset below clears the picker.
   const deepResearch = el.researchCheck.checked;
   const budgetMinutes = researchBudgetMinutes();
+  // Optional per-task token cap, typed in thousands. A blank or junk value
+  // is not a cap.
+  const capK = Math.floor(Number(el.tokenCap.value));
+  const tokenBudget = Number.isFinite(capK) && capK > 0 ? Math.min(200, capK) * 1000 : null;
 
-  // The ping and the research mode are per task, not sticky preferences:
-  // reset them with the composer.
+  // The ping, the research mode, and the cap are per task, not sticky
+  // preferences: reset them with the composer.
   el.pingCheck.checked = false;
   el.researchCheck.checked = false;
+  el.tokenCap.value = '';
+  el.estimateLine.hidden = true;
   refreshResearchPicker();
   el.note.textContent = '';
-  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes });
+  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes, tokenBudget });
 });
 
 /* Start one run: the single path for the composer and for branch forks.
    The run is filed under the current branch, so a forked "what if" stays in
    its own branch instead of leaking back into the original thread. */
-async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15 } = {}) {
+async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15, tokenBudget = null } = {}) {
   el.prompt.value = '';
   autoGrow();
   el.send.disabled = true;
@@ -1227,6 +1323,7 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
         branchId: state.branchId,
         notifyWhatsapp,
         ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: budgetMinutes } : {}),
+        ...(tokenBudget ? { tokenBudget } : {}),
       }),
     });
     state.conversationId = run.conversationId;

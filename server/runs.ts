@@ -48,6 +48,10 @@ export interface Run {
    */
   deepResearch: boolean;
   researchBudgetMinutes: number | null;
+  /** Optional per-mission token cap (chars/4 proxy while streaming). */
+  tokenBudget: number | null;
+  /** When resuming an interrupted mission, the first step not yet done. */
+  resumeFromStep: number | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -90,6 +94,8 @@ interface RunRow {
   notify_whatsapp: boolean | null;
   deep_research: boolean | null;
   research_budget_minutes: number | null;
+  token_budget: number | null;
+  resume_from_step: number | null;
   started_at: Date | string;
   finished_at: Date | string | null;
 }
@@ -115,6 +121,8 @@ function mapRun(row: RunRow): Run {
     notifyWhatsapp: row.notify_whatsapp ?? false,
     deepResearch: row.deep_research ?? false,
     researchBudgetMinutes: row.research_budget_minutes ?? null,
+    tokenBudget: row.token_budget ?? null,
+    resumeFromStep: row.resume_from_step ?? null,
     startedAt: toIso(row.started_at) as string,
     finishedAt: toIso(row.finished_at),
   };
@@ -124,6 +132,7 @@ const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
                      interaction_id, environment_id, previous_interaction_id,
                      error_type, error_message, notify_whatsapp,
                      deep_research, research_budget_minutes,
+                     token_budget, resume_from_step,
                      started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
@@ -229,6 +238,8 @@ export interface CreateRunInput {
    */
   deepResearch?: boolean;
   researchBudgetMinutes?: number | null;
+  /** Optional per-mission token cap. The executor pauses the run when spent. */
+  tokenBudget?: number | null;
 }
 
 /**
@@ -267,8 +278,8 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
       await tx.query(
         `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine,
                            previous_interaction_id, environment_id, notify_whatsapp,
-                           deep_research, research_budget_minutes)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10)`,
+                           deep_research, research_budget_minutes, token_budget)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11)`,
         [
           id,
           conversationId,
@@ -280,6 +291,7 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
           input.notifyWhatsapp === true,
           input.deepResearch === true,
           input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
+          input.tokenBudget ?? null,
         ],
       );
       await tx.query(
@@ -369,7 +381,8 @@ export async function emitEvent(
 }
 
 export interface FinishRunInput {
-  status: TerminalStatus;
+  /** 'paused' is not terminal — the run keeps its slot and can be resumed. */
+  status: TerminalStatus | 'paused';
   /** Full assistant output so far. Persisted as the message so nothing is lost. */
   text?: string | null;
   errorType?: string | null;
@@ -520,13 +533,13 @@ export async function listMessages(
   conversationId: string,
   limit = 200,
   branchId?: string | null,
-): Promise<Array<{ id: string; role: string; content: string; runId: string | null; runStatus: string | null; createdAt: string }>> {
+): Promise<Array<{ id: string; role: string; content: string; runId: string | null; runStatus: string | null; runErrorType: string | null; createdAt: string }>> {
   const capped = Math.min(Math.max(limit, 1), 500);
   // A branch view is computed, never copied: the branch's own messages plus
   // each ancestor's messages up to its fork point, in conversation order.
   const branchFilter = branchId
     ? `WITH RECURSIVE ${chainCte('$3')}
-       SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, m.created_at
+       SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type, m.created_at
          FROM messages m
          JOIN chain c ON m.branch_id = c.id
          LEFT JOIN runs r ON r.id = m.run_id
@@ -534,7 +547,7 @@ export async function listMessages(
           AND ${CHAIN_VISIBLE}
         ORDER BY m.created_at ASC, m.id ASC
         LIMIT $2`
-    : `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, m.created_at
+    : `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type, m.created_at
          FROM messages m LEFT JOIN runs r ON r.id = m.run_id
         WHERE m.conversation_id = $1
         ORDER BY m.created_at ASC, m.id ASC
@@ -545,6 +558,7 @@ export async function listMessages(
     content: string;
     run_id: string | null;
     run_status: string | null;
+    run_error_type: string | null;
     created_at: Date | string;
   }>(branchFilter, branchId ? [conversationId, capped, branchId] : [conversationId, capped]);
   return rows.map((r) => ({
@@ -553,6 +567,7 @@ export async function listMessages(
     content: r.content,
     runId: r.run_id,
     runStatus: r.run_status,
+    runErrorType: r.run_error_type,
     createdAt: toIso(r.created_at) as string,
   }));
 }

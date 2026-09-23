@@ -50,6 +50,8 @@ export interface AcceptInput {
   deepResearch?: boolean;
   /** Whole minutes of wall-clock research budget. */
   researchBudgetMinutes?: number | null;
+  /** Optional per-mission token cap. The executor pauses the run when spent. */
+  tokenBudget?: number | null;
 }
 
 export type AcceptResult =
@@ -105,6 +107,7 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       notifyWhatsapp: input.notifyWhatsapp ?? false,
       deepResearch: input.deepResearch === true,
       researchBudgetMinutes: input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
+      tokenBudget: input.tokenBudget ?? null,
     });
   } catch (err) {
     if (err instanceof RunConflictError) {
@@ -152,8 +155,45 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
   }
 }
 
-/** Today's remaining runs for a channel, without spending anything. */
-export async function remainingRuns(deps: AcceptDeps, kind: RunKind): Promise<number> {
+/**
+ * Pre-flight cost estimate for a mission, shown in the composer before the
+ * run starts. Two ingredients: the operator's own history (average tokens of
+ * their recent completed missions — their usage, not a global guess) and the
+ * shape of this mission (deep-research chains passes, so it costs passes).
+ * Falls back to a flat 8k when there is no history yet. An estimate, labelled
+ * as one — the engine reports exact tokens only when the run finishes.
+ */
+export interface CostEstimate {
+  estimatedTokens: number;
+  /** Where the number came from: 'history' or 'fallback'. */
+  basis: 'history' | 'fallback';
+  missionsSampled: number;
+}
+
+export async function estimateRunCost(
+  db: Db,
+  input: { prompt: string; deepResearch?: boolean; researchBudgetMinutes?: number | null },
+): Promise<CostEstimate> {
+  const rows = await db.query<{ avg_tokens: string | null; n: string }>(
+    `SELECT AVG(tokens_in + tokens_out)::text AS avg_tokens, COUNT(*)::text AS n
+       FROM (SELECT tokens_in, tokens_out FROM runs
+              WHERE status = 'completed'
+                AND tokens_in IS NOT NULL AND tokens_out IS NOT NULL
+              ORDER BY finished_at DESC LIMIT 20) recent`,
+  );
+  const avg = Number(rows[0]?.avg_tokens ?? NaN);
+  const n = Number(rows[0]?.n ?? 0);
+  let estimated = Number.isFinite(avg) && avg > 0 ? Math.round(avg) : 8000;
+  const basis: CostEstimate['basis'] = Number.isFinite(avg) && avg > 0 ? 'history' : 'fallback';
+  if (input.deepResearch) {
+    // Each 15-minute research pass costs roughly one mission.
+    const passes = Math.max(1, Math.ceil((input.researchBudgetMinutes ?? 15) / 15));
+    estimated = estimated * passes;
+  }
+  return { estimatedTokens: estimated, basis, missionsSampled: n };
+}
+
+/** Today's remaining runs for a channel, without spending anything. */export async function remainingRuns(deps: AcceptDeps, kind: RunKind): Promise<number> {
   const bucket = BUCKET_FOR_KIND[kind];
   const used = await peekBudget(deps.db, bucket);
   return Math.max(0, deps.config.dailyRunBudget - used);

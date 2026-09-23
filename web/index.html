@@ -111,6 +111,12 @@
         <button type="submit" class="send" id="btn-send" aria-label="Send" disabled>
           <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
         </button>
+        <span class="estimate-line" id="estimate-line" hidden>
+          <span id="estimate-text"></span>
+          <label class="cap-toggle" title="Stop this task if it passes this many tokens — finished steps are saved">
+            cap <input id="token-cap" type="number" min="1" max="200" step="1" placeholder="k" aria-label="Token budget in thousands">
+          </label>
+        </span>
       </div>
     </form>
     <p class="composer-note" id="composer-note"></p>
