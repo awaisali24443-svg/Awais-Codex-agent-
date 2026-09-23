@@ -1,4 +1,5 @@
 import { stripMarkdownForSpeech, combineTranscripts, recognitionErrorMessage } from './voice.js';
+import { SUGGESTIONS, suggestionFill, fillComposerFromChip } from './welcome.js';
 
 /* ==========================================================================
    Codex — client.
@@ -213,7 +214,6 @@ async function enter() {
 
 function showHero(on) {
   el.hero.hidden = !on;
-  el.chips.classList.toggle('hide', !on);
 }
 
 /* ---------------------------------------------------------- conversations -- */
@@ -1619,14 +1619,21 @@ function speakButton(text) {
   return btn;
 }
 
-for (const chip of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('.chip'))) {
+/* Welcome-screen suggestion chips, built from SUGGESTIONS (web/welcome.js) —
+   one source of truth shared with the tests. A tap fills the composer as
+   editable text — it is never auto-sent. */
+for (const suggestion of SUGGESTIONS) {
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'chip';
+  chip.textContent = suggestion.label;
   chip.addEventListener('click', () => {
-    el.prompt.value = chip.dataset.fill || '';
+    fillComposerFromChip(el.prompt, el.send, suggestionFill(suggestion));
     autoGrow();
-    el.send.disabled = false;
     el.prompt.focus();
     el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
   });
+  el.chips.append(chip);
 }
 
 /* Deep research: a time-boxed mode for long investigations. The select and
