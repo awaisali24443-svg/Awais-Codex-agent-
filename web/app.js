@@ -460,6 +460,125 @@ function updatePlan(card, data) {
   scrollToEnd();
 }
 
+/* ------------------------------------------------------- plan preview -- */
+
+/**
+ * The plan checklist in its waiting state: the proposed steps plus Approve
+ * and Edit. Rebuilding from scratch keeps an edited plan, a re-render, and a
+ * replayed stream from ever duplicating rows or buttons.
+ */
+function renderPlanPreview(card, plan) {
+  const steps = Array.isArray(plan) ? plan : [];
+  card.plan.hidden = false;
+  card.planIndex.clear();
+  card.plan.innerHTML = '';
+  for (const step of steps) {
+    updatePlan(card, { index: step.index, total: step.total, label: step.label, done: false });
+  }
+  const actions = document.createElement('div');
+  actions.className = 'plan-actions';
+  const approve = document.createElement('button');
+  approve.type = 'button';
+  approve.className = 'msg-btn primary';
+  approve.textContent = '✓ Approve & start';
+  const edit = document.createElement('button');
+  edit.type = 'button';
+  edit.className = 'msg-btn';
+  edit.textContent = '✎ Edit plan';
+  actions.append(approve, edit);
+  card.plan.append(actions);
+  approve.addEventListener('click', () => approvePlan(card, approve));
+  edit.addEventListener('click', () => editPlan(card));
+  scrollToEnd();
+}
+
+/** The wait is over: drop the Approve / Edit buttons, keep the checklist. */
+function closePlanPreview(card) {
+  card.plan.querySelectorAll('.plan-actions').forEach((node) => node.remove());
+}
+
+async function approvePlan(card, button) {
+  button.disabled = true;
+  try {
+    await api(`/api/runs/${card.runId}/approve`, { method: 'POST' });
+    // 'run.plan_approved' arrives on the stream and closes the preview; the
+    // close here covers a stream that is momentarily behind.
+    closePlanPreview(card);
+    note('Plan approved — starting…');
+    setRunning(true);
+  } catch (err) {
+    button.disabled = false;
+    toast(err.body?.message || err.message || 'Could not approve the plan.');
+  }
+}
+
+/**
+ * Inline plan editing: labels become inputs, Save sends the new labels to the
+ * server (reindexed 1..N), and the broadcast 'run.plan_updated' re-renders
+ * the checklist. Cancel restores the untouched labels.
+ */
+function editPlan(card) {
+  const actions = card.plan.querySelector('.plan-actions');
+  if (!actions || actions.hidden) return;
+  const originals = [];
+  for (const row of card.plan.querySelectorAll('.plan-row')) {
+    const label = row.querySelector('.plan-label');
+    originals.push(label.textContent);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'plan-edit';
+    input.value = label.textContent;
+    input.maxLength = 140;
+    label.replaceWith(input);
+  }
+  actions.hidden = true;
+  const editor = document.createElement('div');
+  editor.className = 'plan-actions';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'msg-btn primary';
+  save.textContent = 'Save plan';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'msg-btn';
+  cancel.textContent = 'Cancel';
+  editor.append(save, cancel);
+  card.plan.append(editor);
+
+  const restore = (labels) => {
+    card.plan.querySelectorAll('.plan-row').forEach((row, i) => {
+      const span = document.createElement('span');
+      span.className = 'plan-label';
+      span.textContent = labels[i] ?? '';
+      row.querySelector('.plan-edit')?.replaceWith(span);
+    });
+    editor.remove();
+    actions.hidden = false;
+  };
+  cancel.addEventListener('click', () => restore(originals));
+  save.addEventListener('click', async () => {
+    const labels = [...card.plan.querySelectorAll('.plan-edit')]
+      .map((el) => el.value.trim())
+      .filter(Boolean);
+    if (!labels.length) {
+      toast('The plan needs at least one step.');
+      return;
+    }
+    save.disabled = true;
+    try {
+      await api(`/api/runs/${card.runId}/plan`, {
+        method: 'POST',
+        body: JSON.stringify({ steps: labels }),
+      });
+      // The server reindexes and broadcasts 'run.plan_updated', which
+      // re-renders the checklist — nothing left to do here.
+    } catch (err) {
+      save.disabled = false;
+      toast(err.body?.message || err.message || 'Could not save the plan.');
+    }
+  });
+}
+
 function addStep(card, key, { name, detail = '', icon = 'dot', done = false }) {
   let step = card.stepIndex.get(key);
   if (!step) {
@@ -548,6 +667,21 @@ function handleEvent(card, event, data) {
 
     case 'plan.milestone':
       updatePlan(card, data);
+      break;
+
+    case 'run.plan_ready':
+    case 'run.plan_updated':
+      // The planning pass proposed steps (or the operator edited them): the
+      // run waits in 'awaiting_plan' and the card shows Approve / Edit. The
+      // mission does not start until the operator taps Approve.
+      renderPlanPreview(card, data.plan);
+      break;
+
+    case 'run.plan_approved':
+      // The wait is over; 'run.started' follows on this same stream and the
+      // execution milestones tick the approved steps off in place.
+      closePlanPreview(card);
+      note('Plan approved — starting…');
       break;
 
     case 'tool.call':
@@ -792,6 +926,31 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
     editBtn.title = 'Edit this message — forks the conversation';
     editBtn.addEventListener('click', () => openInlineEditor(node, message));
     row.append(editBtn);
+  } else if (message.runId && message.runStatus === 'awaiting_plan') {
+    // A plan waiting for approval: jump straight to its card to review it.
+    const reviewBtn = document.createElement('button');
+    reviewBtn.type = 'button';
+    reviewBtn.className = 'msg-btn';
+    reviewBtn.textContent = '☰ Review plan';
+    reviewBtn.title = 'Review the proposed plan — approve or edit it';
+    reviewBtn.addEventListener('click', async () => {
+      reviewBtn.disabled = true;
+      try {
+        const { run } = await api(`/api/runs/${message.runId}`);
+        if (!run || run.status !== 'awaiting_plan') {
+          toast('This plan was already decided.');
+          reviewBtn.disabled = false;
+          return;
+        }
+        state.conversationId = run.conversationId;
+        row.remove();
+        attach(run.id, 0);
+      } catch (err) {
+        reviewBtn.disabled = false;
+        toast(err.message || 'Could not open the plan.');
+      }
+    });
+    row.append(reviewBtn);
   } else if (message.runId && (message.runStatus === 'completed' || message.runStatus === 'failed' || message.runStatus === 'paused')) {
     // A paused run, or one the server killed mid-mission, resumes from its
     // first unfinished step. Everything else gets the plain retry.
@@ -1110,6 +1269,7 @@ function attach(runId, after = 0) {
     'run.started', 'log', 'tool.call', 'tool.result',
     'thinking.snapshot', 'text.snapshot', 'run.environment',
     'artifact', 'memory.recall', 'plan.milestone',
+    'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
     'research.started', 'research.pass',
     'run.completed', 'run.failed', 'run.cancelled',
   ];
@@ -1328,8 +1488,15 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
     });
     state.conversationId = run.conversationId;
     if (budget) note(`${budget.remaining} of ${budget.limit} runs left today`);
-    setRunning(true);
-    attach(run.id, 0);
+    if (run.status === 'awaiting_plan') {
+      // The mission waits for plan approval — nothing is running yet. The
+      // stream replays 'run.plan_ready' and the card renders Approve / Edit.
+      note('Plan ready — review it below, then approve to start.');
+      attach(run.id, 0);
+    } else {
+      setRunning(true);
+      attach(run.id, 0);
+    }
     loadConversations();
     loadBudget();
   } catch (err) {

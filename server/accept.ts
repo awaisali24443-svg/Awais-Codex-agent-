@@ -22,7 +22,8 @@ import type { AppConfig } from './config.js';
 import type { Db } from './db.js';
 import type { RunExecutor } from './executor.js';
 import { BudgetExceededError, consumeRunBudget, peekBudget, type BudgetBucket } from './budget.js';
-import { RunConflictError, createRun, getActiveRun, setRunStatus, type Run, type RunKind } from './runs.js';
+import { looksComplex } from './planning.js';
+import { RunConflictError, createRun, emitEvent, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
 
 export const BUCKET_FOR_KIND: Record<RunKind, BudgetBucket> = {
   chat: 'web',
@@ -133,6 +134,28 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
   try {
     const used = await consumeRunBudget(db, bucket, config.dailyRunBudget);
     const remaining = Math.max(0, config.dailyRunBudget - used);
+
+    // Complex web missions pause for plan approval. One short planning pass
+    // asks the engine for its step-by-step plan; the run then waits in
+    // 'awaiting_plan' and the mission executes only after the operator
+    // approves (or edits then approves). WhatsApp and API missions have no
+    // approval UI, so they keep the direct path; simple questions never pay
+    // for a planning call.
+    if (input.kind === 'chat' && looksComplex(prompt)) {
+      const steps = await executor.planMission(run);
+      if (steps.length > 0) {
+        await saveRunPlan(db, run.id, steps);
+        await setRunStatus(db, run.id, 'awaiting_plan');
+        await emitEvent(db, run.id, 'run.plan_ready', { plan: steps });
+        const held = await getRun(db, run.id);
+        console.log(`[run] ${run.id} awaiting plan approval (${steps.length} steps)`);
+        return { ok: true, run: held ?? run, remaining, bucket };
+      }
+      // A plan that never arrived must not strand the mission: fall through
+      // to normal execution, loudly.
+      console.log(`[run] ${run.id} planning pass came back empty — executing directly`);
+    }
+
     executor.start(run);
     console.log(`[run] ${run.id} queued (${input.kind}, ${remaining} left today)`);
     return { ok: true, run, remaining, bucket };

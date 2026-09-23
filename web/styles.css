@@ -426,6 +426,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .plan-num { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; flex: none; }
 .plan-row.done .plan-label { color: var(--muted); text-decoration: line-through; }
 
+/* Plan preview actions: Approve / Edit under the proposed steps, and the
+   inline inputs while the operator is editing the plan. */
+.plan-actions { display: flex; gap: 8px; padding: 10px 2px 4px; }
+.plan-edit {
+  flex: 1; min-width: 0; font: inherit; font-size: 13px;
+  color: var(--ink); background: var(--paper);
+  border: 1px solid var(--ink-soft); border-radius: 8px; padding: 4px 8px;
+}
+
 /* Retry button on a failed task's notice. */
 .retry-btn {
   margin-left: auto; padding: 7px 14px; border-radius: 999px;

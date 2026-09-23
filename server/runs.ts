@@ -19,10 +19,23 @@ import { appendEvent, type Db } from './db.js';
 import { CHAIN_VISIBLE, chainCte, ensureMainBranch } from './branches.js';
 
 export type RunKind = 'chat' | 'whatsapp' | 'api';
-export type RunStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'queued' | 'running' | 'paused' | 'awaiting_plan' | 'completed' | 'failed' | 'cancelled';
 export type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
 export const TERMINAL_STATUSES: readonly RunStatus[] = ['completed', 'failed', 'cancelled'];
+
+/**
+ * One step of a run's plan, stored as `runs.plan_json`.
+ *
+ * The planning pass asks the engine for "Step k/N" lines (the same protocol
+ * as live milestones); the operator approves or edits them before the
+ * mission executes. `total` is the N the engine announced.
+ */
+export interface PlanStep {
+  index: number;
+  total: number;
+  label: string;
+}
 
 export interface Run {
   id: string;
@@ -52,6 +65,8 @@ export interface Run {
   tokenBudget: number | null;
   /** When resuming an interrupted mission, the first step not yet done. */
   resumeFromStep: number | null;
+  /** The operator-visible plan, set by the planning pass; null until then. */
+  plan: PlanStep[] | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -96,6 +111,7 @@ interface RunRow {
   research_budget_minutes: number | null;
   token_budget: number | null;
   resume_from_step: number | null;
+  plan_json: unknown;
   started_at: Date | string;
   finished_at: Date | string | null;
 }
@@ -103,6 +119,21 @@ interface RunRow {
 function toIso(value: Date | string | null): string | null {
   if (value === null) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+/** Parse the stored plan defensively: a corrupt value is no plan, not a crash. */
+function parsePlan(value: unknown): PlanStep[] | null {
+  if (!Array.isArray(value)) return null;
+  const steps = value
+    .filter((s): s is Record<string, unknown> => typeof s === 'object' && s !== null)
+    .map((s) => ({
+      index: Number(s.index),
+      total: Number(s.total),
+      label: String(s.label ?? '').slice(0, 140),
+    }))
+    .filter((s) => Number.isFinite(s.index) && s.index >= 1 && s.label.length > 0)
+    .sort((a, b) => a.index - b.index);
+  return steps.length ? steps : null;
 }
 
 function mapRun(row: RunRow): Run {
@@ -123,6 +154,7 @@ function mapRun(row: RunRow): Run {
     researchBudgetMinutes: row.research_budget_minutes ?? null,
     tokenBudget: row.token_budget ?? null,
     resumeFromStep: row.resume_from_step ?? null,
+    plan: parsePlan(row.plan_json),
     startedAt: toIso(row.started_at) as string,
     finishedAt: toIso(row.finished_at),
   };
@@ -132,7 +164,7 @@ const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
                      interaction_id, environment_id, previous_interaction_id,
                      error_type, error_message, notify_whatsapp,
                      deep_research, research_budget_minutes,
-                     token_budget, resume_from_step,
+                     token_budget, resume_from_step, plan_json,
                      started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
@@ -146,7 +178,7 @@ function isActiveConflict(err: unknown): boolean {
 export async function getActiveRun(db: Db): Promise<Run | null> {
   const rows = await db.query<RunRow>(
     `SELECT ${RUN_COLUMNS} FROM runs
-      WHERE status IN ('queued', 'running', 'paused')
+      WHERE status IN ('queued', 'running', 'paused', 'awaiting_plan')
       ORDER BY started_at DESC LIMIT 1`,
   );
   return rows[0] ? mapRun(rows[0]) : null;
@@ -329,6 +361,42 @@ export async function setRunStatus(
       WHERE id = $1`,
     [id, status, patch.errorType ?? null, patch.errorMessage ?? null, terminal],
   );
+}
+
+/** Persist the planning pass's step list on the run. */
+export async function saveRunPlan(db: Db, runId: string, steps: PlanStep[]): Promise<void> {
+  await db.query('UPDATE runs SET plan_json = $2 WHERE id = $1', [runId, JSON.stringify(steps)]);
+}
+
+/**
+ * Approve a waiting plan: awaiting_plan → queued. Returns true when the
+ * transition happened; false when the run was not waiting (already approved,
+ * cancelled, or finished) so a double-tap cannot start it twice.
+ */
+export async function approveRunPlan(db: Db, runId: string): Promise<boolean> {
+  const rows = await db.query<{ id: string }>(
+    `UPDATE runs SET status = 'queued' WHERE id = $1 AND status = 'awaiting_plan' RETURNING id`,
+    [runId],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Replace the waiting plan's step labels, reindexed 1..N. Returns the new
+ * steps, or null when the run is not waiting for approval — editing is not
+ * approval, and a plan that already started executing is no longer editable.
+ */
+export async function updateRunPlan(db: Db, runId: string, labels: string[]): Promise<PlanStep[] | null> {
+  const steps: PlanStep[] = labels.map((label, i) => ({
+    index: i + 1,
+    total: labels.length,
+    label,
+  }));
+  const rows = await db.query<{ plan_json: unknown }>(
+    `UPDATE runs SET plan_json = $2 WHERE id = $1 AND status = 'awaiting_plan' RETURNING plan_json`,
+    [runId, JSON.stringify(steps)],
+  );
+  return rows.length ? parsePlan(rows[0].plan_json) : null;
 }
 
 export async function readEvents(

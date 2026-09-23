@@ -42,6 +42,8 @@ import { listArtifacts } from '../artifacts.js';
 import { BUCKET_FOR_KIND, acceptRun, estimateRunCost, type AcceptResult } from '../accept.js';
 import {
   TERMINAL_STATUSES,
+  approveRunPlan,
+  emitEvent,
   finishRun,
   getActiveRun,
   getRun,
@@ -49,6 +51,7 @@ import {
   listMessages,
   listRuns,
   readEvents,
+  updateRunPlan,
   type RunKind,
   type RunStatus,
 } from '../runs.js';
@@ -418,6 +421,76 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     executor.start(resumed);
     console.log(`[run] ${run.id} resumed from step ${fromStep} (${steps.filter((s) => s.status === 'done').length} done)`);
     res.json({ run: resumed, fromStep });
+  });
+
+  /**
+   * Approve a waiting plan: the mission starts executing from the approved
+   * steps.
+   *
+   * Only an 'awaiting_plan' run qualifies. The transition is a single
+   * conditional UPDATE, so a double-tap approves once — the second tap gets a
+   * 400 instead of starting the mission twice. The run already holds the
+   * single-active slot, so no budget is spent and no queue is jumped.
+   */
+  router.post('/runs/:id/approve', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    const ok = await approveRunPlan(db, run.id);
+    if (!ok) {
+      res.status(400).json({
+        error: 'not_awaiting_plan',
+        message: `Only a run waiting for plan approval can be approved (this one is ${run.status})`,
+      });
+      return;
+    }
+    await emitEvent(db, run.id, 'run.plan_approved', {});
+    const approved = await getRun(db, run.id);
+    if (approved) executor.start(approved);
+    res.json({ run: approved ?? run });
+  });
+
+  /**
+   * Edit a waiting plan: replace the step labels, reindexed 1..N.
+   *
+   * The run stays in 'awaiting_plan' — editing is not approval; the operator
+   * still taps Approve to start the mission. The updated plan is broadcast
+   * as `run.plan_updated` so every open view re-renders the same checklist.
+   */
+  router.post('/runs/:id/plan', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    const body = (req.body ?? {}) as { steps?: unknown };
+    const labels = Array.isArray(body.steps)
+      ? body.steps
+          .filter((s): s is string => typeof s === 'string')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+          .slice(0, 20)
+      : [];
+    if (labels.length === 0) {
+      res.status(400).json({
+        error: 'plan_required',
+        message: 'steps must be a non-empty array of step labels (max 20)',
+      });
+      return;
+    }
+    const steps = await updateRunPlan(db, run.id, labels);
+    if (!steps) {
+      res.status(400).json({
+        error: 'not_awaiting_plan',
+        message: `Only a run waiting for plan approval can be edited (this one is ${run.status})`,
+      });
+      return;
+    }
+    await emitEvent(db, run.id, 'run.plan_updated', { plan: steps });
+    const updated = await getRun(db, run.id);
+    res.json({ run: updated ?? run, plan: steps });
   });
 
   // ---- the live stream ----------------------------------------------------

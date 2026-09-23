@@ -28,10 +28,10 @@
 import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import { EngineAbortedError, EngineError, type Engine, type EngineContext, type EngineResult, type LogLevel } from './engine/types.js';
-import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type Run, type TerminalStatus } from './runs.js';
+import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type PlanStep, type Run, type TerminalStatus } from './runs.js';
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
-import { parseMilestone, withLinkedIn, withPlanning } from './planning.js';
+import { parseMilestone, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
 import { extractUrls, checkSources } from './sources.js';
 import { recordLinkedInDraft } from './linkedin.js';
 import {
@@ -277,6 +277,60 @@ export class RunExecutor {
     return true;
   }
 
+  /**
+   * The planning pass: one short engine call that asks for the plan and
+   * nothing else.
+   *
+   * The run is NOT started — no status change, no `run.started` event; the
+   * caller decides what to do with the steps. Milestones are collected from
+   * the same "Step k/N" protocol the executor already parses, so a plan the
+   * engine announces here lands on the same checklist shape it will tick off
+   * during execution.
+   *
+   * A plan that never arrives (timeout, empty answer, engine error) is an
+   * empty list, and the caller falls back to normal execution rather than
+   * stranding the mission in a waiting state with nothing to show.
+   */
+  async planMission(run: Run): Promise<PlanStep[]> {
+    const steps: PlanStep[] = [];
+    const controller = new AbortController();
+    // A plan is a short answer. If the engine is still talking after a
+    // minute it has misunderstood "plan only" — stop paying for it.
+    const timeout = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const ctx: EngineContext = {
+        runId: run.id,
+        signal: controller.signal,
+        previousInteractionId: null,
+        environmentId: null,
+        text: () => {},
+        thinking: () => {},
+        tool: () => {},
+        toolResult: () => {},
+        log: (message) => {
+          const milestone = parseMilestone(message);
+          if (milestone) {
+            steps.push({ index: milestone.index, total: milestone.total, label: milestone.label });
+          }
+        },
+      };
+      await this.deps.engine.run(planOnlyPrompt(run.prompt), ctx);
+    } catch (err) {
+      console.warn(`[run] ${run.id} planning pass failed:`, (err as Error).message);
+    } finally {
+      clearTimeout(timeout);
+    }
+    // Normalise: first label announced wins per index, ordered 1..N, with a
+    // single total so the checklist renders as one plan.
+    const seen = new Map<number, PlanStep>();
+    for (const s of steps) if (!seen.has(s.index)) seen.set(s.index, s);
+    const announced = [...seen.values()].map((s) => s.total);
+    const total = announced.length ? Math.max(...announced) : 0;
+    return [...seen.values()]
+      .sort((a, b) => a.index - b.index)
+      .map((s) => ({ index: s.index, total: total || seen.size, label: s.label }));
+  }
+
   /** Abort everything in flight (shutdown). Resolves when the map is clear. */
   async shutdown(timeoutMs = 8_000): Promise<void> {
     if (this.active.size === 0) return;
@@ -443,7 +497,11 @@ export class RunExecutor {
                 },
               )
             : '';
-        const mission = resumePreamble + withLinkedIn(withPlanning(memory.prompt));
+        // The operator approved this plan before execution started. It rides
+        // on the wire so the engine follows the approved steps instead of
+        // re-planning; the stored prompt is untouched.
+        const planPreamble = run.plan?.length ? buildPlanPreamble(run.plan) : '';
+        const mission = resumePreamble + planPreamble + withLinkedIn(withPlanning(memory.prompt));
         result =
           run.deepResearch && (run.researchBudgetMinutes ?? 0) > 0
             ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking)

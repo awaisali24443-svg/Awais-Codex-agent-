@@ -68,6 +68,42 @@ export function withPlanning(prompt: string): string {
 }
 
 /**
+ * The planning pass asks for the plan and nothing else. It reuses the same
+ * "Step k/N" line protocol as live milestones, so the steps the engine
+ * announces during execution land on the same checklist the operator
+ * approved. No execution, no commentary — a planning call that starts doing
+ * the work has misunderstood the contract, and the parse below simply finds
+ * no usable plan in it.
+ */
+const PLAN_ONLY_CONTRACT = `[Planning pass — do NOT start the mission yet.
+First, output ONLY your step-by-step plan as numbered lines, one step per line, in the exact form:
+Step 1/N: <what this step does>
+Step 2/N: <what this step does>
+Up to 20 steps, one per line. Output nothing else — no execution, no explanation, no commentary.]
+
+`;
+
+/** The planning-pass prompt: the contract plus the untouched operator prompt. */
+export function planOnlyPrompt(prompt: string): string {
+  return PLAN_ONLY_CONTRACT + prompt;
+}
+
+/**
+ * Wire-only: the approved plan, so execution follows what the operator saw.
+ * The stored prompt is untouched — this rides on the wire to the model next
+ * to the resume preamble.
+ */
+export function buildPlanPreamble(steps: Array<{ index: number; total: number; label: string }>): string {
+  if (!steps.length) return '';
+  const lines = steps.map((s) => `Step ${s.index}/${s.total}: ${s.label}`);
+  return (
+    `[Approved plan — the operator reviewed and approved these steps before you started. ` +
+    `Follow them in order, and announce each completion as "Step k/N done: <one-line outcome>".\n` +
+    `${lines.join('\n')}]\n\n`
+  );
+}
+
+/**
  * Wire-only LinkedIn publishing convention, added only when the operator's
  * own message is about LinkedIn. The agent is remote — it cannot call our
  * server — so "publish this" ends as a fenced draft the server files as
