@@ -102,7 +102,18 @@ function readInt(raw: string | undefined, fallback: number): number {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const problems: string[] = [];
 
-  const nodeEnv = (env.NODE_ENV ?? 'development') as AppConfig['nodeEnv'];
+  // NODE_ENV is cast to the union type below, so an unrecognised value would
+  // silently become "development" and drop every production guard (database,
+  // secrets, master key, access key). Fail here instead of booting unprotected.
+  const nodeEnvRaw = (env.NODE_ENV ?? 'development').trim().toLowerCase();
+  const validEnvs = ['development', 'test', 'production'];
+  if (!validEnvs.includes(nodeEnvRaw)) {
+    problems.push(
+      `NODE_ENV must be one of ${validEnvs.join(', ')} (got "${env.NODE_ENV}") — ` +
+        'a typo would otherwise disable the production guards silently',
+    );
+  }
+  const nodeEnv = nodeEnvRaw as AppConfig['nodeEnv'];
   const isProduction = nodeEnv === 'production';
 
   const databaseUrl = (env.DATABASE_URL ?? '').trim();
