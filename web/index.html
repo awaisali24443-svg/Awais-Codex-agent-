@@ -166,6 +166,19 @@ try {
   <button class="drawer-foot" id="btn-signout">Sign out</button>
 </aside>
 
+<!-- ======================= outputs panel ======================= -->
+<div class="panel-backdrop" id="panel-backdrop" hidden></div>
+<aside class="panel" id="panel" aria-hidden="true" aria-label="Run outputs">
+  <div class="panel-head">
+    <span class="panel-title" id="panel-title">Outputs</span>
+    <button class="icon-btn sm" id="panel-close" aria-label="Close outputs">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="panel-tabs" id="panel-tabs" role="tablist" aria-label="Output sections"></div>
+  <div class="panel-body" id="panel-body"></div>
+</aside>
+
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script type="module" src="/app.js"></script>

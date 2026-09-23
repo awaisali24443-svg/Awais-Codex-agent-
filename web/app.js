@@ -1,5 +1,14 @@
 import { stripMarkdownForSpeech, combineTranscripts, recognitionErrorMessage } from './voice.js';
 import { SUGGESTIONS, suggestionFill, fillComposerFromChip } from './welcome.js';
+import {
+  PANEL_SECTIONS,
+  visibleSections,
+  defaultSection,
+  createPanelState,
+  openPanelState,
+  closePanelState,
+  selectPanelSection,
+} from './panel.js';
 
 /* ==========================================================================
    Codex — client.
@@ -61,6 +70,11 @@ const el = {
   topbarTitle: $('topbar-title'),
   statusDot: $('status-dot'),
   toast: $('toast'),
+  panel: $('panel'),
+  panelBackdrop: $('panel-backdrop'),
+  panelClose: $('panel-close'),
+  panelTabs: $('panel-tabs'),
+  panelBody: $('panel-body'),
   note: $('composer-note'),
   estimateLine: $('estimate-line'),
   estimateText: $('estimate-text'),
@@ -868,26 +882,26 @@ function finishCard(card, outcome, data = {}) {
     if (data.errorType === 'interrupted') {
       // The server restarted mid-mission. Resume continues from the first
       // unfinished step; retry starts over. Both are offered, resume first.
-      noticeNode.append(runActionButtons(card, { resume: true, retry: true, edit: true, share: true, notice: noticeNode }));
+      noticeNode.append(runActionButtons(card, { resume: true, retry: true, edit: true, share: true, outputs: true, notice: noticeNode }));
     } else {
       // A failed complex task is usually worth one more attempt, not a retyped
       // prompt. The retry starts a fresh run with the same prompt in the same
       // conversation; it costs one daily run like any other mission.
-      noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, notice: noticeNode }));
+      noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, outputs: true, notice: noticeNode }));
     }
   } else if (outcome === 'paused') {
     // The token budget ran out. Pausing is not terminal: the partial answer
     // stands and the operator resumes the same run with a higher cap.
     const noticeNode = renderNotice(humanError('token_budget'), false, 'warn');
-    noticeNode.append(runActionButtons(card, { resume: true, edit: true, share: true, notice: noticeNode }));
+    noticeNode.append(runActionButtons(card, { resume: true, edit: true, share: true, outputs: true, notice: noticeNode }));
   } else if (outcome === 'cancelled') {
     const noticeNode = renderNotice('Stopped. Whatever it produced is kept below.', false, 'info');
-    noticeNode.append(runActionButtons(card, { edit: true, share: true }));
+    noticeNode.append(runActionButtons(card, { edit: true, share: true, outputs: true }));
   } else {
     // A finished task can be re-run as-is or tweaked in the composer and
     // re-sent.
     const noticeNode = renderNotice('Done.', false, 'check');
-    noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, notice: noticeNode }));
+    noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, outputs: true, notice: noticeNode }));
   }
 
   setRunning(false);
@@ -1032,6 +1046,17 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
     });
     row.append(actionBtn);
   }
+  // The run's outputs (files, preview, plan, proof) in a slide-over panel.
+  if (message.role === 'assistant' && message.runId &&
+      (message.runStatus === 'completed' || message.runStatus === 'failed' || message.runStatus === 'paused')) {
+    const outputsBtn = document.createElement('button');
+    outputsBtn.type = 'button';
+    outputsBtn.className = 'msg-btn';
+    outputsBtn.textContent = '⧉ Outputs';
+    outputsBtn.title = 'Open this run\u2019s outputs in a side panel';
+    outputsBtn.addEventListener('click', () => openOutputs(message.runId));
+    row.append(outputsBtn);
+  }
   // A ```linkedin-post block the agent filed as a pending draft. Publishing
   // is always the operator's tap — never automatic.
   if (linkedInDraftId && message.role === 'assistant') row.append(linkedInPublishButton(linkedInDraftId));
@@ -1120,9 +1145,20 @@ function openInlineEditor(node, message) {
 }
 
 /* The button group appended to a finished run's notice. */
-function runActionButtons(card, { retry = false, resume = false, edit = false, share = false, notice = null } = {}) {
+function runActionButtons(card, { retry = false, resume = false, edit = false, share = false, outputs = false, notice = null } = {}) {
   const group = document.createElement('span');
   group.className = 'run-btns';
+  if (outputs) {
+    // The run's outputs (files, preview, plan, proof) in a slide-over panel
+    // instead of cramped inline cards.
+    const outputsBtn = document.createElement('button');
+    outputsBtn.type = 'button';
+    outputsBtn.className = 'retry-btn';
+    outputsBtn.textContent = '⧉ Outputs';
+    outputsBtn.title = 'Open this run\u2019s outputs in a side panel';
+    outputsBtn.addEventListener('click', () => openOutputs(card.runId));
+    group.append(outputsBtn);
+  }
   if (resume) {
     const resumeBtn = document.createElement('button');
     resumeBtn.type = 'button';
@@ -1216,6 +1252,32 @@ async function loadArtifacts(card) {
   } catch { /* the run is what matters; a missing file list is not fatal */ }
 }
 
+/* Fetch an artifact's bytes and save them locally. Shared by the inline file
+   chips and the outputs panel's Files section. */
+async function downloadArtifact(artifact, chip) {
+  chip?.classList.add('busy');
+  try {
+    const response = await fetch(artifact.downloadUrl, { credentials: 'same-origin' });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      toast(body?.message || `Could not fetch ${artifact.name}.`);
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = artifact.name;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast(`Downloaded ${artifact.name}`);
+  } catch {
+    toast('Download failed — check your connection.');
+  } finally {
+    chip?.classList.remove('busy');
+  }
+}
+
 function artifactChip(artifact) {
   const chip = document.createElement('button');
   chip.className = 'file';
@@ -1224,29 +1286,7 @@ function artifactChip(artifact) {
   const label = artifact.name + (artifact.size ? ` · ${formatBytes(artifact.size)}` : '');
   chip.querySelector('span').textContent = label;
 
-  chip.addEventListener('click', async () => {
-    chip.classList.add('busy');
-    try {
-      const response = await fetch(artifact.downloadUrl, { credentials: 'same-origin' });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        toast(body?.message || `Could not fetch ${artifact.name}.`);
-        return;
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = artifact.name;
-      link.click();
-      URL.revokeObjectURL(url);
-      toast(`Downloaded ${artifact.name}`);
-    } catch {
-      toast('Download failed — check your connection.');
-    } finally {
-      chip.classList.remove('busy');
-    }
-  });
+  chip.addEventListener('click', () => downloadArtifact(artifact, chip));
 
   return chip;
 }
@@ -1312,6 +1352,228 @@ function closePreview() {
   const overlay = document.getElementById('preview-overlay');
   if (overlay) overlay.remove();
   document.removeEventListener('keydown', previewEscape);
+}
+
+/* ------------------------------------------------------- outputs panel -- */
+
+/**
+ * Claude-style slide-over: a run's outputs (files, live website preview,
+ * plan, verification proof) open from the right edge instead of cramped
+ * inline cards. Sections appear only when the run has that content. The
+ * operator opens it — it never auto-opens.
+ */
+let panel = createPanelState();
+let panelData = null; // { run, artifacts } for the run the panel shows
+let panelVisible = []; // section ids with content, in tab order
+let panelPreviewId = null; // which previewable artifact the Preview tab shows
+
+async function openOutputs(runId) {
+  if (!runId) return;
+  panel = openPanelState(panel, runId);
+  panelData = null;
+  panelVisible = [];
+  panelPreviewId = null;
+
+  el.panel.classList.add('open');
+  el.panel.setAttribute('aria-hidden', 'false');
+  el.panelBackdrop.hidden = false;
+  requestAnimationFrame(() => el.panelBackdrop.classList.add('show'));
+  document.addEventListener('keydown', panelEscape);
+  el.panelTabs.hidden = true;
+  el.panelTabs.innerHTML = '';
+  el.panelBody.innerHTML = '<p class="empty-note">Loading…</p>';
+  el.panelClose.focus();
+
+  try {
+    const [runRes, artRes] = await Promise.all([
+      api(`/api/runs/${runId}`),
+      api(`/api/runs/${runId}/artifacts`),
+    ]);
+    // A newer open() may have started while these fetched; drop the stale one.
+    if (!panel.open || panel.runId !== runId) return;
+    panelData = {
+      run: runRes.run,
+      artifacts: Array.isArray(artRes.artifacts) ? artRes.artifacts : [],
+    };
+    panelVisible = visibleSections({
+      artifacts: panelData.artifacts,
+      plan: panelData.run?.plan,
+      verification: panelData.run?.verification,
+    });
+    panel = { ...panel, section: defaultSection(panelVisible) };
+    renderPanelTabs();
+    renderPanelBody();
+  } catch {
+    if (!panel.open || panel.runId !== runId) return;
+    el.panelBody.innerHTML = '<p class="empty-note">Could not load this run.</p>';
+  }
+}
+
+function closeOutputs() {
+  panel = closePanelState(panel);
+  el.panel.classList.remove('open');
+  el.panel.setAttribute('aria-hidden', 'true');
+  el.panelBackdrop.classList.remove('show');
+  setTimeout(() => { el.panelBackdrop.hidden = true; }, 240);
+  document.removeEventListener('keydown', panelEscape);
+}
+
+function panelEscape(event) {
+  if (event.key === 'Escape') closeOutputs();
+}
+
+function renderPanelTabs() {
+  el.panelTabs.innerHTML = '';
+  el.panelTabs.hidden = panelVisible.length === 0;
+  for (const id of panelVisible) {
+    const def = PANEL_SECTIONS.find((s) => s.id === id);
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'panel-tab';
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(panel.section === id));
+    tab.textContent = def ? def.label : id;
+    tab.addEventListener('click', () => {
+      panel = selectPanelSection(panel, id);
+      renderPanelTabs();
+      renderPanelBody();
+    });
+    el.panelTabs.append(tab);
+  }
+}
+
+function renderPanelBody() {
+  const body = el.panelBody;
+  body.innerHTML = '';
+  if (!panelData) return;
+  switch (panel.section) {
+    case 'files':
+      renderPanelFiles(body, panelData.artifacts);
+      break;
+    case 'preview':
+      renderPanelPreview(body, panelData.artifacts);
+      break;
+    case 'plan':
+      renderPanelPlan(body, panelData.run?.plan);
+      break;
+    case 'proof':
+      renderPanelProof(body, panelData.run?.verification);
+      break;
+    default:
+      body.innerHTML = '<p class="empty-note">This run produced no files, plan, or checks.</p>';
+  }
+}
+
+function renderPanelFiles(body, artifacts) {
+  for (const artifact of artifacts) {
+    const row = document.createElement('div');
+    row.className = 'panel-file';
+    const name = document.createElement('span');
+    name.className = 'panel-file-name';
+    name.textContent = artifact.name;
+    name.title = artifact.name;
+    const size = document.createElement('span');
+    size.className = 'panel-file-size';
+    size.textContent = artifact.size ? formatBytes(artifact.size) : '';
+    const dl = document.createElement('button');
+    dl.type = 'button';
+    dl.className = 'msg-btn';
+    dl.textContent = 'Download';
+    dl.addEventListener('click', () => downloadArtifact(artifact, dl));
+    row.append(name, size, dl);
+    if (artifact.previewable) {
+      const pv = document.createElement('button');
+      pv.type = 'button';
+      pv.className = 'msg-btn';
+      pv.textContent = 'Preview';
+      pv.addEventListener('click', () => {
+        panelPreviewId = artifact.id;
+        panel = selectPanelSection(panel, 'preview');
+        renderPanelTabs();
+        renderPanelBody();
+      });
+      row.append(pv);
+    }
+    body.append(row);
+  }
+}
+
+function renderPanelPreview(body, artifacts) {
+  const previewable = artifacts.filter((a) => a && a.previewable);
+  if (previewable.length === 0) {
+    body.innerHTML = '<p class="empty-note">No previewable website in this run.</p>';
+    return;
+  }
+  if (!previewable.some((a) => a.id === panelPreviewId)) panelPreviewId = previewable[0].id;
+  if (previewable.length > 1) {
+    const pick = document.createElement('div');
+    pick.className = 'panel-preview-pick';
+    for (const a of previewable) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'msg-btn';
+      b.textContent = a.name;
+      b.disabled = a.id === panelPreviewId;
+      b.addEventListener('click', () => {
+        panelPreviewId = a.id;
+        renderPanelBody();
+      });
+      pick.append(b);
+    }
+    body.append(pick);
+  }
+  const current = previewable.find((a) => a.id === panelPreviewId) ?? previewable[0];
+  const frame = document.createElement('iframe');
+  frame.className = 'panel-frame';
+  frame.title = `Preview of ${current.name}`;
+  // Same sandbox story as the fullscreen preview: scripts inside may run,
+  // but the page can never reach this document or navigate it.
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.src = current.previewUrl || `/api/artifacts/${current.id}/preview/`;
+  body.append(frame);
+}
+
+function renderPanelPlan(body, plan) {
+  const steps = Array.isArray(plan) ? plan : [];
+  if (steps.length === 0) {
+    body.innerHTML = '<p class="empty-note">No plan was recorded for this run.</p>';
+    return;
+  }
+  for (const step of steps) {
+    const row = document.createElement('div');
+    row.className = 'panel-plan-row';
+    const num = document.createElement('span');
+    num.className = 'panel-plan-num';
+    num.textContent = `${step.index ?? '·'}/${step.total ?? '·'}`;
+    const label = document.createElement('span');
+    label.textContent = String(step.label ?? '');
+    row.append(num, label);
+    body.append(row);
+  }
+}
+
+function renderPanelProof(body, verification) {
+  const checks = Array.isArray(verification) ? verification : [];
+  if (checks.length === 0) {
+    body.innerHTML = '<p class="empty-note">No checks were recorded for this run.</p>';
+    return;
+  }
+  for (const check of checks) {
+    const passed = check && check.passed === true;
+    const row = document.createElement('div');
+    row.className = 'panel-proof-row';
+    const mark = document.createElement('span');
+    mark.className = 'panel-proof-mark ' + (passed ? 'pass' : 'fail');
+    mark.textContent = passed ? '✓' : '✗';
+    const name = document.createElement('span');
+    name.className = 'panel-proof-name';
+    name.textContent = String(check && check.name ? check.name : 'check');
+    const evidence = document.createElement('span');
+    evidence.className = 'panel-proof-evidence';
+    evidence.textContent = String(check && check.evidence ? check.evidence : '');
+    row.append(mark, name, evidence);
+    body.append(row);
+  }
 }
 
 function formatBytes(bytes) {
@@ -2374,6 +2636,10 @@ bindPanel(el.settingsToggle, el.settingsBody);
 bindPanel(el.schedulesToggle, el.schedulesBody);
 $('btn-close-drawer').addEventListener('click', closeDrawer);
 el.scrim.addEventListener('click', closeDrawer);
+
+/* Outputs panel: close button and backdrop tap. Esc is bound while open. */
+el.panelClose.addEventListener('click', closeOutputs);
+el.panelBackdrop.addEventListener('click', closeOutputs);
 
 function newTask() {
   closeDrawer();

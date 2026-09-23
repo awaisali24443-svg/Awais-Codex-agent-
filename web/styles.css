@@ -664,3 +664,82 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .secret-input:focus { outline: none; border-color: var(--line); }
 .setting-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .setting-note.bad { color: var(--danger); }
+
+/* ------------------------------------------------------- outputs panel --- */
+/* Claude-style slide-over: run outputs (files, preview, plan, proof) open
+   from the right edge instead of cramped inline cards. On narrow screens it
+   becomes a bottom sheet with a backdrop; the global reduced-motion rule
+   above already disables the slide for users who ask for it. */
+.panel-backdrop {
+  position: fixed; inset: 0; z-index: 65;
+  background: var(--scrim); opacity: 0; transition: opacity .22s;
+}
+.panel-backdrop.show { opacity: 1; }
+@media (min-width: 720px) {
+  .panel-backdrop { display: none; }
+}
+.panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 66;
+  width: min(430px, 94vw);
+  display: flex; flex-direction: column;
+  padding: calc(var(--space-4) + var(--safe-top)) var(--space-4) calc(var(--space-4) + var(--safe-bottom));
+  background: var(--surface); border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  transform: translateX(103%);
+  transition: transform .26s cubic-bezier(.32, .72, 0, 1);
+}
+.panel.open { transform: none; }
+.panel-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+.panel-title { flex: 1; font-family: var(--serif); font-size: 21px; }
+.panel-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.panel-tabs[hidden] { display: none; }
+.panel-tab {
+  padding: 7px 14px; font: inherit; font-size: var(--text-sm); color: var(--ink-soft);
+  background: transparent; border: 1px solid var(--line);
+  border-radius: var(--radius-pill); cursor: pointer;
+}
+.panel-tab[aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.panel-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.panel-file {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 10px 0; border-top: 1px solid var(--line-soft);
+}
+.panel-file:first-child { border-top: none; padding-top: 0; }
+.panel-file-name { flex: 1; min-width: 0; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-file-size { flex: none; font-size: 12px; color: var(--muted); }
+.panel-file .msg-btn { flex: none; }
+.panel-preview-pick { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.panel-frame {
+  flex: 1; width: 100%; min-height: 320px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fff;
+}
+.panel-plan-row {
+  display: flex; align-items: baseline; gap: var(--space-2);
+  padding: 7px 0; font-size: var(--text-sm);
+  border-bottom: 1px dashed var(--line);
+}
+.panel-plan-row:last-child { border-bottom: none; }
+.panel-plan-num { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.panel-proof-row {
+  display: flex; align-items: baseline; gap: var(--space-2);
+  padding: 7px 0; font-size: var(--text-sm);
+  border-bottom: 1px dashed var(--line);
+}
+.panel-proof-row:last-child { border-bottom: none; }
+.panel-proof-mark { flex: none; font-weight: var(--weight-semibold); }
+.panel-proof-mark.pass { color: var(--ok); }
+.panel-proof-mark.fail { color: var(--danger); }
+.panel-proof-name { flex: none; font-weight: var(--weight-medium); }
+.panel-proof-evidence { color: var(--muted); font-size: 12.5px; }
+@media (max-width: 719px) {
+  /* Narrow screens: the panel becomes a bottom sheet with a backdrop. */
+  .panel {
+    top: auto; left: 0; right: 0; bottom: 0; width: auto;
+    height: min(86vh, 640px);
+    border-left: none; border-top: 1px solid var(--line);
+    border-radius: var(--radius) var(--radius) 0 0;
+    transform: translateY(103%);
+  }
+  .panel.open { transform: none; }
+}
