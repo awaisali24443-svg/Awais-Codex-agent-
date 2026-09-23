@@ -21,7 +21,7 @@
 import type { AppConfig } from './config.js';
 import type { Db } from './db.js';
 import type { RunExecutor } from './executor.js';
-import { BudgetExceededError, consumeRunBudget, peekBudget, type BudgetBucket } from './budget.js';
+import { BudgetExceededError, consumeRunBudget, peekBudget, refundRunBudget, type BudgetBucket } from './budget.js';
 import { looksComplex } from './planning.js';
 import { RunConflictError, createRun, emitEvent, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
 
@@ -174,6 +174,17 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
         resetsAt: budgetResetsAt(),
       };
     }
+    // A run that never started must never keep holding the single-active
+    // slot: a 'queued' run stranded here refuses every future mission with
+    // "another mission is already running" until the next restart, which is
+    // exactly what a broken queue looks like from the outside. Fail it, hand
+    // back the budget it never spent, then let the original error propagate.
+    // Both cleanups are best-effort — the caller's error is what matters.
+    await setRunStatus(db, run.id, 'failed', {
+      errorType: 'accept_failed',
+      errorMessage: (err as Error).message,
+    }).catch(() => {});
+    await refundRunBudget(db, bucket).catch(() => {});
     throw err;
   }
 }

@@ -29,7 +29,7 @@ import type { Db } from './db.js';
 import type { EventBus } from './events.js';
 import type { SecretsStore } from './settings.js';
 import { EngineAbortedError, EngineError, type Engine, type EngineContext, type EngineResult, type LogLevel } from './engine/types.js';
-import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type PlanStep, type Run, type TerminalStatus } from './runs.js';
+import { emitEvent, finishRun, getRun, setRunStatus, TERMINAL_STATUSES, buildHistoryBlock, type PlanStep, type Run, type TerminalStatus } from './runs.js';
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
@@ -296,6 +296,23 @@ export class RunExecutor {
       // bug. Log it loudly but never crash the process: on Render a crash takes
       // the whole service down, and a lost mission is better than a lost server.
       console.error(`[executor] unexpected failure for ${run.id}:`, err.stack ?? err.message);
+      // Last resort: execute() rejected before its own try/catch could settle
+      // the run, so nothing else will close it — fail it here or it holds the
+      // single-active slot forever. Only a run that never reached a terminal
+      // state is touched; one execute() already settled is left exactly alone.
+      void (async () => {
+        try {
+          const current = await getRun(this.deps.db, run.id);
+          if (current && !TERMINAL_STATUSES.includes(current.status)) {
+            await setRunStatus(this.deps.db, run.id, 'failed', {
+              errorType: 'executor_crashed',
+              errorMessage: (err.message ?? 'executor failed before the run settled').slice(0, 500),
+            });
+          }
+        } catch {
+          // Best effort — the original failure is already logged loudly above.
+        }
+      })();
     });
   }
 
