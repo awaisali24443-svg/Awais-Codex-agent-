@@ -100,7 +100,14 @@ export function isSettingKey(value: unknown): value is SettingKey {
 // secrets
 // ---------------------------------------------------------------------------
 
-export const SECRET_NAMES = ['gemini_api_key', 'whatsapp_token', 'whatsapp_to', 'github_pat'] as const;
+export const SECRET_NAMES = [
+  'gemini_api_key',
+  'whatsapp_token',
+  'whatsapp_to',
+  'github_pat',
+  'linkedin_client_id',
+  'linkedin_client_secret',
+] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
 
 export interface SecretSpec {
@@ -139,6 +146,20 @@ export const KNOWN_SECRETS: Record<SecretName, SecretSpec> = {
     description: 'Connects the GitHub integration: validating the token, listing repos, and exporting generated code to a new repo. A classic or fine-grained PAT with repo scope.',
     envVar: 'GITHUB_TOKEN',
     usedBy: 'server/routes/github.ts',
+  },
+  linkedin_client_id: {
+    name: 'linkedin_client_id',
+    label: 'LinkedIn app Client ID',
+    description: 'From your LinkedIn developer app (linkedin.com/developers/apps). Needed for the Connect LinkedIn button.',
+    envVar: 'LINKEDIN_CLIENT_ID',
+    usedBy: 'server/routes/linkedin.ts',
+  },
+  linkedin_client_secret: {
+    name: 'linkedin_client_secret',
+    label: 'LinkedIn app Client Secret',
+    description: 'From the same LinkedIn developer app, Auth tab. Stored encrypted, never shown again.',
+    envVar: 'LINKEDIN_CLIENT_SECRET',
+    usedBy: 'server/routes/linkedin.ts',
   },
 };
 
@@ -342,6 +363,8 @@ export function createStores(db: Db, config: AppConfig): {
       whatsapp_token: config.whatsappToken,
       whatsapp_to: config.whatsappTo,
       github_pat: config.githubToken,
+      linkedin_client_id: config.linkedInClientId,
+      linkedin_client_secret: config.linkedInClientSecret,
     }),
   };
 }

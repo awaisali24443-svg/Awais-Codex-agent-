@@ -31,8 +31,9 @@ import { EngineAbortedError, EngineError, type Engine, type EngineContext, type 
 import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type Run, type TerminalStatus } from './runs.js';
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
-import { parseMilestone, withPlanning } from './planning.js';
+import { parseMilestone, withLinkedIn, withPlanning } from './planning.js';
 import { extractUrls, checkSources } from './sources.js';
+import { recordLinkedInDraft } from './linkedin.js';
 
 /** How often the full text so far is written to Postgres while streaming. */
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
@@ -400,7 +401,7 @@ export class RunExecutor {
         // The planning contract rides on the wire only: the stored prompt
         // stays exactly what the operator wrote, and simple questions never
         // see the preamble.
-        const mission = withPlanning(memory.prompt);
+        const mission = withLinkedIn(withPlanning(memory.prompt));
         result =
           run.deepResearch && (run.researchBudgetMinutes ?? 0) > 0
             ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking)
@@ -454,7 +455,20 @@ export class RunExecutor {
         interactionId: result.interactionId ?? null,
         environmentId: result.environmentId ?? null,
       });
-      bus.publish(run.id, { seq, type: 'run.completed', payload: { status: 'completed' } });
+      // LinkedIn drafts: the agent may end a "post this on LinkedIn" mission
+      // with a fenced draft. Best-effort, like memory extraction below — a
+      // draft that fails to file must never fail the run.
+      const linkedInDraft = await recordLinkedInDraft(this.deps.db, run.id, finalText).catch(
+        (err: Error) => {
+          console.warn(`[linkedin] draft record failed for ${run.id}:`, err.message);
+          return null;
+        },
+      );
+      bus.publish(run.id, {
+        seq,
+        type: 'run.completed',
+        payload: { status: 'completed', linkedInDraft: linkedInDraft ?? null },
+      });
       this.afterTerminal(run, 'completed');
       console.log(
         `[run] ${run.id} completed (${finalText.length} chars, ${thinking.text.length} chars thinking)`,

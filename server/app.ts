@@ -21,6 +21,7 @@ import { createMemoryRoutes } from './routes/memory.js';
 import { createArtifactRoutes } from './routes/artifacts.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createGitHubRoutes } from './routes/github.js';
+import { createLinkedInRoutes } from './routes/linkedin.js';
 import type { SecretsStore, SettingsStore } from './settings.js';
 import {
   checkAccessKey,
@@ -264,6 +265,9 @@ export function createApp(deps: AppDeps): Express {
   // requireSession like the rest of /api — v1 left these routes
   // unauthenticated, which let anyone push to the operator's GitHub.
   app.use('/api', createGitHubRoutes({ secrets: deps.secrets }));
+  // LinkedIn "post as me": OAuth connect, draft filing, one-tap publish.
+  // Mounted behind requireSession like the rest of /api.
+  app.use('/api', createLinkedInRoutes({ db, secrets: deps.secrets, config }));
   app.use(
     '/api',
     createSettingsRoutes({

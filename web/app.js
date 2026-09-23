@@ -271,11 +271,18 @@ async function openConversation(id, branchId = null) {
   renderBranchBar(branches);
 
   const qs = state.branchId ? `?branch=${encodeURIComponent(state.branchId)}` : '';
+  // Pending LinkedIn drafts filed by the agent (```linkedin-post blocks).
+  // One fetch per open, keyed by run, so history answers get a Publish button.
+  const draftByRun = new Map();
+  try {
+    const { drafts } = await api(`/api/linkedin/drafts?conversationId=${encodeURIComponent(id)}`);
+    for (const d of drafts ?? []) draftByRun.set(d.runId, d.id);
+  } catch { /* LinkedIn not connected or not configured — no buttons */ }
   try {
     const { messages } = await api(`/api/conversations/${id}/messages${qs}`);
     for (const message of messages) {
       const node = message.role === 'user' ? renderAsk(message.content) : renderAnswer(message.content);
-      attachMessageActions(node, message);
+      attachMessageActions(node, message, draftByRun.get(message.runId));
     }
   } catch { /* silent */ }
 
@@ -642,6 +649,8 @@ function handleEvent(card, event, data) {
 
     case 'run.completed':
       finishCard(card, 'done');
+      // The agent filed a LinkedIn draft: one tap publishes, nothing auto-posts.
+      if (data.linkedInDraft) card.answer.append(linkedInPublishButton(data.linkedInDraft));
       break;
 
     case 'run.failed':
@@ -732,7 +741,7 @@ function editPrompt(card) {
    branch) and the edited text re-sends as the first message of the new
    branch. Retry stays in the run's own branch — the server returns it so the
    view never drifts. */
-function attachMessageActions(node, message) {
+function attachMessageActions(node, message, linkedInDraftId = null) {
   const row = document.createElement('div');
   row.className = 'msg-actions';
   if (message.role === 'user') {
@@ -767,12 +776,39 @@ function attachMessageActions(node, message) {
     });
     row.append(retryBtn);
   }
+  // A ```linkedin-post block the agent filed as a pending draft. Publishing
+  // is always the operator's tap — never automatic.
+  if (linkedInDraftId && message.role === 'assistant') row.append(linkedInPublishButton(linkedInDraftId));
   if (!row.children.length) return;
   node.append(row);
 }
 
 /* Swap a user message for an editor in place. Saving forks the conversation
    at that message and re-sends the edited text into the new branch. */
+
+/** One-tap publish for a pending LinkedIn draft. Disabled while posting. */
+function linkedInPublishButton(draftId) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'msg-btn';
+  const label = 'in Publish to LinkedIn';
+  btn.textContent = label;
+  btn.title = 'Publish this draft to your LinkedIn profile';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Publishing…';
+    try {
+      await api(`/api/linkedin/drafts/${encodeURIComponent(draftId)}/publish`, { method: 'POST' });
+      btn.textContent = '✓ Published';
+      toast('Published on LinkedIn.');
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = label;
+      toast(err.body?.message || err.message || 'Publish failed.');
+    }
+  });
+  return btn;
+}
 function openInlineEditor(node, message) {
   if (node.querySelector('.inline-editor')) return;
   const original = message.content;
@@ -1343,7 +1379,76 @@ async function loadSettings() {
   try {
     state.settings = await api('/api/settings');
     renderSettings();
+    renderLinkedInCard();
   } catch { /* the app works without the panel */ }
+}
+
+/* The LinkedIn connection card in Settings. Plain language, because the
+   OAuth dance has one hard step the operator must do by hand: create the
+   LinkedIn developer app and paste the two keys below (they appear as
+   regular secret rows). The redirect URL printed here must be registered
+   in the app byte-for-byte. */
+async function renderLinkedInCard() {
+  const host = document.getElementById('linkedin-card');
+  if (host) host.remove();
+  let status;
+  try {
+    status = await api('/api/linkedin/status');
+  } catch { return; }
+  const card = document.createElement('div');
+  card.className = 'secret';
+  card.id = 'linkedin-card';
+
+  let stateText = 'not connected';
+  let stateClass = 'bad';
+  if (!status.clientConfigured) {
+    stateText = 'add your app keys below first';
+  } else if (status.connected && !status.expired) {
+    stateText = `connected as ${status.memberName || 'you'}`;
+    stateClass = 'ok';
+  } else if (status.expired) {
+    stateText = 'connection expired — reconnect';
+  }
+
+  const expiryNote = status.connected && status.expiresAt
+    ? `<p class="setting-note">Token expires ${new Date(status.expiresAt).toLocaleDateString()} — LinkedIn tokens last about 60 days and cannot auto-refresh, so you will tap Connect again then.</p>`
+    : '';
+  const appNote = status.clientConfigured
+    ? ''
+    : `<p class="setting-note">One-time setup (about 15 minutes, only you can do it): create a free app at <b>linkedin.com/developers/apps</b>, enable <b>Share on LinkedIn</b> and <b>Sign In with LinkedIn using OpenID Connect</b>, register this redirect URL exactly:<br><code>${escapeHtml(status.callbackUrl || '')}</code><br>then paste the Client ID and Client Secret into the two secret rows below.</p>`;
+
+  card.innerHTML = `
+    <div class="secret-main">
+      <span class="secret-name">LinkedIn</span>
+      <span class="secret-state ${stateClass}">${escapeHtml(stateText)}</span>
+    </div>
+    <div class="secret-actions">
+      ${status.clientConfigured && !(status.connected && !status.expired)
+        ? '<button class="primary" data-li="connect">Connect LinkedIn</button>' : ''}
+      ${status.connected ? '<button data-li="refresh">Refresh</button><button class="danger" data-li="disconnect">Disconnect</button>' : ''}
+    </div>
+    ${expiryNote}${appNote}`;
+  el.settingsBody.append(card);
+
+  card.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-li]');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      if (btn.dataset.li === 'connect') {
+        const { url } = await api('/api/linkedin/authorize');
+        window.open(url, '_blank', 'noopener');
+        toast('Finish the LinkedIn login in the new tab, then tap Refresh.');
+      } else if (btn.dataset.li === 'disconnect') {
+        await api('/api/linkedin/disconnect', { method: 'POST' });
+        toast('LinkedIn disconnected.');
+      }
+      await renderLinkedInCard();
+    } catch (err) {
+      toast(err.body?.message || err.message || 'LinkedIn action failed.');
+      btn.disabled = false;
+    }
+  });
 }
 
 function renderSettings() {

@@ -132,3 +132,22 @@ with a 409. So:
 | Every mission fails `auth_failed` | The Gemini key is wrong or restricted — `npm run verify -- --key-only` |
 | Missions fail `agent_unavailable` | The agent id was retired; update `ANTIGRAVITY_AGENT` (date-stamped) and redeploy |
 | WhatsApp never answers | Settings → WhatsApp not connected → the reason is on the panel; `conflict` means another host is polling |
+
+## LinkedIn "post as me" — one-time setup (only Awais can do this)
+
+LinkedIn's API lets an app post/comment/like **as you**, but no app — ours or anyone's —
+can edit your profile itself (headline, experience, about). Those endpoints don't exist.
+
+**15-minute setup, in this order:**
+
+1. Go to **linkedin.com/developers/apps** → Create app. (LinkedIn requires a company page to verify against — any page works, it takes a minute.)
+2. In the app's **Products** tab, add **Share on LinkedIn** and **Sign In with LinkedIn using OpenID Connect**.
+3. In the **Auth** tab, add this redirect URL **exactly** (no trailing slash):
+   `https://awais-codex-agent-arena.onrender.com/api/linkedin/callback`
+4. Copy the **Client ID** and **Client Secret** (Auth tab).
+5. In the arena web app, open **Settings** → paste them into the two LinkedIn secret rows.
+6. Tap **Connect LinkedIn** on the LinkedIn card, log in in the new tab, then tap **Refresh**.
+
+**Notes:** LinkedIn tokens last about 60 days and cannot auto-refresh — the Settings card
+warns you before expiry and you tap Connect again. The agent never publishes on its own:
+it drafts the post, you tap **Publish to LinkedIn** under the answer.

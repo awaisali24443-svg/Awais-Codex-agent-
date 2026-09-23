@@ -67,6 +67,29 @@ export function withPlanning(prompt: string): string {
   return looksComplex(prompt) ? CONTRACT + prompt : prompt;
 }
 
+/**
+ * Wire-only LinkedIn publishing convention, added only when the operator's
+ * own message is about LinkedIn. The agent is remote — it cannot call our
+ * server — so "publish this" ends as a fenced draft the server files as
+ * pending, and the operator taps Publish. Never claims it posted: publishing
+ * always needs the operator's tap.
+ */
+const LINKEDIN_RE = /linked\s?in/i;
+const LINKEDIN_CONTRACT = `[If the operator wants this published on LinkedIn: write the post as plain
+text — no markdown, no asterisks — then put the exact final text in a fenced
+block at the very end of your answer:
+\`\`\`linkedin-post
+<the post text>
+\`\`\`
+That block becomes a one-tap Publish draft. Never say you published it —
+publishing needs the operator's tap.]
+
+`;
+
+export function withLinkedIn(prompt: string): string {
+  return LINKEDIN_RE.test(prompt) ? LINKEDIN_CONTRACT + prompt : prompt;
+}
+
 const MILESTONE_RE = /^step\s+(\d{1,2})\s*(?:\/|of)\s*(\d{1,2})\s*(done)?\s*[:\-–—]?\s*(.*)$/i;
 
 /**
