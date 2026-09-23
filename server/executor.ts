@@ -33,6 +33,7 @@ import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type PlanStep, t
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
+import { withDesignGuide } from './design.js';
 import { extractUrls, checkSources } from './sources.js';
 import { recordLinkedInDraft } from './linkedin.js';
 import {
@@ -544,7 +545,7 @@ export class RunExecutor {
         const mission =
           resumePreamble +
           planPreamble +
-          withGoogle(withLinkedIn(withPlanning(memory.prompt)), googleConnected);
+          withGoogle(withDesignGuide(withLinkedIn(withPlanning(memory.prompt))), googleConnected);
         result =
           run.deepResearch && (run.researchBudgetMinutes ?? 0) > 0
             ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking)
