@@ -193,6 +193,43 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 
+/* branch switcher: one pill per branch, visible only once a fork exists */
+.branch-bar {
+  display: flex; gap: 8px; padding: 8px 16px;
+  overflow-x: auto; border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+.branch-bar[hidden] { display: none; }
+.branch-pill {
+  flex: none; padding: 5px 13px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent;
+  font-size: 12.5px; color: var(--ink-soft); cursor: pointer;
+}
+.branch-pill.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+/* per-message actions, Manus-style: small buttons on the message itself */
+.msg-actions { display: flex; gap: 6px; margin-top: 8px; }
+.ask .msg-actions { justify-content: flex-end; }
+.answer .msg-actions { justify-content: flex-start; }
+.msg-btn {
+  padding: 4px 11px; border-radius: 999px; font-size: 12px; line-height: 1.4;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft);
+  cursor: pointer;
+}
+.msg-btn:hover { color: var(--ink); border-color: var(--ink-soft); }
+.msg-btn:disabled { opacity: .5; cursor: default; }
+.msg-btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.ask .msg-btn { background: transparent; border-color: rgba(255,255,255,.4); color: inherit; }
+.ask .msg-btn:hover { border-color: currentColor; color: inherit; }
+
+/* inline editor shown in place of the message being edited */
+.inline-editor textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  font: inherit; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--ink-soft); background: var(--paper); color: var(--ink);
+}
+.inline-editor-btns { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
+.ask.editing { min-width: 60%; }
 /* the run card: thinking, steps, answer */
 .run { display: flex; flex-direction: column; gap: 12px; }
 

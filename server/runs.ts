@@ -16,6 +16,7 @@
 import crypto from 'crypto';
 
 import { appendEvent, type Db } from './db.js';
+import { CHAIN_VISIBLE, chainCte, ensureMainBranch } from './branches.js';
 
 export type RunKind = 'chat' | 'whatsapp' | 'api';
 export type RunStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
@@ -172,6 +173,9 @@ export async function createConversation(
     'INSERT INTO conversations (id, title, source) VALUES ($1, $2, $3)',
     [id, title, source === 'whatsapp' ? 'whatsapp' : source === 'api' ? 'api' : 'web'],
   );
+  // Every conversation starts with one 'main' branch; messages land there
+  // unless a fork says otherwise.
+  await ensureMainBranch(db, id);
   return id;
 }
 
@@ -213,6 +217,8 @@ export interface CreateRunInput {
   kind?: RunKind;
   engine: string;
   conversationId?: string | null;
+  /** The branch the run's messages belong to. Defaults to the main branch. */
+  branchId?: string | null;
   /** Skip automatic continuation and start a fresh sandbox. */
   fresh?: boolean;
   /** Opt-in: one WhatsApp "done" ping when a web-started run finishes. */
@@ -240,6 +246,19 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
     conversationId = await createConversation(db, prompt, kind);
   }
 
+  // Branches are per-conversation. A missing branch id means "main"; a wrong
+  // one is a client bug, failed loudly rather than filed silently elsewhere.
+  let branchId = input.branchId ?? null;
+  if (branchId) {
+    const ok = await db.query<{ id: string }>(
+      `SELECT id FROM branches WHERE id = $1 AND conversation_id = $2`,
+      [branchId, conversationId],
+    );
+    if (!ok[0]) throw new Error('createRun: branch does not belong to this conversation');
+  } else {
+    branchId = await ensureMainBranch(db, conversationId);
+  }
+
   const continuation = input.fresh ? null : await resolveContinuation(db, conversationId);
 
   const id = newId('run');
@@ -264,9 +283,9 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
         ],
       );
       await tx.query(
-        `INSERT INTO messages (id, conversation_id, run_id, role, content)
-         VALUES ($1, $2, $3, 'user', $4)`,
-        [newId('msg'), conversationId, id, prompt],
+        `INSERT INTO messages (id, conversation_id, run_id, branch_id, role, content)
+         VALUES ($1, $2, $3, $4, 'user', $5)`,
+        [newId('msg'), conversationId, id, branchId, prompt],
       );
     });
   } catch (err) {
@@ -408,8 +427,13 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
       // away partial output would violate "nothing is lost to a dropped
       // connection".
       await tx.query(
-        `INSERT INTO messages (id, conversation_id, run_id, role, content)
-         SELECT $1, conversation_id, id, 'assistant', $2 FROM runs WHERE id = $3`,
+        `INSERT INTO messages (id, conversation_id, run_id, branch_id, role, content)
+         SELECT $1, r.conversation_id, r.id,
+                (SELECT branch_id FROM messages
+                  WHERE run_id = $3 AND role = 'user'
+                  ORDER BY created_at ASC, id ASC LIMIT 1),
+                'assistant', $2
+           FROM runs r WHERE r.id = $3`,
         [newId('msg'), text, runId],
       );
     }
@@ -495,7 +519,26 @@ export async function listMessages(
   db: Db,
   conversationId: string,
   limit = 200,
+  branchId?: string | null,
 ): Promise<Array<{ id: string; role: string; content: string; runId: string | null; runStatus: string | null; createdAt: string }>> {
+  const capped = Math.min(Math.max(limit, 1), 500);
+  // A branch view is computed, never copied: the branch's own messages plus
+  // each ancestor's messages up to its fork point, in conversation order.
+  const branchFilter = branchId
+    ? `WITH RECURSIVE ${chainCte('$3')}
+       SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, m.created_at
+         FROM messages m
+         JOIN chain c ON m.branch_id = c.id
+         LEFT JOIN runs r ON r.id = m.run_id
+        WHERE m.conversation_id = $1
+          AND ${CHAIN_VISIBLE}
+        ORDER BY m.created_at ASC, m.id ASC
+        LIMIT $2`
+    : `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, m.created_at
+         FROM messages m LEFT JOIN runs r ON r.id = m.run_id
+        WHERE m.conversation_id = $1
+        ORDER BY m.created_at ASC, m.id ASC
+        LIMIT $2`;
   const rows = await db.query<{
     id: string;
     role: string;
@@ -503,14 +546,7 @@ export async function listMessages(
     run_id: string | null;
     run_status: string | null;
     created_at: Date | string;
-  }>(
-    `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, m.created_at
-       FROM messages m LEFT JOIN runs r ON r.id = m.run_id
-      WHERE m.conversation_id = $1
-      ORDER BY m.created_at ASC, m.id ASC
-      LIMIT $2`,
-    [conversationId, Math.min(Math.max(limit, 1), 500)],
-  );
+  }>(branchFilter, branchId ? [conversationId, capped, branchId] : [conversationId, capped]);
   return rows.map((r) => ({
     id: r.id,
     role: r.role,

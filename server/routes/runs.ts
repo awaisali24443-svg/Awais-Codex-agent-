@@ -52,6 +52,7 @@ import {
   type RunKind,
   type RunStatus,
 } from '../runs.js';
+import { forkBranch, listBranches } from '../branches.js';
 
 export interface RunRouteDeps {
   db: Db;
@@ -124,7 +125,7 @@ function isTerminal(status: RunStatus): boolean {
 }
 
 /** One response shape for every route that starts a run. */
-function sendAccepted(res: Response, result: AcceptResult, config: AppConfig): void {
+function sendAccepted(res: Response, result: AcceptResult, config: AppConfig, branchId?: string | null): void {
   if (!result.ok && result.reason === 'in_progress') {
     res.status(409).json({
       error: 'run_in_progress',
@@ -147,6 +148,7 @@ function sendAccepted(res: Response, result: AcceptResult, config: AppConfig): v
 
   res.status(201).json({
     run: result.run,
+    branchId: branchId ?? null,
     budget: { bucket: result.bucket, remaining: result.remaining, limit: config.dailyRunBudget },
   });
 }
@@ -162,6 +164,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       prompt?: unknown;
       kind?: unknown;
       conversationId?: unknown;
+      branchId?: unknown;
       notifyWhatsapp?: unknown;
       deepResearch?: unknown;
       researchBudgetMinutes?: unknown;
@@ -198,6 +201,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         prompt,
         kind,
         conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+        branchId: typeof body.branchId === 'string' && body.branchId ? body.branchId : null,
         // Opt-in WhatsApp "done" ping for this run. Strictly boolean: anything
         // else is not an opt-in.
         notifyWhatsapp: body.notifyWhatsapp === true,
@@ -303,19 +307,29 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       return;
     }
 
+    // A retry stays in the run's own branch: retrying from a branch view must
+    // not file the new attempt under main.
+    const branchRows = await db.query<{ branch_id: string }>(
+      `SELECT branch_id FROM messages
+        WHERE run_id = $1 AND role = 'user'
+        ORDER BY created_at ASC, id ASC LIMIT 1`,
+      [run.id],
+    );
+
     const result = await acceptRun(
       { db, executor, config },
       {
         prompt: run.prompt,
         kind: run.kind,
         conversationId: run.conversationId,
+        branchId: branchRows[0]?.branch_id ?? null,
         // A retried deep-research run is the same mission, so it keeps the
         // same mode and budget rather than silently becoming a one-shot.
         deepResearch: run.deepResearch,
         researchBudgetMinutes: run.researchBudgetMinutes,
       },
     );
-    sendAccepted(res, result, config);
+    sendAccepted(res, result, config, branchRows[0]?.branch_id ?? null);
   });
 
   // ---- the live stream ----------------------------------------------------
@@ -425,7 +439,35 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
   });
 
   router.get('/conversations/:id/messages', async (req: Request, res: Response) => {
-    res.json({ messages: await listMessages(db, req.params.id) });
+    const branch = typeof req.query.branch === 'string' && req.query.branch ? req.query.branch : null;
+    res.json({ messages: await listMessages(db, req.params.id, 200, branch) });
+  });
+
+  router.get('/conversations/:id/branches', async (req: Request, res: Response) => {
+    res.json({ branches: await listBranches(db, req.params.id) });
+  });
+
+  /**
+   * Fork the conversation at a message (Manus-style branch-on-edit).
+   *
+   * The new branch starts after the message *before* the given one in its
+   * visible chain, so the edited replacement — inserted next, by the run that
+   * follows — takes the original's place in the new branch's view. The
+   * original message stays in the parent branch, unedited.
+   */
+  router.post('/conversations/:id/branches', async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { messageId?: unknown };
+    const messageId = typeof body.messageId === 'string' ? body.messageId : '';
+    if (!messageId) {
+      res.status(400).json({ error: 'message_required', message: 'messageId must be a non-empty string' });
+      return;
+    }
+    try {
+      const branch = await forkBranch(db, req.params.id, messageId);
+      res.status(201).json({ branch });
+    } catch (err) {
+      res.status(404).json({ error: 'message_not_found', message: (err as Error).message });
+    }
   });
 
   return router;

@@ -58,6 +58,7 @@ describe('migrations', () => {
   test('create every table the plan specifies', async () => {
     const expected = [
       'artifacts',
+      'branches',
       'budgets',
       'conversations',
       'memories',

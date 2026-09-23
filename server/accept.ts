@@ -40,6 +40,8 @@ export interface AcceptInput {
   prompt: string;
   kind: RunKind;
   conversationId?: string | null;
+  /** The branch the run's messages belong to. Defaults to the main branch. */
+  branchId?: string | null;
   /** Start a fresh sandbox instead of continuing the conversation's last one. */
   fresh?: boolean;
   /** Opt-in: one WhatsApp "done" ping when a web-started run finishes. */
@@ -98,6 +100,7 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       kind: input.kind,
       engine: config.engineName,
       conversationId: input.conversationId ?? null,
+      branchId: input.branchId ?? null,
       fresh: input.fresh ?? false,
       notifyWhatsapp: input.notifyWhatsapp ?? false,
       deepResearch: input.deepResearch === true,

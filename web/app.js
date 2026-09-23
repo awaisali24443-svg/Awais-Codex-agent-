@@ -31,6 +31,7 @@ const el = {
 
   stream: $('stream'),
   thread: $('thread'),
+  branchBar: $('branch-bar'),
   hero: $('hero'),
   chips: $('chips'),
   composer: $('composer'),
@@ -68,6 +69,7 @@ const el = {
 
 const state = {
   conversationId: null,
+  branchId: null,
   runId: null,
   source: null,
   running: false,
@@ -249,8 +251,9 @@ function renderConversations() {
   }
 }
 
-async function openConversation(id) {
+async function openConversation(id, branchId = null) {
   state.conversationId = id;
+  state.branchId = branchId;
   // A run in flight owns the title ("Working…"); opening the conversation
   // must not clobber it back, or the header says idle while the stop button
   // says busy.
@@ -260,25 +263,50 @@ async function openConversation(id) {
   showHero(false);
   renderThread([]);
 
+  // Resolve the branch before fetching: without it, opening a conversation
+  // that has forks would render every branch's messages interleaved.
+  const branches = await fetchBranches(id);
+  const main = branches.find((b) => b.label === 'main') ?? branches[0];
+  if (!state.branchId || !branches.some((b) => b.id === state.branchId)) state.branchId = main?.id ?? null;
+  renderBranchBar(branches);
+
+  const qs = state.branchId ? `?branch=${encodeURIComponent(state.branchId)}` : '';
   try {
-    const { messages } = await api(`/api/conversations/${id}/messages`);
-    let lastPrompt = null;
+    const { messages } = await api(`/api/conversations/${id}/messages${qs}`);
     for (const message of messages) {
-      if (message.role === 'user') {
-        lastPrompt = message.content;
-        renderAsk(message.content);
-      } else if (message.role === 'assistant') {
-        renderAnswer(message.content);
-        // History used to be read-only: a finished run viewed later had no
-        // retry/edit. Attach the same actions the live card gets, driven by
-        // the run's status — the server stays the source of truth.
-        if (message.runId) renderHistoryActions(message.runId, message.runStatus, lastPrompt);
-      }
+      const node = message.role === 'user' ? renderAsk(message.content) : renderAnswer(message.content);
+      attachMessageActions(node, message);
     }
   } catch { /* silent */ }
 
   renderConversations();
   scrollToEnd(true);
+}
+
+async function fetchBranches(id) {
+  try {
+    const { branches } = await api(`/api/conversations/${id}/branches`);
+    return Array.isArray(branches) ? branches : [];
+  } catch { return []; }
+}
+
+/* The branch switcher: one pill per branch, shown only once a fork exists.
+   Switching re-opens the conversation at that branch — the thread re-renders
+   from that branch's view, nothing is copied or lost. */
+function renderBranchBar(branches) {
+  el.branchBar.innerHTML = '';
+  for (const branch of branches) {
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'branch-pill' + (branch.id === state.branchId ? ' on' : '');
+    pill.textContent = branch.label;
+    pill.title = branch.parentBranchId ? `${branch.label} — forked from an earlier message` : 'The original thread';
+    pill.addEventListener('click', () => {
+      if (branch.id !== state.branchId && !state.running) openConversation(state.conversationId, branch.id);
+    });
+    el.branchBar.append(pill);
+  }
+  el.branchBar.hidden = branches.length < 2;
 }
 
 /* --------------------------------------------------------------- drawing -- */
@@ -669,7 +697,8 @@ async function retryRun(card, opts) {
   const { button, notice } = opts;
   button.disabled = true;
   try {
-    const { run } = await api(`/api/runs/${card.runId}/retry`, { method: 'POST' });
+    const { run, branchId } = await api(`/api/runs/${card.runId}/retry`, { method: 'POST' });
+    if (branchId) state.branchId = branchId;
     state.conversationId = run.conversationId;
     if (notice) notice.remove();
     setRunning(true);
@@ -697,23 +726,34 @@ function editPrompt(card) {
   el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
 }
 
-/* Retry / edit on a run viewed from history. The live card already gets these
-   the moment a run finishes; without them a refreshed or reopened conversation
-   is read-only. Retry posts to the same endpoint (completed/failed only —
-   cancelled runs offer edit instead), edit loads the original prompt back into
-   the composer so it can be tweaked and re-sent. */
-function renderHistoryActions(runId, runStatus, prompt) {
+/* Manus-style per-message actions on history. Every user message gets an
+   inline edit pencil; every finished answer gets a retry button. Edit forks
+   the conversation at that message (the original stays untouched in its
+   branch) and the edited text re-sends as the first message of the new
+   branch. Retry stays in the run's own branch — the server returns it so the
+   view never drifts. */
+function attachMessageActions(node, message) {
   const row = document.createElement('div');
-  row.className = 'run-btns history-actions';
-  if (runStatus === 'completed' || runStatus === 'failed') {
+  row.className = 'msg-actions';
+  if (message.role === 'user') {
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'msg-btn';
+    editBtn.textContent = '✎ Edit';
+    editBtn.title = 'Edit this message — forks the conversation';
+    editBtn.addEventListener('click', () => openInlineEditor(node, message));
+    row.append(editBtn);
+  } else if (message.runId && (message.runStatus === 'completed' || message.runStatus === 'failed')) {
     const retryBtn = document.createElement('button');
     retryBtn.type = 'button';
-    retryBtn.className = 'retry-btn';
-    retryBtn.textContent = 'Retry this task';
+    retryBtn.className = 'msg-btn';
+    retryBtn.textContent = '↻ Retry';
+    retryBtn.title = 'Run this task again';
     retryBtn.addEventListener('click', async () => {
       retryBtn.disabled = true;
       try {
-        const { run } = await api(`/api/runs/${runId}/retry`, { method: 'POST' });
+        const { run, branchId } = await api(`/api/runs/${message.runId}/retry`, { method: 'POST' });
+        if (branchId) state.branchId = branchId;
         state.conversationId = run.conversationId;
         row.remove();
         setRunning(true);
@@ -727,23 +767,64 @@ function renderHistoryActions(runId, runStatus, prompt) {
     });
     row.append(retryBtn);
   }
-  if (prompt) {
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'retry-btn';
-    editBtn.textContent = 'Edit prompt';
-    editBtn.addEventListener('click', () => {
-      el.prompt.value = prompt;
-      autoGrow();
-      el.send.disabled = false;
-      el.prompt.focus();
-      el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
-    });
-    row.append(editBtn);
-  }
   if (!row.children.length) return;
-  el.thread.append(row);
-  scrollToEnd();
+  node.append(row);
+}
+
+/* Swap a user message for an editor in place. Saving forks the conversation
+   at that message and re-sends the edited text into the new branch. */
+function openInlineEditor(node, message) {
+  if (node.querySelector('.inline-editor')) return;
+  const original = message.content;
+  node.textContent = '';
+  node.classList.add('editing');
+
+  const editor = document.createElement('div');
+  editor.className = 'inline-editor';
+  const ta = document.createElement('textarea');
+  ta.rows = 3;
+  ta.value = original;
+  const btns = document.createElement('div');
+  btns.className = 'inline-editor-btns';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'msg-btn primary';
+  save.textContent = 'Save & resend';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'msg-btn';
+  cancel.textContent = 'Cancel';
+  btns.append(save, cancel);
+  editor.append(ta, btns);
+  node.append(editor);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+
+  const close = () => {
+    node.classList.remove('editing');
+    node.textContent = original;
+  };
+  cancel.addEventListener('click', close);
+  save.addEventListener('click', async () => {
+    const text = ta.value.trim();
+    if (!text || text === original) { close(); return; }
+    save.disabled = true;
+    cancel.disabled = true;
+    try {
+      // Fork first, then show the new branch: the original message must not
+      // be in the view the edited text lands in.
+      const { branch } = await api(`/api/conversations/${state.conversationId}/branches`, {
+        method: 'POST',
+        body: JSON.stringify({ messageId: message.id }),
+      });
+      state.branchId = branch.id;
+      await openConversation(state.conversationId, branch.id);
+      await submitPrompt(text);
+    } catch (err) {
+      close();
+      toast(err.body?.message || err.message || 'Could not fork the conversation.');
+    }
+  });
 }
 
 /* The button group appended to a finished run's notice. */
@@ -1081,15 +1162,22 @@ el.composer.addEventListener('submit', async (event) => {
   const deepResearch = el.researchCheck.checked;
   const budgetMinutes = researchBudgetMinutes();
 
-  el.prompt.value = '';
-  autoGrow();
-  el.send.disabled = true;
   // The ping and the research mode are per task, not sticky preferences:
   // reset them with the composer.
   el.pingCheck.checked = false;
   el.researchCheck.checked = false;
   refreshResearchPicker();
   el.note.textContent = '';
+  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes });
+});
+
+/* Start one run: the single path for the composer and for branch forks.
+   The run is filed under the current branch, so a forked "what if" stays in
+   its own branch instead of leaking back into the original thread. */
+async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15 } = {}) {
+  el.prompt.value = '';
+  autoGrow();
+  el.send.disabled = true;
   showHero(false);
   renderAsk(prompt);
   scrollToEnd(true);
@@ -1100,6 +1188,7 @@ el.composer.addEventListener('submit', async (event) => {
       body: JSON.stringify({
         prompt,
         conversationId: state.conversationId,
+        branchId: state.branchId,
         notifyWhatsapp,
         ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: budgetMinutes } : {}),
       }),
@@ -1115,7 +1204,6 @@ el.composer.addEventListener('submit', async (event) => {
     // attach to it instead of showing an error.
     if (err.status === 409 && err.body?.activeRunId) {
       renderNotice('Another task is still running — showing it instead.', false, 'info');
-      state.conversationId = state.conversationId;
       setRunning(true);
       attach(err.body.activeRunId, 0);
       return;
@@ -1126,7 +1214,7 @@ el.composer.addEventListener('submit', async (event) => {
     }
     renderNotice(err.message || 'Could not start the task.', true, 'warn');
   }
-});
+}
 
 el.pingCheck.addEventListener('change', () => {
   if (el.pingCheck.checked) {
@@ -1625,9 +1713,11 @@ function newTask() {
   closeDrawer();
   closeStream();
   state.conversationId = null;
+  state.branchId = null;
   state.runId = null;
   setRunning(false);
   renderThread([]);
+  el.branchBar.hidden = true;
   showHero(true);
   el.topbarTitle.textContent = 'Codex';
   el.prompt.focus();
