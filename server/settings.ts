@@ -34,10 +34,10 @@ import {
 // settings
 // ---------------------------------------------------------------------------
 
-export const SETTING_KEYS = ['dailyRunBudget', 'antigravityAgent'] as const;
+export const SETTING_KEYS = ['dailyRunBudget', 'antigravityAgent', 'morningDigest'] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
-export type ValidationResult = { ok: true; value: number | string } | { ok: false; message: string };
+export type ValidationResult = { ok: true; value: number | string | boolean } | { ok: false; message: string };
 
 export interface SettingSpec {
   key: SettingKey;
@@ -48,7 +48,7 @@ export interface SettingSpec {
   /** Where the current value came from. */
   validate(raw: unknown): ValidationResult;
   /** Write the value into the live config the rest of the server reads. */
-  apply(config: AppConfig, value: number | string): void;
+  apply(config: AppConfig, value: number | string | boolean): void;
 }
 
 const intInRange = (raw: unknown, min: number, max: number): ValidationResult => {
@@ -57,6 +57,14 @@ const intInRange = (raw: unknown, min: number, max: number): ValidationResult =>
   const value = Math.trunc(n);
   if (value < min || value > max) return { ok: false, message: `must be between ${min} and ${max}` };
   return { ok: true, value };
+};
+
+const parseOnOff = (raw: unknown): ValidationResult => {
+  if (typeof raw === 'boolean') return { ok: true, value: raw };
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(s)) return { ok: true, value: true };
+  if (['0', 'false', 'no', 'off'].includes(s)) return { ok: true, value: false };
+  return { ok: false, message: 'must be on or off' };
 };
 
 export const SETTINGS: Record<SettingKey, SettingSpec> = {
@@ -88,6 +96,19 @@ export const SETTINGS: Record<SettingKey, SettingSpec> = {
     },
     apply: (config, value) => {
       config.antigravityAgent = String(value);
+    },
+  },
+  morningDigest: {
+    key: 'morningDigest',
+    label: 'Morning WhatsApp digest',
+    description:
+      'One WhatsApp summary every morning at 07:30 Asia/Karachi: what ran overnight, ' +
+      'what failed, and what is waiting on you. Sends nothing until the WhatsApp ' +
+      'token is connected, and never costs a run of the daily budget.',
+    envVar: 'MORNING_DIGEST',
+    validate: parseOnOff,
+    apply: (config, value) => {
+      config.morningDigestEnabled = value === true;
     },
   },
 };
@@ -398,15 +419,20 @@ interface SettingRow {
 
 export class SettingsStore {
   /** What the environment asked for, so clearing a setting restores it. */
-  private readonly defaults = new Map<SettingKey, number | string>();
-  private readonly stored = new Map<SettingKey, number | string>();
+  private readonly defaults = new Map<SettingKey, number | string | boolean>();
+  private readonly stored = new Map<SettingKey, number | string | boolean>();
 
   constructor(
     private readonly db: Db,
     private readonly config: AppConfig,
   ) {
+    const envDefaults: Record<SettingKey, number | string | boolean> = {
+      dailyRunBudget: config.dailyRunBudget,
+      antigravityAgent: config.antigravityAgent,
+      morningDigest: config.morningDigestEnabled,
+    };
     for (const key of SETTING_KEYS) {
-      this.defaults.set(key, key === 'dailyRunBudget' ? config.dailyRunBudget : config.antigravityAgent);
+      this.defaults.set(key, envDefaults[key]);
     }
   }
 
@@ -437,15 +463,15 @@ export class SettingsStore {
     return { applied: this.stored.size, rejected };
   }
 
-  get(key: SettingKey): number | string {
-    return this.stored.get(key) ?? (this.defaults.get(key) as number | string);
+  get(key: SettingKey): number | string | boolean {
+    return this.stored.get(key) ?? (this.defaults.get(key) as number | string | boolean);
   }
 
   source(key: SettingKey): 'stored' | 'environment' {
     return this.stored.has(key) ? 'stored' : 'environment';
   }
 
-  async set(key: SettingKey, raw: unknown): Promise<number | string> {
+  async set(key: SettingKey, raw: unknown): Promise<number | string | boolean> {
     const spec = SETTINGS[key];
     const parsed = spec.validate(raw);
     if (!parsed.ok) throw new SettingValueError(parsed.message);
@@ -463,11 +489,11 @@ export class SettingsStore {
   }
 
   /** Forget the override; the environment default applies again immediately. */
-  async clear(key: SettingKey): Promise<number | string> {
+  async clear(key: SettingKey): Promise<number | string | boolean> {
     await this.db.query('DELETE FROM settings WHERE key = $1', [key]);
     this.stored.delete(key);
 
-    const fallback = this.defaults.get(key) as number | string;
+    const fallback = this.defaults.get(key) as number | string | boolean;
     SETTINGS[key].apply(this.config, fallback);
     return fallback;
   }
@@ -477,8 +503,8 @@ export class SettingsStore {
     label: string;
     description: string;
     envVar: string;
-    value: number | string;
-    defaultValue: number | string;
+    value: number | string | boolean;
+    defaultValue: number | string | boolean;
     source: 'stored' | 'environment';
   }> {
     return SETTING_KEYS.map((key) => ({

@@ -56,7 +56,7 @@ const SUMMARY_CHARS = 1200;
  * also be a `user:<id>`; anything else is ignored with a warning and the
  * learned id is used instead.
  */
-async function resolveRecipient(
+export async function resolveRecipient(
   deps: DonePingDeps,
   log: (message: string, level?: 'info' | 'warn' | 'error') => void,
 ): Promise<string | null> {

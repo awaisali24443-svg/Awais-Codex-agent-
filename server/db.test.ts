@@ -68,6 +68,7 @@ describe('migrations', () => {
       'memory_profile',
       'messages',
       'mission_steps',
+      'morning_digest_log',
       'reminders',
       'run_events',
       'runs',

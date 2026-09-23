@@ -2328,16 +2328,25 @@ function renderSettings() {
   const saved = data.settings.filter((s) => s.source === 'stored').length;
   el.settingsTitle.textContent = saved ? `Settings (${saved})` : 'Settings';
 
-  const rows = data.settings.map((setting) => `
+  const rows = data.settings.map((setting) => {
+    // Boolean settings render as an on/off toggle; everything else keeps the
+    // existing text/number input, and the change listener below already picks
+    // up checkboxes because they carry the same .setting-input class.
+    const input = typeof setting.value === 'boolean'
+      ? `<input class="setting-input setting-toggle" data-setting="${escapeHtml(setting.key)}"
+        type="checkbox" ${setting.value ? 'checked' : ''} />`
+      : `<input class="setting-input" data-setting="${escapeHtml(setting.key)}"
+        type="${typeof setting.value === 'number' ? 'number' : 'text'}"
+        value="${escapeHtml(String(setting.value))}" />`;
+    return `
     <label class="setting-row">
       <span class="setting-label">
         ${escapeHtml(setting.label)}
         <em>${setting.source === 'stored' ? 'saved here' : `from ${escapeHtml(setting.envVar)}`}</em>
       </span>
-      <input class="setting-input" data-setting="${escapeHtml(setting.key)}"
-        type="${typeof setting.value === 'number' ? 'number' : 'text'}"
-        value="${escapeHtml(String(setting.value))}" />
-    </label>`);
+      ${input}
+    </label>`;
+  });
 
   const secrets = data.secrets.map((secret) => {
     const state_ = (SECRET_STATE[secret.source] || SECRET_STATE.missing)(secret);
@@ -2386,7 +2395,7 @@ function renderSettings() {
 
 async function saveSetting(input) {
   const key = input.dataset.setting;
-  const raw = input.value;
+  const raw = input.type === 'checkbox' ? input.checked : input.value;
   const value = input.type === 'number' ? Number(raw) : raw;
   input.disabled = true;
   try {
@@ -2400,7 +2409,8 @@ async function saveSetting(input) {
     await loadSettings();
   } catch (err) {
     toast(err.message || 'That value was refused.');
-    input.value = input.defaultValue;
+    if (input.type === 'checkbox') input.checked = input.defaultChecked;
+    else input.value = input.defaultValue;
   } finally {
     input.disabled = false;
   }

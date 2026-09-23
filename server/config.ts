@@ -74,6 +74,13 @@ export interface AppConfig {
    */
   schedulerEnabled: boolean;
   /**
+   * Whether the morning WhatsApp digest goes out at 07:30 Asia/Karachi. On by
+   * default: it is a direct send, costs zero of the daily run budget, and
+   * stays silent until the WhatsApp token is connected. Set
+   * MORNING_DIGEST=false (or flip the Settings toggle) to turn it off.
+   */
+  morningDigestEnabled: boolean;
+  /**
    * 'key'  - the API needs a session, obtained once from a ?k= link.
    * 'open' - no check at all. Public internet plus a spendable daily quota.
    */
@@ -295,6 +302,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     schedulerEnabled: !['0', 'false', 'no', 'off'].includes(
       (env.SCHEDULER_ENABLED ?? '').trim().toLowerCase(),
     ),
+    morningDigestEnabled: readBool(env.MORNING_DIGEST, true),
     authMode,
     accessKey,
     dailyRunBudget,

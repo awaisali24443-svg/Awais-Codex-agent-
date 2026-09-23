@@ -20,8 +20,13 @@ import { acceptRun } from './accept.js';
 import { WhatsAppService } from './whatsapp/lifecycle.js';
 import { sendDonePing } from './whatsapp/doneping.js';
 import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
-import { fireDueScheduledTasks } from './scheduler.js';
+import { fireDueScheduledTasks, nextDaily } from './scheduler.js';
 import { recoverOrphanedRuns } from './recovery.js';
+import {
+  DIGEST_TIME,
+  DIGEST_TIMEZONE,
+  maybeSendMorningDigest,
+} from './whatsapp/morningdigest.js';
 
 /**
  * Pick the engine.
@@ -228,6 +233,32 @@ async function boot(): Promise<void> {
     console.log('[boot] scheduler: on (60s tick)');
   } else {
     console.log('[boot] scheduler: off — set SCHEDULER_ENABLED=true to fire scheduled tasks');
+  }
+
+  // ---- morning digest -------------------------------------------------------
+  // One WhatsApp message at 07:30 Asia/Karachi: what ran overnight, what
+  // failed, what is waiting. A direct send, never a run — it costs zero of
+  // the daily task budget. Silent until the WhatsApp token is connected.
+  // The tick lives in this process like every other scheduler: the one-poller
+  // rule means no second process may own the timing.
+  if (config.morningDigestEnabled) {
+    let nextDigestAt = nextDaily(new Date(), DIGEST_TIME, DIGEST_TIMEZONE);
+    const tickDigest = async (): Promise<void> => {
+      try {
+        if (new Date() < nextDigestAt) return;
+        await maybeSendMorningDigest({ db, secrets, config });
+        nextDigestAt = nextDaily(new Date(), DIGEST_TIME, DIGEST_TIMEZONE);
+      } catch (err) {
+        // The digest never takes anything else down with it.
+        console.error('[digest] tick failed:', (err as Error).message);
+      }
+    };
+    const digestTimer = setInterval(() => void tickDigest(), 60_000);
+    digestTimer.unref?.();
+    void tickDigest();
+    console.log('[boot] morning digest: on (daily 07:30 Asia/Karachi)');
+  } else {
+    console.log('[boot] morning digest: off — set MORNING_DIGEST=true to get the 07:30 summary');
   }
 
   const server = app.listen(config.port, '0.0.0.0', () => {
