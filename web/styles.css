@@ -259,27 +259,49 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .spinner.done { border: 0; background: var(--ok); animation: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* step timeline */
+/* mission timeline: connected status nodes on a rail */
 .steps { display: flex; flex-direction: column; }
-.step { display: flex; gap: 11px; padding: 3px 0; }
-.step-rail { position: relative; width: 18px; flex: none; display: flex; justify-content: center; }
+.step { display: flex; gap: 11px; padding: 2px 0; }
+.step-rail { position: relative; width: 20px; flex: none; display: flex; justify-content: center; }
 .step-rail::before {
-  content: ""; position: absolute; top: 18px; bottom: -6px; width: 1.5px; background: var(--line);
+  content: ""; position: absolute; top: 23px; bottom: -5px; width: 1.5px; background: var(--line);
 }
 .step:last-child .step-rail::before { display: none; }
 .step-icon {
   position: relative; z-index: 1;
-  width: 18px; height: 18px; margin-top: 2px;
+  width: 20px; height: 20px; margin-top: 1px;
   display: grid; place-items: center;
-  color: var(--ink-soft); background: var(--paper);
+  border-radius: 50%; background: var(--paper);
+  border: 1.5px solid var(--line); color: var(--muted);
 }
-.step-icon svg { width: 15px; height: 15px; }
+.step-icon svg { width: 12px; height: 12px; }
+.step[data-status="running"] .step-icon { border-color: var(--accent); color: var(--accent); }
+.step-spin {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+.step[data-status="done"] .step-icon { background: var(--ok); border-color: var(--ok); color: #fff; }
+.step[data-status="done"] .step-name { color: var(--muted); }
+.step[data-status="skipped"] .step-icon { border-style: dashed; }
+.step[data-status="skipped"] .step-name { color: var(--muted); }
+.step[data-status="failed"] .step-icon { background: var(--danger); border-color: var(--danger); color: #fff; }
+.step[data-status="failed"] .step-name { color: var(--danger); }
 .step-body { flex: 1; min-width: 0; padding-bottom: var(--space-2); }
-.step-name { font-size: var(--text-md); color: var(--ink-soft); overflow-wrap: anywhere; }
+.step-head { display: flex; align-items: baseline; gap: 8px; }
+.step-name { flex: 1; min-width: 0; font-size: var(--text-md); color: var(--ink-soft); overflow-wrap: anywhere; }
+.step-time { flex: none; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .step-detail {
   margin-top: 2px; font-family: var(--mono); font-size: var(--text-xs);
   color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.step.expandable .step-body { cursor: pointer; }
+.step.expanded .step-detail {
+  display: block; -webkit-line-clamp: unset; -webkit-box-orient: unset; overflow: visible;
+}
+@media (prefers-reduced-motion: reduce) {
+  .step-spin { animation: none; border-top-color: var(--line); }
 }
 
 /* the answer */

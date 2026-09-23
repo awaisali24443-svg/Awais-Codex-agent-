@@ -1,6 +1,12 @@
 import { stripMarkdownForSpeech, combineTranscripts, recognitionErrorMessage } from './voice.js';
 import { SUGGESTIONS, suggestionFill, fillComposerFromChip } from './welcome.js';
 import {
+  statusForStep,
+  nodeIconForStatus,
+  hasExpandableDetail,
+  formatStepTime,
+} from './timeline.js';
+import {
   PANEL_SECTIONS,
   visibleSections,
   defaultSection,
@@ -596,36 +602,57 @@ function editPlan(card) {
   });
 }
 
-function addStep(card, key, { name, detail = '', icon = 'dot', done = false }) {
+/* A mission step drawn as one node on the timeline. The node on the rail
+   shows the step's status (spinner while running, check/dash/cross after);
+   the body shows the name, a small timestamp, and an expandable detail. */
+function addStep(card, key, { name, detail = '', icon = 'dot', done = false, status = null }) {
   let step = card.stepIndex.get(key);
   if (!step) {
     step = document.createElement('div');
     step.className = 'step';
     step.innerHTML = `
-      <div class="step-rail"><span class="step-icon">${iconFor(icon)}</span></div>
+      <div class="step-rail"><span class="step-icon"></span></div>
       <div class="step-body">
-        <div class="step-name"></div>
+        <div class="step-head"><span class="step-name"></span><span class="step-time"></span></div>
         <div class="step-detail" hidden></div>
       </div>`;
+    step.querySelector('.step-time').textContent = formatStepTime();
+    step.querySelector('.step-body').addEventListener('click', () => {
+      if (step.classList.contains('expandable')) step.classList.toggle('expanded');
+    });
     card.steps.append(step);
     card.stepIndex.set(key, step);
   }
 
   step.querySelector('.step-name').textContent = name;
-  if (detail) {
+  if (hasExpandableDetail(detail)) {
     const detailNode = step.querySelector('.step-detail');
+    if (detailNode.textContent !== detail) detailNode.textContent = detail;
     detailNode.hidden = false;
-    detailNode.textContent = detail;
+    step.classList.add('expandable');
   }
-  if (done) step.querySelector('.step-icon').innerHTML = iconFor('check');
+  setStepStatus(step, statusForStep({ done, icon, status }));
   scrollToEnd();
   return step;
+}
+
+/* Paint a step's node with its timeline status. The node is the status —
+   the per-tool flavor the old icon carried lives on in the detail line. */
+function setStepStatus(step, status) {
+  step.dataset.status = status;
+  const node = step.querySelector('.step-icon');
+  const glyph = nodeIconForStatus(status);
+  node.innerHTML = glyph === 'spinner'
+    ? '<span class="step-spin" aria-hidden="true"></span>'
+    : iconFor(glyph);
 }
 
 /* ----------------------------------------------------------------- icons -- */
 
 const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
+  cross: '<path d="M6 6l12 12M18 6 6 18"/>',
+  dash: '<path d="M5 12h14"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 11v5"/>',
   warn: '<path d="M12 3 2 20h20L12 3Z"/><path d="M12 9v5M12 17h.01"/>',
   code: '<path d="m8 8-4 4 4 4M16 8l4 4-4 4"/>',
@@ -710,8 +737,8 @@ function handleEvent(card, event, data) {
       break;
 
     case 'tool.result': {
-      const last = card.steps.querySelector('.step:last-child .step-icon');
-      if (last) last.innerHTML = iconFor('check');
+      const last = card.steps.querySelector('.step:last-child');
+      if (last) setStepStatus(last, 'done');
       break;
     }
 
@@ -870,8 +897,7 @@ function finishCard(card, outcome, data = {}) {
       const passed = check && check.passed === true;
       addStep(card, `proof:${check && check.name}`, {
         name: `${passed ? '✓' : '✗'} ${check && check.name} — ${check && check.evidence}`,
-        icon: passed ? 'check' : 'warn',
-        done: true,
+        status: passed ? 'done' : 'failed',
       });
     }
   }
