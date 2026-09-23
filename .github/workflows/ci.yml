@@ -64,3 +64,22 @@ jobs:
           done
           echo "server never became ready" >&2
           exit 1
+
+      # Open mode is exactly the config that hides auth bugs, so a second boot
+      # proves key mode protects the API: 401 without the key, 200 with it.
+      - name: Boot in key mode and prove the auth guard works
+        run: |
+          AUTH_MODE=key ACCESS_KEY=test-access-key-12345 ENGINE=scripted PORT=3001 node dist/server.cjs &
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3001/healthz > /dev/null; then
+              echo "key-mode server is up"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3001/healthz > /dev/null || { echo "key-mode server never became ready" >&2; exit 1; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3001/api/status)
+          [ "$code" = "401" ] || { echo "expected 401 without the key, got $code" >&2; exit 1; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "x-access-key: test-access-key-12345" http://127.0.0.1:3001/api/status)
+          [ "$code" = "200" ] || { echo "expected 200 with the key, got $code" >&2; exit 1; }
+          echo "key mode: 401 without the key, 200 with it"
