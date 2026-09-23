@@ -10,6 +10,11 @@
  * The `WHERE` clause on `DO UPDATE` is what makes it safe: when the cap is
  * reached the update matches nothing, no row is returned, and the caller knows
  * the budget was refused rather than merely suspected.
+ *
+ * The cap is ONE shared counter for the whole day. Per-channel rows still
+ * exist, but they are bookkeeping for display only: without the shared gate,
+ * web, whatsapp and api would each get the full daily limit and the day could
+ * spend three times the quota.
  */
 import type { Db } from './db.js';
 
@@ -29,7 +34,7 @@ export class BudgetExceededError extends Error {
     readonly used: number,
     readonly limit: number,
   ) {
-    super(`Daily ${bucket} run budget exhausted (${used}/${limit})`);
+    super(`Daily run budget exhausted (${used}/${limit})`);
     this.name = 'BudgetExceededError';
   }
 }
@@ -41,6 +46,12 @@ export class BudgetExceededError extends Error {
  * own reset, so the guard is deliberately conservative: it can refuse a run the
  * engine would still have allowed, and can never allow one past the cap.
  *
+ * The gate is the day's TOTAL across every channel: the WHERE clause compares
+ * the sum of today's rows against the limit, so web, whatsapp and api share
+ * one allowance instead of each getting a full one. The per-channel row is
+ * still incremented, so display code can report usage per channel.
+ *
+ * @returns the day's total usage after the claim.
  * @throws BudgetExceededError when nothing is left today.
  */
 export async function consumeRunBudget(
@@ -48,30 +59,48 @@ export async function consumeRunBudget(
   bucket: BudgetBucket,
   limit: number,
 ): Promise<number> {
-  const rows = await db.query<{ count: number }>(
+  // The gate has to cover the INSERT path too: for a channel with no row
+  // today there is no conflict, so a WHERE only on DO UPDATE would let a new
+  // channel spend past the cap. Hence INSERT..SELECT..WHERE plus the guarded
+  // DO UPDATE.
+  //
+  // The decision to spend is this one statement. The day total is read back
+  // afterwards for display: a subquery in RETURNING would not see this
+  // command's own insertion (verified against PGlite), so it cannot report
+  // the post-claim total.
+  const rows = await db.query<{ one: number }>(
     `INSERT INTO budgets (day, bucket, count)
-          VALUES (CURRENT_DATE, $1, 1)
+     SELECT CURRENT_DATE, $1, 1
+      WHERE (SELECT COALESCE(SUM(count), 0) FROM budgets WHERE day = CURRENT_DATE) < $2
      ON CONFLICT (day, bucket)
      DO UPDATE SET count = budgets.count + 1
-           WHERE budgets.count < $2
-      RETURNING count`,
+           WHERE (SELECT COALESCE(SUM(count), 0) FROM budgets WHERE day = CURRENT_DATE) < $2
+      RETURNING 1`,
     [bucket, limit],
   );
 
   if (rows.length === 0) {
-    const used = await peekBudget(db, bucket);
+    const used = await peekDayTotal(db);
     throw new BudgetExceededError(bucket, used, limit);
   }
-  return rows[0].count;
+  return peekDayTotal(db);
 }
 
-/** Read today's usage without spending anything. */
+/** Read one channel's usage without spending anything (display only). */
 export async function peekBudget(db: Db, bucket: BudgetBucket): Promise<number> {
   const rows = await db.query<{ count: number }>(
     'SELECT count FROM budgets WHERE day = CURRENT_DATE AND bucket = $1',
     [bucket],
   );
-  return rows[0]?.count ?? 0;
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** Read the day's total usage across every channel — the number the gate enforces. */
+export async function peekDayTotal(db: Db): Promise<number> {
+  const rows = await db.query<{ total: number }>(
+    'SELECT COALESCE(SUM(count), 0) AS total FROM budgets WHERE day = CURRENT_DATE',
+  );
+  return Number(rows[0]?.total ?? 0);
 }
 
 export async function budgetSnapshot(
@@ -90,16 +119,19 @@ export async function budgetSnapshot(
       WHERE day = CURRENT_DATE`,
   );
   const byBucket = new Map(rows.map((r) => [r.bucket, r]));
+  // `used` stays per channel (display only); `remaining` comes off the shared
+  // day total, because that is the counter the spending gate enforces.
+  const total = rows.reduce((sum, r) => sum + Number(r.count), 0);
 
   return buckets.map((bucket) => {
     const row = byBucket.get(bucket);
-    const used = row?.count ?? 0;
+    const used = Number(row?.count ?? 0);
     return {
       day: row?.day ?? new Date().toISOString().slice(0, 10),
       bucket,
       used,
       limit,
-      remaining: Math.max(0, limit - used),
+      remaining: Math.max(0, limit - total),
     };
   });
 }
