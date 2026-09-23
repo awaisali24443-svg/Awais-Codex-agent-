@@ -6,8 +6,8 @@
  *
  *   OUT  `withDesignGuide(prompt)` — when the mission is about designing or
  *        building a UI, prepend the design guide so the engine's taste
- *        matches the house style (warm, minimal, Claude/ChatGPT/Manus
- *        spirit). The operator's stored prompt is never rewritten; only the
+ *        matches the house style (warm, minimal, quiet — the interface
+ *        disappears so the content can speak). The operator's stored prompt is never rewritten; only the
  *        text sent to the model carries the guide.
  *
  *   COST  Non-UI missions are returned untouched — the exact same string —

@@ -150,7 +150,7 @@ export async function checkGeminiKey(options: GeminiCheckOptions): Promise<Check
     return {
       check: 'gemini_key',
       verdict: 'not_configured',
-      summary: 'No Gemini key was provided (GEMINI_API_KEY, or store one in Settings).',
+      summary: 'No API key was provided (GEMINI_API_KEY, or store one in Settings).',
     };
   }
 
@@ -264,7 +264,7 @@ export async function checkAgent(options: AgentCheckOptions): Promise<AgentCheck
     return {
       check: 'agent',
       verdict: 'not_configured',
-      summary: 'No Gemini key was provided, so the agent cannot be tried.',
+      summary: 'No API key was provided, so the agent cannot be tried.',
     };
   }
 

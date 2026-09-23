@@ -270,7 +270,7 @@ async function boot(): Promise<void> {
       const keySource = secrets.source('gemini_api_key');
       if (keySource === 'missing') {
         console.warn(
-          '[boot] no Gemini key — agent runs will be refused until one is set in the ' +
+          '[boot] no API key — agent runs will be refused until one is set in the ' +
             'environment or in Settings',
         );
       }

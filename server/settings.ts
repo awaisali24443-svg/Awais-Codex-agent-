@@ -76,13 +76,13 @@ export const SETTINGS: Record<SettingKey, SettingSpec> = {
     key: 'antigravityAgent',
     label: 'Agent version',
     description:
-      'Which managed agent the engine calls, e.g. antigravity-preview-09-2026. ' +
-      'The date suffix is updated by the provider, so this needs to be changeable without a deploy.',
+      'Which managed agent the engine calls (a date-stamped agent id). ' +
+      'The date suffix changes over time, so this needs to be changeable without a deploy.',
     envVar: 'ANTIGRAVITY_AGENT',
     validate: (raw) => {
       const value = String(raw ?? '').trim();
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{2,80}$/.test(value)) {
-        return { ok: false, message: 'must be an agent id like antigravity-preview-09-2026' };
+        return { ok: false, message: 'must be a date-stamped agent id (letters, numbers, . _ : -)' };
       }
       return { ok: true, value };
     },
@@ -124,7 +124,7 @@ export const KNOWN_SECRETS: Record<SecretName, SecretSpec> = {
   gemini_api_key: {
     name: 'gemini_api_key',
     label: 'Google AI Studio key',
-    description: 'Authorises the Antigravity engine. Without it, every mission fails with auth_failed.',
+    description: 'Authorises the agent engine. Without it, every mission fails with auth_failed.',
     envVar: 'GEMINI_API_KEY',
     usedBy: 'server/engine/antigravity.ts',
   },

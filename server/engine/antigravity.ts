@@ -189,7 +189,7 @@ export class AntigravityEngine implements Engine {
 
     const watchdog = setInterval(() => {
       if (Date.now() - lastActivity > this.idleTimeoutMs) {
-        console.warn(`[antigravity] idle for ${this.idleTimeoutMs}ms — aborting upstream`);
+        console.warn(`[engine] idle for ${this.idleTimeoutMs}ms — aborting upstream`);
         idleTimedOut = true;
         controller.abort();
       }

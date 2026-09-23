@@ -284,7 +284,7 @@ async function openConversation(id, branchId = null) {
   // says busy.
   el.topbarTitle.textContent = state.running
     ? 'Working…'
-    : (state.conversations.find((c) => c.id === id)?.title ?? 'Codex');
+    : (state.conversations.find((c) => c.id === id)?.title ?? 'Awais Codex');
   showHero(false);
   renderThread([]);
 
@@ -1613,7 +1613,7 @@ function humanError(type, message) {
   const known = {
     quota_exceeded: "Today's agent quota is used up. It resets around noon.",
     rate_limited: 'The agent was busy. Try again in a moment.',
-    auth_failed: 'The API key was rejected. Check GEMINI_API_KEY in Render.',
+    auth_failed: 'The API key was rejected. Check the key in Settings or on Render.',
     agent_unavailable: 'That agent id no longer exists — Google date-stamps them.',
     idle_timeout: 'The agent went quiet, so the task was closed to free the slot.',
     budget_exceeded: "You have used today's runs. It resets at midnight UTC.",
@@ -1717,7 +1717,7 @@ function setRunning(on) {
   el.statusDot.hidden = !on;
   el.stop.hidden = !on;
   el.stop.disabled = false;
-  el.topbarTitle.textContent = on ? 'Working…' : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'Codex');
+  el.topbarTitle.textContent = on ? 'Working…' : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'Awais Codex');
   el.send.disabled = on || !el.prompt.value.trim();
 }
 
@@ -2677,7 +2677,7 @@ function newTask() {
   renderThread([]);
   el.branchBar.hidden = true;
   showHero(true);
-  el.topbarTitle.textContent = 'Codex';
+  el.topbarTitle.textContent = 'Awais Codex';
   el.prompt.focus();
   renderConversations();
 }

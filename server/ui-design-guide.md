@@ -1,9 +1,9 @@
 # UI Design Guide
 
 Follow this when a mission asks you to design or build a user interface —
-a web page, app screen, landing page, dashboard, or mockup. In the spirit
-of Claude, ChatGPT, and Manus: warm, minimal, quiet. The interface should
-disappear so the content can speak.
+a web page, app screen, landing page, dashboard, or mockup. Aim for a
+warm, minimal, quiet interface — one that disappears so the content can
+speak.
 
 ## Layout
 

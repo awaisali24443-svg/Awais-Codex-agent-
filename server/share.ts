@@ -154,7 +154,7 @@ export function renderSharePage(data: ShareData): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mission replay — ${escapeHtml(data.prompt.slice(0, 60))}</title>
+<title>Awais Codex — mission replay — ${escapeHtml(data.prompt.slice(0, 60))}</title>
 <style>
 body{font-family:system-ui,-apple-system,sans-serif;max-width:720px;margin:0 auto;padding:24px 16px;color:#1a1a1a;line-height:1.5}
 .badge{display:inline-block;padding:2px 10px;border-radius:999px;background:#e8f0e8;font-size:13px;margin-bottom:12px}
@@ -168,7 +168,7 @@ ul{list-style:none;padding:0}li{margin:6px 0}.st-done{color:#1a7f37}.st-failed{c
 <body>
 <span class="badge">${escapeHtml(data.status)}</span>
 <h1>Mission replay</h1>
-<div class="meta">Started ${escapeHtml(data.startedAt)}${data.finishedAt ? ` · finished ${escapeHtml(data.finishedAt)}` : ''}</div>
+<div class="meta">Awais Codex · Started ${escapeHtml(data.startedAt)}${data.finishedAt ? ` · finished ${escapeHtml(data.finishedAt)}` : ''}</div>
 <h2>Task</h2>
 <p>${escapeHtml(data.prompt)}</p>
 <h2>Plan</h2>
@@ -179,6 +179,7 @@ ${steps ? `<ul>${steps}</ul>` : '<p class="empty">No steps recorded.</p>'}
 ${checks ? `<ul>${checks}</ul>` : '<p class="empty">Nothing checkable — closed as a plain answer.</p>'}
 <h2>Final answer</h2>
 ${data.answer ? `<div class="answer">${escapeHtml(data.answer)}</div>` : '<p class="empty">No answer recorded.</p>'}
+<p class="empty" style="margin-top:32px">Created by Awais Ali</p>
 </body>
 </html>`;
 }
