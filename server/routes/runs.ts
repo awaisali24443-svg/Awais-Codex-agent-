@@ -42,13 +42,13 @@ import { listArtifacts } from '../artifacts.js';
 import { BUCKET_FOR_KIND, acceptRun, type AcceptResult } from '../accept.js';
 import {
   TERMINAL_STATUSES,
+  finishRun,
   getActiveRun,
   getRun,
   listConversations,
   listMessages,
   listRuns,
   readEvents,
-  setRunStatus,
   type RunKind,
   type RunStatus,
 } from '../runs.js';
@@ -261,10 +261,20 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     const signalled = executor.cancel(run.id);
     if (!signalled) {
       // The process that owned this run is gone (it would have been marked
-      // orphaned at boot). Close it here so it stops blocking new missions.
-      await setRunStatus(db, run.id, 'cancelled', {
+      // orphaned at boot). Close it here so it stops blocking new missions,
+      // and emit the terminal event exactly as the executor does — the SSE
+      // stream only ends when it sees one, and setRunStatus alone would leave
+      // it hanging. finishRun appends the event before flipping the status,
+      // which is what makes the stream's drain-then-close safe.
+      const seq = await finishRun(db, run.id, {
+        status: 'cancelled',
         errorType: 'orphaned',
         errorMessage: 'Cancelled while no executor was attached',
+      });
+      bus.publish(run.id, {
+        seq,
+        type: 'run.cancelled',
+        payload: { status: 'cancelled', errorType: 'orphaned' },
       });
     }
     res.json({ ok: true, signalled });
