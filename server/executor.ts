@@ -548,6 +548,12 @@ export class RunExecutor {
       previousInteractionId = result.interactionId ?? previousInteractionId;
       environmentId = result.environmentId ?? environmentId;
 
+      // The continuation handles live in locals above; a crash or redeploy
+      // between passes would lose them and the retry would start (and pay for)
+      // a fresh sandbox. Persist them the first time each pass's id is seen —
+      // a failed DB write is best effort and never fails the mission.
+      await this.persistContinuation(run.id, previousInteractionId, environmentId);
+
       if (lastChance) break;
       // An empty pass produced nothing to build on — another pass would only
       // burn budget re-asking.
@@ -558,6 +564,31 @@ export class RunExecutor {
       throw new EngineError('The research mission produced no output.', 'truncated');
     }
     return result;
+  }
+
+  /**
+   * Persist the sandbox continuation handles mid-run. The run row already
+   * records them at close (finishRun); this covers the window between passes
+   * of a deep-research mission, where the handles otherwise live only in
+   * memory. Best effort by design: a persistence failure must not kill the
+   * mission, per the header rule above.
+   */
+  private async persistContinuation(
+    runId: string,
+    interactionId: string | null | undefined,
+    environmentId: string | null | undefined,
+  ): Promise<void> {
+    try {
+      await this.deps.db.query(
+        `UPDATE runs
+            SET interaction_id = COALESCE($2, interaction_id),
+                environment_id = COALESCE($3, environment_id)
+          WHERE id = $1`,
+        [runId, interactionId ?? null, environmentId ?? null],
+      );
+    } catch (err) {
+      console.warn(`[executor] continuation persist failed for ${runId}:`, (err as Error).message);
+    }
   }
 
   /**
