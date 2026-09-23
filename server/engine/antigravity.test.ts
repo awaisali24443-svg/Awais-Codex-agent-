@@ -229,17 +229,22 @@ describe('the request it sends', () => {
     assert.deepEqual(fake.requests[0].body.agent_config, {
       type: 'antigravity',
       max_total_tokens: 50_000,
+      thinking_summaries: 'auto',
     });
   });
 
-  test('requests live thought summaries as a top-level field', async () => {
+  test('requests live thought summaries inside agent_config, never top-level', async () => {
     fake = await startFake((_req, res) => sse(res, happyStream()));
     const engine = engineFor(fake.base);
     const { ctx } = makeCtx();
 
     await engine.run('build me an app', ctx);
 
-    assert.equal(fake.requests[0].body.thinking_summaries, 'auto');
+    // Top-level thinking_summaries is rejected by the API as an unknown
+    // parameter; the documented slot is the config object, and for agent mode
+    // that is agent_config (generation_config is model-flow only).
+    assert.ok(!('thinking_summaries' in fake.requests[0].body), 'never sent top-level');
+    assert.equal(fake.requests[0].body.agent_config?.thinking_summaries, 'auto');
   });
 });
 
@@ -419,8 +424,71 @@ describe('failures', () => {
     );
   });
 
-  test('the default first rate-limit wait clears a full TPM minute window', () => {
-    const engine = new AntigravityEngine({ apiKey: 'k', agent: 'antigravity-preview-09-2026' });
+  test('a 400 naming thinking_summaries drops the field and the run continues', async () => {
+    let calls = 0;
+    fake = await startFake((_req, res, body) => {
+      calls += 1;
+      if (calls === 1) {
+        // The docs put thinking_summaries in the model-flow generation_config;
+        // for agent mode we try it inside agent_config — never top-level, which
+        // the API rejects outright.
+        assert.ok(!('thinking_summaries' in (body as any)), 'never sent top-level');
+        assert.equal(
+          (body as any).agent_config?.thinking_summaries,
+          'auto',
+          'first attempt tries thinking_summaries inside agent_config',
+        );
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: "Unknown parameter 'thinking_summaries'" } }));
+        return;
+      }
+      sse(res, happyStream());
+    });
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    const result = await engine.run('hello', ctx);
+    assert.equal(calls, 2, 'one rejection, then the retry runs');
+    assert.equal(result.interactionId, 'int_abc');
+    const retryBody = fake.requests[1].body as any;
+    assert.ok(
+      !('thinking_summaries' in (retryBody.agent_config ?? {})),
+      'the retry drops exactly the rejected field',
+    );
+    assert.equal(retryBody.agent_config?.type, 'antigravity', 'the rest of agent_config survives');
+    assert.ok(
+      seen.logs.some((l) => /rejected request field 'thinking_summaries'/i.test(l)),
+      'the drop is logged so the operator knows summaries are off',
+    );
+  });
+
+  test("a 400 naming another field drops just that field, not the whole agent_config", async () => {
+    let calls = 0;
+    fake = await startFake((_req, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: "Unknown parameter 'store'" } }));
+        return;
+      }
+      sse(res, happyStream());
+    });
+    const engine = engineFor(fake.base);
+    const { ctx } = makeCtx();
+
+    const result = await engine.run('hello', ctx);
+    assert.equal(calls, 2);
+    assert.equal(result.interactionId, 'int_abc');
+    const retryBody = fake.requests[1].body as any;
+    assert.ok(!('store' in retryBody), 'the named field is dropped');
+    assert.equal(
+      retryBody.agent_config?.thinking_summaries,
+      'auto',
+      'unnamed fields are kept — the strip is surgical, not wholesale',
+    );
+  });
+
+  test('the default first rate-limit wait clears a full TPM minute window', () => {    const engine = new AntigravityEngine({ apiKey: 'k', agent: 'antigravity-preview-09-2026' });
     const baseDelay = (engine as unknown as { rateLimitBaseDelayMs: number }).rateLimitBaseDelayMs;
     assert.equal(baseDelay, 65_000, 'first wait is 65s measured from the 429, not 30s');
   });
@@ -658,14 +726,18 @@ describe('live thinking summaries', () => {
     fake = await startFake((_req, res, body) => {
       calls += 1;
       if (calls === 1) {
-        assert.equal(body.thinking_summaries, 'auto', 'the first attempt uses the documented value');
+        assert.equal(
+          body.agent_config?.thinking_summaries,
+          'auto',
+          'the first attempt uses the documented value',
+        );
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'unknown enum value "auto" for thinking_summaries' } }));
         return;
       }
       // The qualified name must be tried BEFORE any field is stripped: store
       // must survive, or the recovery machinery dies quietly with it.
-      assert.equal(body.thinking_summaries, 'THINKING_SUMMARIES_AUTO');
+      assert.equal(body.agent_config?.thinking_summaries, 'THINKING_SUMMARIES_AUTO');
       assert.equal(body.store, true, 'optional fields must not be stripped for an enum rejection');
       sse(res, happyStream());
     });

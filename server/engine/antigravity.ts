@@ -13,8 +13,11 @@
  *   previous_interaction_id    when continuing, so the agent keeps its memory
  *   stream: true               tokens as they are produced
  *   store: true                so the interaction can be re-read if the stream dies
- *   thinking_summaries: 'auto' live thought summaries in the stream (retried as
- *                          THINKING_SUMMARIES_AUTO if the API rejects the value)
+ *   thinking_summaries: 'auto' tried inside agent_config (the documented
+ *                          generation_config slot is model-flow only; top-level
+ *                          is rejected as an unknown parameter). If the API
+ *                          rejects the field, the 400 fallback drops exactly
+ *                          that field and the run continues without summaries.
  *   agent_config               optional hard token ceiling
  *
  * ## The three rules this file obeys
@@ -243,15 +246,21 @@ export class AntigravityEngine implements Engine {
       environment: ctx.environmentId?.trim() || 'remote',
       stream: true,
       store: true,
-      // Default none upstream would keep the Thinking panel silent for the
-      // whole run; "auto" asks for live thought summaries.
-      thinking_summaries: 'auto',
     };
+    // Live thought summaries: the API documents `thinking_summaries` inside
+    // `generation_config`, which is model-flow only ("only applicable when
+    // `model` is set") — top-level is rejected with "Unknown parameter", as
+    // seen live. The agent-flow analogue is `agent_config`, so the field is
+    // tried there; if the backend rejects it, the 400 fallback below drops
+    // exactly that field and the run continues without summaries.
+    const agentConfig: Record<string, unknown> = { type: 'antigravity' };
+    if (this.options.maxTotalTokens && this.options.maxTotalTokens > 0) {
+      agentConfig.max_total_tokens = this.options.maxTotalTokens;
+    }
+    agentConfig.thinking_summaries = 'auto';
+    payload.agent_config = agentConfig;
     if (ctx.previousInteractionId) {
       payload.previous_interaction_id = ctx.previousInteractionId;
-    }
-    if (this.options.maxTotalTokens && this.options.maxTotalTokens > 0) {
-      payload.agent_config = { type: 'antigravity', max_total_tokens: this.options.maxTotalTokens };
     }
 
     let response = await this.post(payload, controller, touch);
@@ -270,13 +279,19 @@ export class AntigravityEngine implements Engine {
     // reject "auto" with "unknown enum value" and only accept the qualified
     // THINKING_SUMMARIES_AUTO. Retry once with the qualified name. This MUST
     // run before the field-stripping fallback below: that one matches the word
-    // "unknown" too, and would strip `store` and re-send the same rejected
-    // value forever — the feature would die quietly instead of recovering.
-    if (!response.ok && response.status === 400 && !emitted && payload.thinking_summaries === 'auto') {
+    // "unknown" too, and would drop the field before the qualified value ever
+    // gets its chance.
+    const agentConfigForLadder = payload.agent_config as Record<string, unknown> | undefined;
+    if (
+      !response.ok &&
+      response.status === 400 &&
+      !emitted &&
+      agentConfigForLadder?.thinking_summaries === 'auto'
+    ) {
       const message = await failureDetail();
       if (/unknown enum|invalid enum/i.test(message)) {
         ctx.log(`Retrying with THINKING_SUMMARIES_AUTO: ${message}`, 'warn');
-        payload.thinking_summaries = 'THINKING_SUMMARIES_AUTO';
+        agentConfigForLadder.thinking_summaries = 'THINKING_SUMMARIES_AUTO';
         await repost();
       }
     }
@@ -299,18 +314,40 @@ export class AntigravityEngine implements Engine {
       await repost();
     }
 
-    // The beta may not accept optional fields such as `store`. Drop the ones we
-    // can live without and try once more, still only before any output. The
-    // once-guard matters: a 400 the strip cannot fix must fail loudly in the
-    // loop below instead of re-posting forever and hanging the mission slot.
+    // The beta may reject an optional field by name, e.g. "Unknown parameter
+    // 'thinking_summaries'". Drop exactly the field the API names — top-level
+    // or nested one level inside agent_config — so the retry isn't rejected
+    // for the same reason. (Dropping only `store`/`agent_config` re-sent the
+    // rejected field and killed the run as invalid_request.) `store` is still
+    // dropped: it is the classic beta-rejected optional field. Still only
+    // before any output, still once: a 400 this cannot fix fails loudly in
+    // the loop below instead of re-posting forever.
     let optionalFieldsStripped = false;
     if (!response.ok && response.status === 400 && !emitted && !optionalFieldsStripped) {
       const message = await failureDetail();
       if (/unknown|invalid|unexpected|unsupported|field/i.test(message)) {
         optionalFieldsStripped = true;
-        ctx.log(`Retrying without optional fields: ${message}`, 'warn');
+        const named = /unknown (?:parameter|field) '([^']+)'/i.exec(message)?.[1];
+        let droppedNamed = false;
+        if (named) {
+          if (named in payload) {
+            delete payload[named];
+            droppedNamed = true;
+          } else {
+            const nested = payload.agent_config;
+            if (nested && typeof nested === 'object' && named in (nested as Record<string, unknown>)) {
+              delete (nested as Record<string, unknown>)[named];
+              droppedNamed = true;
+            }
+          }
+        }
+        if (droppedNamed) {
+          ctx.log(`The API rejected request field '${named}' — dropped it and retrying.`, 'warn');
+        } else {
+          ctx.log(`Retrying without optional fields: ${message}`, 'warn');
+        }
         delete payload.store;
-        delete payload.agent_config;
+        if (!droppedNamed) delete payload.agent_config;
         await repost();
       }
     }
