@@ -159,6 +159,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .icon-btn.sm { width: 34px; height: 34px; }
 .icon-btn svg { width: 21px; height: 21px; }
 .icon-btn:disabled { opacity: .35; cursor: default; }
+.icon-btn.listening { color: #e5484d; animation: micblink 1.1s ease-in-out infinite; }
+@keyframes micblink { 50% { opacity: .4; } }
 
 /* stop button: only visible while a task is running */
 #btn-stop { color: var(--danger); }

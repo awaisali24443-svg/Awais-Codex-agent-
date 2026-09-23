@@ -1,3 +1,5 @@
+import { stripMarkdownForSpeech, combineTranscripts, recognitionErrorMessage } from './voice.js';
+
 /* ==========================================================================
    Codex — client.
 
@@ -330,6 +332,7 @@ function renderAsk(text) {
   const node = document.createElement('div');
   node.className = 'ask';
   node.textContent = text;
+  stopSpeaking(); // The operator moved on — stop reading the old answer.
   el.thread.append(node);
   scrollToEnd();
   return node;
@@ -964,6 +967,10 @@ function editPrompt(card) {
 function attachMessageActions(node, message, linkedInDraftId = null) {
   const row = document.createElement('div');
   row.className = 'msg-actions';
+  // Every assistant answer can be heard aloud — free, via the browser.
+  if (message.role === 'assistant' && message.content && 'speechSynthesis' in window) {
+    row.append(speakButton(message.content));
+  }
   if (message.role === 'user') {
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
@@ -1368,6 +1375,7 @@ function attach(runId, after = 0) {
 
 function setRunning(on) {
   state.running = on;
+  if (on) stopSpeaking(); // A new answer replaces whatever was being read.
   el.statusDot.hidden = !on;
   el.stop.hidden = !on;
   el.stop.disabled = false;
@@ -1442,6 +1450,123 @@ el.prompt.addEventListener('keydown', (event) => {
 function autoGrow() {
   el.prompt.style.height = 'auto';
   el.prompt.style.height = `${Math.min(el.prompt.scrollHeight, window.innerHeight * 0.34)}px`;
+}
+
+/* -------------------------------------------------------------- voice -- */
+/* Mic input + spoken replies through the browser's free built-in speech
+   APIs. No server endpoints, no keys, zero cost. The transcript always lands
+   in the composer as editable text — it is never auto-sent. */
+
+let voiceRecognition = null;
+
+function speechRecognitionCtor() {
+  const w = /** @type {any} */ (window);
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
+function stopSpeaking() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+}
+
+/** Speak plain text derived from a markdown answer. Silent when unsupported. */
+function speakText(text, onDone) {
+  if (!('speechSynthesis' in window)) {
+    toast('Spoken replies are not supported in this browser.');
+    return;
+  }
+  stopSpeaking();
+  const plain = stripMarkdownForSpeech(text);
+  if (!plain) return;
+  const utter = new SpeechSynthesisUtterance(plain);
+  if (onDone) utter.onend = onDone;
+  window.speechSynthesis.speak(utter);
+}
+
+function setMicListening(btn, on) {
+  btn.classList.toggle('listening', on);
+  btn.title = on ? 'Listening… tap to stop' : 'Speak your message';
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function toggleListening(btn, SR) {
+  if (voiceRecognition) {
+    voiceRecognition.stop();
+    return;
+  }
+  const rec = new SR();
+  rec.interimResults = true;
+  rec.onresult = /** @param {any} event */ (event) => {
+    const parts = [];
+    for (const r of event.results) {
+      parts.push({ transcript: (r[0] && r[0].transcript) || '', isFinal: !!r.isFinal });
+    }
+    el.prompt.value = combineTranscripts(parts);
+    el.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  rec.onerror = /** @param {any} event */ (event) => {
+    toast(recognitionErrorMessage(event && event.error));
+  };
+  rec.onend = () => {
+    voiceRecognition = null;
+    setMicListening(btn, false);
+  };
+  try {
+    rec.start();
+  } catch {
+    toast(recognitionErrorMessage('audio-capture'));
+    return;
+  }
+  voiceRecognition = rec;
+  setMicListening(btn, true);
+}
+
+function setupVoiceInput() {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'icon-btn sm';
+  btn.id = 'btn-mic';
+  btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 0 0-8 0v5a4 4 0 0 0 4 4z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>';
+  const SR = speechRecognitionCtor();
+  if (!SR) {
+    btn.disabled = true;
+    btn.title = 'Voice input is not supported in this browser';
+    btn.setAttribute('aria-label', btn.title);
+  } else {
+    btn.title = 'Speak your message';
+    btn.setAttribute('aria-label', btn.title);
+    btn.addEventListener('click', () => toggleListening(btn, SR));
+  }
+  $('btn-attach').after(btn);
+}
+
+/** Per-answer Listen/Stop button for assistant messages. */
+function speakButton(text) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'msg-btn';
+  const label = '🔊 Listen';
+  btn.textContent = label;
+  btn.title = 'Hear this answer spoken';
+  btn.addEventListener('click', () => {
+    if (btn.dataset.speaking === '1') {
+      stopSpeaking();
+      btn.dataset.speaking = '';
+      btn.textContent = label;
+      return;
+    }
+    document.querySelectorAll('.msg-btn[data-speaking="1"]').forEach((other) => {
+      const o = /** @type {HTMLElement} */ (other);
+      o.dataset.speaking = '';
+      o.textContent = label;
+    });
+    btn.dataset.speaking = '1';
+    btn.textContent = '⏹ Stop';
+    speakText(text, () => {
+      btn.dataset.speaking = '';
+      btn.textContent = label;
+    });
+  });
+  return btn;
 }
 
 for (const chip of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('.chip'))) {
@@ -2324,6 +2449,7 @@ function registerWorker() {
 
 (async function start() {
   registerWorker();
+  setupVoiceInput();
   try {
     await api('/api/auth/session');
     await enter();
