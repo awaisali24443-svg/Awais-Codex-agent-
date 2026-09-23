@@ -77,6 +77,7 @@ describe('migrations', () => {
       'schema_migrations',
       'secrets',
       'settings',
+      'wa_approvals',
       'wa_state',
       'wa_updates',
     ];

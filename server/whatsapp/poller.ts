@@ -33,10 +33,12 @@ import type { Db } from '../db.js';
 import type { EventBus } from '../events.js';
 import type { RunExecutor } from '../executor.js';
 import type { AcceptInput, AcceptResult } from '../accept.js';
+import type { SecretsStore } from '../settings.js';
 import { remainingRuns } from '../accept.js';
 import { TERMINAL_STATUSES, getActiveRun, getRun, type Run } from '../runs.js';
 import { WhatsAppError, type InboundMessage, type Updates, type WhatsAppClient } from './api.js';
 import { relayRun } from './relay.js';
+import { maybeHandleApprovalReply } from './approvals.js';
 import type { WhatsAppSender } from './sender.js';
 import {
   getScheduledTask,
@@ -98,6 +100,11 @@ export interface PollerDeps {
   config: AppConfig;
   /** Same acceptance path the web UI uses — one set of rules, two channels. */
   accept: (input: AcceptInput) => Promise<AcceptResult>;
+  /**
+   * Optional: lets approval replies check the `whatsapp_to` override. When
+   * absent the learned creator id is the only owner.
+   */
+  secrets?: Pick<SecretsStore, 'get'>;
   log?: (message: string, level?: 'info' | 'warn' | 'error') => void;
   now?: () => number;
   /** Seconds to hold each poll open (platform max: 25). */
@@ -436,6 +443,26 @@ export class WhatsAppPoller {
 
     if (text.startsWith('/')) {
       await this.command(message, text);
+      return;
+    }
+
+    // An approval reply ("yes" on a waiting plan or draft) must never become
+    // a new mission: when the owner answers an open ask, the verdict is
+    // applied here and the message is consumed. Anyone else's "yes", or any
+    // message with no open ask, flows to the relay untouched.
+    const approval = await maybeHandleApprovalReply(
+      {
+        db: this.deps.db,
+        bus: this.deps.bus,
+        executor: this.deps.executor,
+        masterKey: this.deps.config.masterKey,
+        secrets: this.deps.secrets,
+        log: this.log,
+      },
+      message,
+    );
+    if (approval.handled) {
+      await this.reply(message, approval.reply);
       return;
     }
 

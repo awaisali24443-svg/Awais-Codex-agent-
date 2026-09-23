@@ -19,9 +19,7 @@ import {
   fetchMemberInfo,
   listPendingDrafts,
   loadLinkedInToken,
-  markDraftFailed,
-  markDraftPublished,
-  publishTextPost,
+  publishLinkedInDraft,
   saveLinkedInToken,
 } from '../linkedin.js';
 
@@ -131,45 +129,27 @@ export function createLinkedInRoutes(deps: LinkedInRouteDeps): Router {
   });
 
   router.post('/linkedin/drafts/:id/publish', async (req: Request, res: Response) => {
-    const rows = await db.query<{ id: string; text: string; status: string }>(
-      `SELECT id, text, status FROM linkedin_drafts WHERE id = $1`,
-      [req.params.id],
-    );
-    const draft = rows[0];
-    if (!draft) {
-      res.status(404).json({ error: 'draft_not_found' });
-      return;
-    }
-    if (draft.status !== 'pending') {
-      res.status(400).json({ error: 'draft_not_pending', message: 'This draft was already published.' });
-      return;
-    }
-    let token = null;
-    try {
-      token = await loadLinkedInToken(db, config.masterKey);
-    } catch {
-      token = null;
-    }
-    if (!token) {
-      res.status(400).json({ error: 'not_connected', message: 'Connect LinkedIn in Settings first.' });
-      return;
-    }
-    if (token.expiresAt.getTime() <= Date.now()) {
-      res.status(400).json({
-        error: 'token_expired',
-        message: 'The LinkedIn connection expired (tokens last ~60 days). Reconnect in Settings.',
-      });
-      return;
-    }
-    try {
-      const urn = await publishTextPost(token.accessToken, token.memberUrn, draft.text);
-      await markDraftPublished(db, draft.id, urn);
-      console.log(`[linkedin] published draft ${draft.id} as ${urn}`);
-      res.json({ urn });
-    } catch (err) {
-      const message = (err as Error).message;
-      await markDraftFailed(db, draft.id, message);
-      res.status(502).json({ error: 'publish_failed', message });
+    const result = await publishLinkedInDraft(db, config.masterKey, req.params.id);
+    switch (result.status) {
+      case 'published':
+        console.log(`[linkedin] published draft ${req.params.id} as ${result.urn}`);
+        res.json({ urn: result.urn });
+        return;
+      case 'already':
+        res.status(400).json({ error: 'draft_not_pending', message: 'This draft was already published.' });
+        return;
+      case 'not_found':
+        res.status(404).json({ error: 'draft_not_found' });
+        return;
+      case 'not_connected':
+        res.status(400).json({ error: 'not_connected', message: result.message });
+        return;
+      case 'token_expired':
+        res.status(400).json({ error: 'token_expired', message: result.message });
+        return;
+      case 'failed':
+        res.status(502).json({ error: 'publish_failed', message: result.message });
+        return;
     }
   });
 

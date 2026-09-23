@@ -151,6 +151,7 @@ export class WhatsAppService {
       client,
       executor,
       config,
+      secrets,
       sender: new WhatsAppSender(client, (message, level) =>
         level === 'error' ? console.error(`[wa] ${message}`) : console.log(`[wa] ${message}`),
       ),

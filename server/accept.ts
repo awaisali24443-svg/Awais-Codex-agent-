@@ -21,8 +21,10 @@
 import type { AppConfig } from './config.js';
 import type { Db } from './db.js';
 import type { RunExecutor } from './executor.js';
+import type { SecretsStore } from './settings.js';
 import { BudgetExceededError, consumeRunBudget, peekBudget, refundRunBudget, type BudgetBucket } from './budget.js';
 import { looksComplex } from './planning.js';
+import { maybeAskPlanApproval } from './whatsapp/approvals.js';
 import { RunConflictError, createRun, emitEvent, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
 
 export const BUCKET_FOR_KIND: Record<RunKind, BudgetBucket> = {
@@ -35,6 +37,12 @@ export interface AcceptDeps {
   db: Db;
   executor: RunExecutor;
   config: AppConfig;
+  /**
+   * Optional: when present, a run that pauses in 'awaiting_plan' also asks
+   * the owner on WhatsApp (one ask, silent without a token, never throws).
+   * Callers that cannot approve over WhatsApp simply omit it.
+   */
+  secrets?: Pick<SecretsStore, 'get'>;
 }
 
 export interface AcceptInput {
@@ -53,6 +61,11 @@ export interface AcceptInput {
   researchBudgetMinutes?: number | null;
   /** Optional per-mission token cap. The executor pauses the run when spent. */
   tokenBudget?: number | null;
+  /**
+   * Title for the auto-created conversation, when no conversationId is given.
+   * Scheduled tasks use this so a fired run is visibly theirs in the sidebar.
+   */
+  conversationTitle?: string | null;
 }
 
 export type AcceptResult =
@@ -109,6 +122,7 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       deepResearch: input.deepResearch === true,
       researchBudgetMinutes: input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
       tokenBudget: input.tokenBudget ?? null,
+      conversationTitle: input.conversationTitle ?? null,
     });
   } catch (err) {
     if (err instanceof RunConflictError) {
@@ -149,6 +163,11 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
         await emitEvent(db, run.id, 'run.plan_ready', { plan: steps });
         const held = await getRun(db, run.id);
         console.log(`[run] ${run.id} awaiting plan approval (${steps.length} steps)`);
+        // The owner may be on the phone, not the web app: one WhatsApp ask,
+        // answered with YES / NO / CHANGE. Fire-and-forget — it never throws.
+        if (deps.secrets) {
+          void maybeAskPlanApproval({ db, secrets: deps.secrets }, held ?? run, steps);
+        }
         return { ok: true, run: held ?? run, remaining, bucket };
       }
       // A plan that never arrived must not strand the mission: fall through

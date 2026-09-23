@@ -35,7 +35,8 @@ import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
 import { withDesignGuide } from './design.js';
 import { extractUrls, checkSources } from './sources.js';
-import { recordLinkedInDraft } from './linkedin.js';
+import { extractLinkedInDraft, recordLinkedInDraft } from './linkedin.js';
+import { maybeAskDraftApproval } from './whatsapp/approvals.js';
 import {
   executeGoogleRead,
   extractGoogleReadRequests,
@@ -675,6 +676,18 @@ export class RunExecutor {
           return null;
         },
       );
+      // One WhatsApp ask to review the draft (YES / NO / CHANGE) — the same
+      // one-ask, silent-without-token contract as the plan ask. Never throws.
+      if (linkedInDraft && this.deps.secrets) {
+        const draftText = extractLinkedInDraft(finalText);
+        if (draftText) {
+          void maybeAskDraftApproval(
+            { db: this.deps.db, secrets: this.deps.secrets },
+            linkedInDraft,
+            draftText,
+          );
+        }
+      }
       bus.publish(run.id, {
         seq,
         type: 'run.completed',

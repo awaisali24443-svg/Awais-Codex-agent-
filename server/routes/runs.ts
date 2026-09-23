@@ -37,6 +37,7 @@ import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { EventBus, StreamEvent } from '../events.js';
 import type { RunExecutor } from '../executor.js';
+import type { SecretsStore } from '../settings.js';
 import { budgetSnapshot } from '../budget.js';
 import { listArtifacts } from '../artifacts.js';
 import { BUCKET_FOR_KIND, acceptRun, estimateRunCost, type AcceptResult } from '../accept.js';
@@ -65,6 +66,7 @@ export interface RunRouteDeps {
   bus: EventBus;
   executor: RunExecutor;
   config: AppConfig;
+  secrets: SecretsStore;
 }
 
 const MAX_PROMPT_CHARS = 8_000;
@@ -160,7 +162,7 @@ function sendAccepted(res: Response, result: AcceptResult, config: AppConfig, br
 }
 
 export function createRunRoutes(deps: RunRouteDeps): Router {
-  const { db, bus, executor, config } = deps;
+  const { db, bus, executor, config, secrets } = deps;
   const router = Router();
 
   // ---- create a run -------------------------------------------------------
@@ -203,7 +205,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
 
     // Same rules as the phone: one task at a time, one budget, one code path.
     const result = await acceptRun(
-      { db, executor, config },
+      { db, executor, config, secrets },
       {
         prompt,
         kind,
@@ -355,7 +357,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     );
 
     const result = await acceptRun(
-      { db, executor, config },
+      { db, executor, config, secrets },
       {
         prompt: run.prompt,
         kind: run.kind,

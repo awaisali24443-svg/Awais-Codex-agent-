@@ -283,3 +283,56 @@ export async function markDraftFailed(db: Db, draftId: string, error: string): P
     error.slice(0, 500),
   ]);
 }
+
+export type PublishDraftResult =
+  | { status: 'published'; urn: string }
+  | { status: 'already' }
+  | { status: 'not_found' }
+  | { status: 'not_connected' | 'token_expired' | 'failed'; message: string };
+
+/**
+ * Publish a pending draft — the shared core behind the web Publish button
+ * and the WhatsApp "yes" reply. Only a 'pending' draft can move: a second
+ * call (a replayed message, a double-tap) lands on 'already' instead of
+ * posting twice. A failed publish marks the draft failed, exactly as the
+ * web route always did.
+ */
+export async function publishLinkedInDraft(
+  db: Db,
+  masterKey: string,
+  draftId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<PublishDraftResult> {
+  const rows = await db.query<{ id: string; text: string; status: string }>(
+    `SELECT id, text, status FROM linkedin_drafts WHERE id = $1`,
+    [draftId],
+  );
+  const draft = rows[0];
+  if (!draft) return { status: 'not_found' };
+  if (draft.status !== 'pending') return { status: 'already' };
+
+  let token = null;
+  try {
+    token = await loadLinkedInToken(db, masterKey);
+  } catch {
+    token = null;
+  }
+  if (!token) {
+    return { status: 'not_connected', message: 'Connect LinkedIn in Settings first.' };
+  }
+  if (token.expiresAt.getTime() <= Date.now()) {
+    return {
+      status: 'token_expired',
+      message: 'The LinkedIn connection expired (tokens last ~60 days). Reconnect in Settings.',
+    };
+  }
+  try {
+    const urn = await publishTextPost(token.accessToken, token.memberUrn, draft.text, fetchImpl);
+    await markDraftPublished(db, draft.id, urn);
+    return { status: 'published', urn };
+  } catch (err) {
+    const message = (err as Error).message;
+    await markDraftFailed(db, draft.id, message);
+    return { status: 'failed', message };
+  }
+}

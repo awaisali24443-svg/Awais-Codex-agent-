@@ -276,7 +276,7 @@ export function createApp(deps: AppDeps): Express {
     });
   });
 
-  app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config }));
+  app.use('/api', createRunRoutes({ db, bus: deps.bus, executor: deps.executor, config, secrets: deps.secrets }));
   app.use('/api', createReminderRoutes({ db }));
   app.use(
     '/api',
