@@ -27,6 +27,7 @@ import {
   DIGEST_TIMEZONE,
   maybeSendMorningDigest,
 } from './whatsapp/morningdigest.js';
+import { maybeSendBreakageAlerts } from './whatsapp/alerts.js';
 
 /**
  * Pick the engine.
@@ -259,6 +260,31 @@ async function boot(): Promise<void> {
     console.log('[boot] morning digest: on (daily 07:30 Asia/Karachi)');
   } else {
     console.log('[boot] morning digest: off — set MORNING_DIGEST=true to get the 07:30 summary');
+  }
+
+  // ---- breakage alerts ------------------------------------------------------
+  // A WhatsApp message the moment something important breaks: the poller dies
+  // or stops unexpectedly, the engine API key is rejected, or the day's task
+  // budget is spent. One message per incident per day, a direct send, never a
+  // run — it costs zero of the daily task budget. Silent until the WhatsApp
+  // token is connected. The tick lives in this process like every other
+  // scheduler: the one-poller rule means no second process may own the
+  // timing.
+  if (config.breakageAlertsEnabled) {
+    const tickAlerts = async (): Promise<void> => {
+      try {
+        await maybeSendBreakageAlerts({ db, config, secrets, whatsapp });
+      } catch (err) {
+        // The alert never takes anything else down with it.
+        console.error('[alerts] tick failed:', (err as Error).message);
+      }
+    };
+    const alertsTimer = setInterval(() => void tickAlerts(), 60_000);
+    alertsTimer.unref?.();
+    void tickAlerts();
+    console.log('[boot] breakage alerts: on (60s tick)');
+  } else {
+    console.log('[boot] breakage alerts: off — set BREAKAGE_ALERTS=true to get WhatsApp breakage alerts');
   }
 
   const server = app.listen(config.port, '0.0.0.0', () => {

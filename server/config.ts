@@ -81,6 +81,15 @@ export interface AppConfig {
    */
   morningDigestEnabled: boolean;
   /**
+   * Whether breakage alerts go out on WhatsApp when something important
+   * breaks: the poller dies, the engine API key is rejected, or the day's
+   * task budget is spent. On by default: it is a direct send, costs zero of
+   * the daily run budget, fires at most once per incident per day, and stays
+   * silent until the WhatsApp token is connected. Set BREAKAGE_ALERTS=false
+   * to turn it off.
+   */
+  breakageAlertsEnabled: boolean;
+  /**
    * 'key'  - the API needs a session, obtained once from a ?k= link.
    * 'open' - no check at all. Public internet plus a spendable daily quota.
    */
@@ -303,6 +312,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       (env.SCHEDULER_ENABLED ?? '').trim().toLowerCase(),
     ),
     morningDigestEnabled: readBool(env.MORNING_DIGEST, true),
+    breakageAlertsEnabled: readBool(env.BREAKAGE_ALERTS, true),
     authMode,
     accessKey,
     dailyRunBudget,

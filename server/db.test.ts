@@ -59,6 +59,7 @@ describe('migrations', () => {
     const expected = [
       'artifacts',
       'branches',
+      'breakage_alert_log',
       'budgets',
       'conversations',
       'google_tokens',
