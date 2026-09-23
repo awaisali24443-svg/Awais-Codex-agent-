@@ -401,6 +401,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 /* Retry / edit-prompt button group on a finished task's notice. */
 .run-btns { margin-left: auto; display: flex; gap: 8px; flex: none; align-items: center; }
 .run-btns .retry-btn { margin-left: 0; }
+/* The same actions under a historical run's answer. Left-aligned, unlike the
+   live card's right-aligned notice group. */
+.run-btns.history-actions { margin: 6px 0 18px; }
 .send {
   margin-left: auto;
   display: grid; place-items: center;

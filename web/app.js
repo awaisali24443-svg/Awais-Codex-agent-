@@ -262,9 +262,18 @@ async function openConversation(id) {
 
   try {
     const { messages } = await api(`/api/conversations/${id}/messages`);
+    let lastPrompt = null;
     for (const message of messages) {
-      if (message.role === 'user') renderAsk(message.content);
-      else if (message.role === 'assistant') renderAnswer(message.content);
+      if (message.role === 'user') {
+        lastPrompt = message.content;
+        renderAsk(message.content);
+      } else if (message.role === 'assistant') {
+        renderAnswer(message.content);
+        // History used to be read-only: a finished run viewed later had no
+        // retry/edit. Attach the same actions the live card gets, driven by
+        // the run's status — the server stays the source of truth.
+        if (message.runId) renderHistoryActions(message.runId, message.runStatus, lastPrompt);
+      }
     }
   } catch { /* silent */ }
 
@@ -686,6 +695,55 @@ function editPrompt(card) {
   el.send.disabled = false;
   el.prompt.focus();
   el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
+}
+
+/* Retry / edit on a run viewed from history. The live card already gets these
+   the moment a run finishes; without them a refreshed or reopened conversation
+   is read-only. Retry posts to the same endpoint (completed/failed only —
+   cancelled runs offer edit instead), edit loads the original prompt back into
+   the composer so it can be tweaked and re-sent. */
+function renderHistoryActions(runId, runStatus, prompt) {
+  const row = document.createElement('div');
+  row.className = 'run-btns history-actions';
+  if (runStatus === 'completed' || runStatus === 'failed') {
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'retry-btn';
+    retryBtn.textContent = 'Retry this task';
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      try {
+        const { run } = await api(`/api/runs/${runId}/retry`, { method: 'POST' });
+        state.conversationId = run.conversationId;
+        row.remove();
+        setRunning(true);
+        attach(run.id, 0);
+        loadConversations();
+        loadBudget();
+      } catch (err) {
+        retryBtn.disabled = false;
+        toast(err.body?.message || err.message || 'Could not retry.');
+      }
+    });
+    row.append(retryBtn);
+  }
+  if (prompt) {
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'retry-btn';
+    editBtn.textContent = 'Edit prompt';
+    editBtn.addEventListener('click', () => {
+      el.prompt.value = prompt;
+      autoGrow();
+      el.send.disabled = false;
+      el.prompt.focus();
+      el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
+    });
+    row.append(editBtn);
+  }
+  if (!row.children.length) return;
+  el.thread.append(row);
+  scrollToEnd();
 }
 
 /* The button group appended to a finished run's notice. */

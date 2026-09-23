@@ -495,17 +495,19 @@ export async function listMessages(
   db: Db,
   conversationId: string,
   limit = 200,
-): Promise<Array<{ id: string; role: string; content: string; runId: string | null; createdAt: string }>> {
+): Promise<Array<{ id: string; role: string; content: string; runId: string | null; runStatus: string | null; createdAt: string }>> {
   const rows = await db.query<{
     id: string;
     role: string;
     content: string;
     run_id: string | null;
+    run_status: string | null;
     created_at: Date | string;
   }>(
-    `SELECT id, role, content, run_id, created_at FROM messages
-      WHERE conversation_id = $1
-      ORDER BY created_at ASC, id ASC
+    `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, m.created_at
+       FROM messages m LEFT JOIN runs r ON r.id = m.run_id
+      WHERE m.conversation_id = $1
+      ORDER BY m.created_at ASC, m.id ASC
       LIMIT $2`,
     [conversationId, Math.min(Math.max(limit, 1), 500)],
   );
@@ -514,6 +516,7 @@ export async function listMessages(
     role: r.role,
     content: r.content,
     runId: r.run_id,
+    runStatus: r.run_status,
     createdAt: toIso(r.created_at) as string,
   }));
 }
