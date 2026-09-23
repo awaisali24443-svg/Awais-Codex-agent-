@@ -126,6 +126,26 @@ export function withLinkedIn(prompt: string): string {
   return LINKEDIN_RE.test(prompt) ? LINKEDIN_CONTRACT + prompt : prompt;
 }
 
+const GOOGLE_RE = /gmail|e-?mail|inbox|calendar|meeting|schedule|appointment/i;
+const GOOGLE_CONTRACT = `[You can read the operator's Google account during this mission — Gmail and Calendar, read-only.
+To read, put a fenced block anywhere in your answer:
+\`\`\`gmail-search
+{"query": "from:boss subject:invoice", "max": 5}
+\`\`\`
+\`\`\`gmail-read
+{"id": "<a message id from a search>"}
+\`\`\`
+\`\`\`calendar-list
+{"days": 7}
+\`\`\`
+The server runs each request and returns the results in a follow-up message — never invent email or calendar content, only report what the reads return. Keep requests minimal: search first, then read only the messages you actually need.]
+
+`;
+
+export function withGoogle(prompt: string, connected: boolean): string {
+  return connected && GOOGLE_RE.test(prompt) ? GOOGLE_CONTRACT + prompt : prompt;
+}
+
 const MILESTONE_RE = /^step\s+(\d{1,2})\s*(?:\/|of)\s*(\d{1,2})\s*(done)?\s*[:\-–—]?\s*(.*)$/i;
 
 /**

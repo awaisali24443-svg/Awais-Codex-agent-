@@ -698,6 +698,23 @@ function handleEvent(card, event, data) {
       break;
     }
 
+    case 'google.read': {
+      // The access log: what the agent read from the operator's Google
+      // account. The content itself travels inside the mission, not here.
+      const kindLabel = {
+        'gmail-search': 'Searched Gmail',
+        'gmail-read': 'Read an email',
+        'calendar-list': 'Checked Calendar',
+      }[data.kind] || 'Google read';
+      const detail = [data.query, data.summary].filter(Boolean).join(' — ');
+      addStep(card, `google:${card.steps.children.length}`, {
+        name: data.ok === false ? `${kindLabel} failed` : kindLabel,
+        detail,
+        icon: data.ok === false ? 'warn' : 'eye',
+      });
+      break;
+    }
+
     case 'thinking.snapshot':
       card.thinkingText = data.text || '';
       card.thinkingTail = '';
@@ -1301,6 +1318,7 @@ function attach(runId, after = 0) {
     'artifact', 'memory.recall', 'plan.milestone',
     'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
     'research.started', 'research.pass', 'verification.checked',
+    'google.read',
     'run.completed', 'run.failed', 'run.cancelled',
   ];
   for (const name of durable) {
@@ -1674,6 +1692,7 @@ async function loadSettings() {
     state.settings = await api('/api/settings');
     renderSettings();
     renderLinkedInCard();
+    renderGoogleCard();
   } catch { /* the app works without the panel */ }
 }
 
@@ -1740,6 +1759,72 @@ async function renderLinkedInCard() {
       await renderLinkedInCard();
     } catch (err) {
       toast(err.body?.message || err.message || 'LinkedIn action failed.');
+      btn.disabled = false;
+    }
+  });
+}
+
+/* The Google connection card in Settings (Gmail + Calendar, read-only).
+   Plain language, because the OAuth dance has one hard step the operator
+   must do by hand: create the Google Cloud OAuth client and paste the two
+   keys below (they appear as regular secret rows). The redirect URL printed
+   here must be registered in the client byte-for-byte. Google's refresh
+   tokens keep this connected indefinitely — reconnect only if access is
+   revoked at Google. */
+async function renderGoogleCard() {
+  const host = document.getElementById('google-card');
+  if (host) host.remove();
+  let status;
+  try {
+    status = await api('/api/google/status');
+  } catch { return; }
+  const card = document.createElement('div');
+  card.className = 'secret';
+  card.id = 'google-card';
+
+  let stateText = 'not connected';
+  let stateClass = 'bad';
+  if (!status.clientConfigured) {
+    stateText = 'add your app keys below first';
+  } else if (status.connected) {
+    stateText = `connected as ${status.memberEmail || 'you'}`;
+    stateClass = 'ok';
+  }
+
+  const appNote = status.clientConfigured
+    ? ''
+    : `<p class="setting-note">One-time setup (about 15 minutes, only you can do it): at <b>console.cloud.google.com</b> create a project, enable the <b>Gmail API</b> and the <b>Google Calendar API</b>, then create an <b>OAuth client ID</b> (Web application) and register this redirect URL exactly:<br><code>${escapeHtml(status.callbackUrl || '')}</code><br>then paste the Client ID and Client Secret into the two secret rows below. Leave the app in Testing mode with your own Google account as a test user — Google shows an "unverified app" warning you can safely pass for your own account.</p>
+       <p class="setting-note">The agent can only <b>read</b> your mail and calendar — it cannot send mail or create events.</p>`;
+
+  card.innerHTML = `
+    <div class="secret-main">
+      <span class="secret-name">Google (Gmail + Calendar)</span>
+      <span class="secret-state ${stateClass}">${escapeHtml(stateText)}</span>
+    </div>
+    <div class="secret-actions">
+      ${status.clientConfigured && !status.connected
+        ? '<button class="primary" data-go="connect">Connect Google</button>' : ''}
+      ${status.connected ? '<button data-go="refresh">Refresh</button><button class="danger" data-go="disconnect">Disconnect</button>' : ''}
+    </div>
+    ${appNote}`;
+  el.settingsBody.append(card);
+
+  card.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-go]');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      if (btn.dataset.go === 'connect') {
+        const { url } = await api('/api/google/authorize');
+        window.open(url, '_blank', 'noopener');
+        toast('Finish the Google login in the new tab, then tap Refresh.');
+      } else if (btn.dataset.go === 'disconnect') {
+        await api('/api/google/disconnect', { method: 'POST' });
+        toast('Google disconnected.');
+      }
+      await renderGoogleCard();
+    } catch (err) {
+      toast(err.body?.message || err.message || 'Google action failed.');
       btn.disabled = false;
     }
   });

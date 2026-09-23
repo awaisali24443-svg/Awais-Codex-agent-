@@ -107,6 +107,8 @@ export const SECRET_NAMES = [
   'github_pat',
   'linkedin_client_id',
   'linkedin_client_secret',
+  'google_client_id',
+  'google_client_secret',
 ] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
 
@@ -160,6 +162,20 @@ export const KNOWN_SECRETS: Record<SecretName, SecretSpec> = {
     description: 'From the same LinkedIn developer app, Auth tab. Stored encrypted, never shown again.',
     envVar: 'LINKEDIN_CLIENT_SECRET',
     usedBy: 'server/routes/linkedin.ts',
+  },
+  google_client_id: {
+    name: 'google_client_id',
+    label: 'Google OAuth Client ID',
+    description: 'From your Google Cloud project (console.cloud.google.com), OAuth client (Web application). Needed for the Connect Google button (Gmail + Calendar, read-only).',
+    envVar: 'GOOGLE_CLIENT_ID',
+    usedBy: 'server/routes/google.ts',
+  },
+  google_client_secret: {
+    name: 'google_client_secret',
+    label: 'Google OAuth Client Secret',
+    description: 'From the same Google Cloud OAuth client. Stored encrypted, never shown again.',
+    envVar: 'GOOGLE_CLIENT_SECRET',
+    usedBy: 'server/routes/google.ts',
   },
 };
 
@@ -365,6 +381,8 @@ export function createStores(db: Db, config: AppConfig): {
       github_pat: config.githubToken,
       linkedin_client_id: config.linkedInClientId,
       linkedin_client_secret: config.linkedInClientSecret,
+      google_client_id: config.googleClientId,
+      google_client_secret: config.googleClientSecret,
     }),
   };
 }

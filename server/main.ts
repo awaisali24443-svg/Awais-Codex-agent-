@@ -119,6 +119,10 @@ async function boot(): Promise<void> {
     db,
     bus,
     engine: createEngine(config, secrets),
+    // Google reads: sealed token + client credentials for the executor's
+    // read-request loop. Absent in tests, where the capability stays off.
+    masterKey: config.masterKey,
+    secrets,
     // The WhatsApp "done" ping for web-started runs. Fire-and-forget: the
     // module never throws, and the executor guards the hook anyway.
     onTerminal: (run, outcome) => {

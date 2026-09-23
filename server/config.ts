@@ -27,6 +27,9 @@ export interface AppConfig {
   /** LinkedIn developer app credentials, for the "post as me" integration. Optional: Settings can supply them. */
   linkedInClientId: string;
   linkedInClientSecret: string;
+  /** Google OAuth client credentials, for the Gmail/Calendar (read-only) integration. Optional: Settings can supply them. */
+  googleClientId: string;
+  googleClientSecret: string;
   /** Override the WhatsApp Agent Platform base (tests point this at a fake). */
   whatsappApiBase: string;
 
@@ -280,6 +283,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     githubToken: (env.GITHUB_TOKEN ?? '').trim(),
     linkedInClientId: (env.LINKEDIN_CLIENT_ID ?? '').trim(),
     linkedInClientSecret: (env.LINKEDIN_CLIENT_SECRET ?? '').trim(),
+    googleClientId: (env.GOOGLE_CLIENT_ID ?? '').trim(),
+    googleClientSecret: (env.GOOGLE_CLIENT_SECRET ?? '').trim(),
     whatsappApiBase: (env.WHATSAPP_API_BASE ?? '').trim(),
     engineName: engineRaw === 'scripted' ? 'scripted' : 'antigravity',
     antigravityAgent: (env.ANTIGRAVITY_AGENT ?? 'antigravity-preview-09-2026').trim(),

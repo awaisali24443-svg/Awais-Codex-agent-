@@ -61,6 +61,7 @@ describe('migrations', () => {
       'branches',
       'budgets',
       'conversations',
+      'google_tokens',
       'linkedin_drafts',
       'linkedin_tokens',
       'memories',

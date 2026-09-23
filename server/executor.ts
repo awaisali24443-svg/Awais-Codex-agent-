@@ -27,13 +27,21 @@
  */
 import type { Db } from './db.js';
 import type { EventBus } from './events.js';
+import type { SecretsStore } from './settings.js';
 import { EngineAbortedError, EngineError, type Engine, type EngineContext, type EngineResult, type LogLevel } from './engine/types.js';
 import { emitEvent, finishRun, setRunStatus, buildHistoryBlock, type PlanStep, type Run, type TerminalStatus } from './runs.js';
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
-import { parseMilestone, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
+import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
 import { extractUrls, checkSources } from './sources.js';
 import { recordLinkedInDraft } from './linkedin.js';
+import {
+  executeGoogleRead,
+  extractGoogleReadRequests,
+  loadGoogleToken,
+  type GoogleReadRequest,
+  type GoogleReadResult,
+} from './google.js';
 import {
   buildResumePreamble,
   formatTokens,
@@ -59,6 +67,15 @@ const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
 const MAX_RESEARCH_PASSES = 8;
 /** The last pass inside this window is spent synthesising, not digging. */
 const FINAL_SYNTHESIS_MS = 3 * 60_000;
+
+/**
+ * Google reads: the engine requests Gmail/Calendar data with fenced blocks;
+ * the server runs them (read-only, sealed token) and feeds the results back
+ * in follow-up passes. Capped rounds, so a chatty mission cannot loop on
+ * reads and burn the token budget.
+ */
+const MAX_GOOGLE_READ_ROUNDS = 3;
+const MAX_GOOGLE_READS_PER_ROUND = 5;
 
 function deepResearchFirstPrompt(mission: string, budgetMinutes: number): string {
   return (
@@ -134,6 +151,13 @@ export interface ExecutorDeps {
    * executor guards that anyway. Used for the WhatsApp "done" ping.
    */
   onTerminal?: (run: Run, outcome: TerminalStatus) => void;
+  /**
+   * Enables the Google read capability (Gmail/Calendar). Optional so tests
+   * can construct the executor without credentials; when absent the
+   * capability is simply off and missions run exactly as before.
+   */
+  masterKey?: string;
+  secrets?: SecretsStore;
 }
 
 /**
@@ -513,11 +537,27 @@ export class RunExecutor {
         // on the wire so the engine follows the approved steps instead of
         // re-planning; the stored prompt is untouched.
         const planPreamble = run.plan?.length ? buildPlanPreamble(run.plan) : '';
-        const mission = resumePreamble + planPreamble + withLinkedIn(withPlanning(memory.prompt));
+        // Google reads ride on the wire only when the account is actually
+        // connected — otherwise the contract would promise reads the server
+        // cannot perform and burn a pass finding that out.
+        const googleConnected = await this.googleConnected();
+        const mission =
+          resumePreamble +
+          planPreamble +
+          withGoogle(withLinkedIn(withPlanning(memory.prompt)), googleConnected);
         result =
           run.deepResearch && (run.researchBudgetMinutes ?? 0) > 0
             ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking)
-            : await engine.run(mission, ctx);
+            : await this.runWithGoogleReads(
+                run,
+                mission,
+                ctx,
+                controller,
+                writer,
+                text,
+                thinking,
+                googleConnected,
+              );
       } finally {
         // Runs even on failure: whatever the engine produced is still worth
         // keeping, and the closing event must not overtake it.
@@ -755,6 +795,136 @@ export class RunExecutor {
 
     if (!result) {
       throw new EngineError('The research mission produced no output.', 'truncated');
+    }
+    return result;
+  }
+
+  /**
+   * Whether this executor can perform Google reads right now: credentials
+   * wired, client configured, and a token stored. Checked once per mission,
+   * before the engine ever sees the prompt.
+   */
+  private async googleConnected(): Promise<boolean> {
+    const { masterKey, secrets } = this.deps;
+    if (!masterKey || !secrets) return false;
+    if (!secrets.get('google_client_id') || !secrets.get('google_client_secret')) return false;
+    try {
+      return (await loadGoogleToken(this.deps.db, masterKey)) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /** One read request, executed and logged as a `google.read` event. */
+  private async runGoogleRead(
+    writer: DurableWriter,
+    request: GoogleReadRequest,
+  ): Promise<GoogleReadResult> {
+    const { db, masterKey, secrets } = this.deps;
+    const outcome = await executeGoogleRead({
+      db,
+      masterKey: masterKey ?? '',
+      clientId: secrets?.get('google_client_id') ?? '',
+      clientSecret: secrets?.get('google_client_secret') ?? '',
+      request,
+    }).catch(
+      (err: Error): GoogleReadResult => ({
+        request,
+        ok: false,
+        summary: 'read failed',
+        detail: err.message,
+      }),
+    );
+    // The access log: what was read, not the content — the content travels
+    // to the engine in the follow-up pass, and the final answer carries it.
+    await writer.write('google.read', {
+      kind: request.kind,
+      ok: outcome.ok,
+      summary: outcome.summary,
+      query:
+        request.kind === 'gmail-search'
+          ? request.query
+          : request.kind === 'calendar-list'
+            ? `next ${request.days} day(s)`
+            : undefined,
+    });
+    return outcome;
+  }
+
+  /**
+   * The standard (non-deep-research) engine path with Google reads. After
+   * each pass, fenced read requests in the engine's answer are executed and
+   * the results fed back in a follow-up pass — at most MAX_GOOGLE_READ_ROUNDS
+   * rounds, so the loop always terminates. Streaming buffers are shared
+   * across passes, so the token-budget watchdog keeps watching the total.
+   */
+  private async runWithGoogleReads(
+    run: Run,
+    mission: string,
+    ctx: EngineContext,
+    controller: AbortController,
+    writer: DurableWriter,
+    text: FieldBuffer,
+    thinking: FieldBuffer,
+    googleConnected: boolean,
+  ): Promise<EngineResult> {
+    const engine = this.deps.engine;
+    let previousInteractionId = run.previousInteractionId;
+    let environmentId = run.environmentId;
+
+    // One engine pass; returns the pass's own text (the longer of the
+    // authoritative result and what this pass streamed).
+    const pass = async (prompt: string): Promise<{ result: EngineResult; passText: string }> => {
+      const before = text.text.length;
+      const result = await engine.run(prompt, { ...ctx, previousInteractionId, environmentId });
+      previousInteractionId = result.interactionId ?? previousInteractionId;
+      environmentId = result.environmentId ?? environmentId;
+      await this.persistContinuation(run.id, previousInteractionId, environmentId);
+      const streamed = text.text.slice(before);
+      const authoritative = result.text ?? '';
+      return {
+        result,
+        passText: authoritative.length >= streamed.length ? authoritative : streamed,
+      };
+    };
+
+    let { result, passText } = await pass(mission);
+    if (!googleConnected) return result;
+
+    // Requests already executed are never run twice, even if the engine
+    // repeats them in a later answer.
+    const seen = new Set<string>();
+    for (let round = 0; round < MAX_GOOGLE_READ_ROUNDS; round++) {
+      if (controller.signal.aborted) break;
+      const requests = extractGoogleReadRequests(passText)
+        .filter((request) => {
+          const key = JSON.stringify(request);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, MAX_GOOGLE_READS_PER_ROUND);
+      if (requests.length === 0) break;
+
+      const lines: string[] = [];
+      for (const request of requests) {
+        const outcome = await this.runGoogleRead(writer, request);
+        lines.push(
+          `- ${request.kind}: ${outcome.ok ? 'OK' : 'FAILED'} — ${outcome.summary}\n${outcome.detail}`,
+        );
+      }
+      await text.final();
+      await thinking.final();
+      await writer.idle();
+      ctx.log(`Google reads: ${requests.length} request(s), round ${round + 1}.`);
+
+      const followUp = await pass(
+        `[Google reads — the results of your requests. Report only what is here; never invent email or calendar content.]\n` +
+          lines.join('\n') +
+          `\n\nContinue the mission with these results. Request more reads only if you need different data.`,
+      );
+      result = followUp.result;
+      passText = followUp.passText;
     }
     return result;
   }

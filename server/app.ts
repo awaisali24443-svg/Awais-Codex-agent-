@@ -22,6 +22,7 @@ import { createArtifactRoutes } from './routes/artifacts.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createGitHubRoutes } from './routes/github.js';
 import { createLinkedInRoutes } from './routes/linkedin.js';
+import { createGoogleRoutes } from './routes/google.js';
 import type { SecretsStore, SettingsStore } from './settings.js';
 import {
   checkAccessKey,
@@ -268,6 +269,7 @@ export function createApp(deps: AppDeps): Express {
   // LinkedIn "post as me": OAuth connect, draft filing, one-tap publish.
   // Mounted behind requireSession like the rest of /api.
   app.use('/api', createLinkedInRoutes({ db, secrets: deps.secrets, config }));
+  app.use('/api', createGoogleRoutes({ db, secrets: deps.secrets, config }));
   app.use(
     '/api',
     createSettingsRoutes({
