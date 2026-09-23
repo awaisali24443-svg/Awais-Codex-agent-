@@ -142,6 +142,15 @@ export function createApp(deps: AppDeps): Express {
         : apiKey
           ? `key present (${deps.secrets.source('gemini_api_key')})`
           : 'no key configured';
+    // Auth is a guard worth reporting on, not just booting with: an open
+    // deployment on the public internet is a spent daily quota, and it is
+    // silent in production (the boot warning only fires in dev/test).
+    checks.auth =
+      config.authMode === 'open'
+        ? config.isProduction
+          ? 'open in PRODUCTION — anyone who finds the URL can run missions and spend the daily quota'
+          : 'open — no access check (fine locally, not on the public internet)'
+        : 'key — an access key or session is required';
 
     res.status(ready ? 200 : 503).json({
       ok: ready,
@@ -151,10 +160,38 @@ export function createApp(deps: AppDeps): Express {
     });
   });
 
-  // The sign-in screen. Same secret as the ?k= link — one key, three ways to
-  // present it (form, link, header) — so there is only ever one thing to
-  // rotate or get wrong.
+  // The sign-in screen posts here. It is public for the obvious reason that it
+  // is how you get a session in the first place. Brute-forceable by design
+  // (one key, three ways to present it), so it is throttled per IP: the key
+  // is long, but an unthrottled guess loop would still burn the error log and
+  // CPU on timing-safe compares.
+  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const LOGIN_WINDOW_MS = 60_000;
+  const LOGIN_MAX_ATTEMPTS = 10;
   app.post('/api/auth/login', (req: Request, res: Response) => {
+    const ip = req.ip ?? 'unknown';
+    const now = Date.now();
+    const seen = loginAttempts.get(ip);
+    if (!seen || seen.resetAt <= now) {
+      loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    } else {
+      seen.count += 1;
+      if (seen.count > LOGIN_MAX_ATTEMPTS) {
+        res.status(429).json({
+          error: 'too_many_attempts',
+          message: 'Too many sign-in attempts — wait a minute and try again.',
+        });
+        return;
+      }
+    }
+    // The map would grow forever on a hostile internet; expired entries are
+    // worthless, so drop them whenever a new one is recorded.
+    if (loginAttempts.size > 1000) {
+      for (const [key, entry] of loginAttempts) {
+        if (entry.resetAt <= now) loginAttempts.delete(key);
+      }
+    }
+
     const provided = (req.body as { key?: unknown; password?: unknown } | undefined);
     const value = provided?.key ?? provided?.password;
 
@@ -172,19 +209,24 @@ export function createApp(deps: AppDeps): Express {
     res.json({ ok: true });
   });
 
+  // ---- authenticated API --------------------------------------------------
+
+  app.use('/api', requireSession(config));
+
+  /**
+   * Lives behind requireSession on purpose: reaching here means authenticated,
+   * or that the deployment is in open mode, which the client is told about.
+   * A public probe that always answered `authenticated: true` made the client
+   * enter the app on a 200 and then flash back to the sign-in screen when the
+   * real API calls 401'd.
+   */
   app.get('/api/auth/session', (req: Request, res: Response) => {
-    // requireSession runs first, so reaching here means authenticated (or that
-    // the deployment is in open mode, which the client is told about).
     res.json({
       authenticated: true,
       authMode: config.authMode,
       requestId: (req as Request & { id?: string }).id,
     });
   });
-
-  // ---- authenticated API --------------------------------------------------
-
-  app.use('/api', requireSession(config));
 
   app.get('/api/status', (_req: Request, res: Response) => {
     res.json({
@@ -212,7 +254,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api', createReminderRoutes({ db }));
   app.use('/api', createBriefingRoutes({ db }));
   app.use('/api', createMemoryRoutes({ db }));
-  app.use('/api', createArtifactRoutes({ db, config }));
+  app.use('/api', createArtifactRoutes({ db, config, secrets: deps.secrets }));
   // GitHub export, rebuilt for v2 on the secrets store. Mounted behind
   // requireSession like the rest of /api — v1 left these routes
   // unauthenticated, which let anyone push to the operator's GitHub.

@@ -21,6 +21,7 @@ import { Router, type Request, type Response } from 'express';
 
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
+import type { SecretsStore } from '../settings.js';
 import {
   artifactsRoot,
   getArtifact,
@@ -34,6 +35,14 @@ import { getRun } from '../runs.js';
 export interface ArtifactRouteDeps {
   db: Db;
   config: AppConfig;
+  /**
+   * Read at request time, never captured. A key rotated in Settings must work
+   * for downloads immediately — resolving it here keeps the route store-first
+   * with the env var as fallback, exactly like the engine in main.ts. Kept
+   * optional so existing callers (tests) that pass only config keep working;
+   * the real wiring in app.ts always passes it.
+   */
+  secrets?: SecretsStore;
   /** Injected in tests, which point the sandbox download at a local fake. */
   fetchImpl?: typeof fetch;
 }
@@ -44,8 +53,13 @@ function safeFilename(name: string): string {
   return cleaned || 'artifact';
 }
 
-export function createArtifactRoutes({ db, config, fetchImpl }: ArtifactRouteDeps): Router {
+export function createArtifactRoutes({ db, config, secrets, fetchImpl }: ArtifactRouteDeps): Router {
   const router = Router();
+
+  // Store-first, env fallback — the same resolution the engine uses, so a key
+  // rotated in Settings applies to downloads without a restart.
+  const resolveApiKey = () =>
+    secrets ? secrets.get('gemini_api_key') : config.geminiApiKey;
 
   router.get('/runs/:id/artifacts', async (req: Request, res: Response) => {
     const run = await getRun(db, req.params.id);
@@ -94,7 +108,7 @@ export function createArtifactRoutes({ db, config, fetchImpl }: ArtifactRouteDep
     const materialized = await materializeArtifact(
       {
         db,
-        apiKey: config.geminiApiKey,
+        apiKey: resolveApiKey(),
         environmentId: run?.environmentId ?? '',
         fetchImpl,
       },
@@ -168,7 +182,7 @@ export function createArtifactRoutes({ db, config, fetchImpl }: ArtifactRouteDep
     const materialized = await materializeArtifact(
       {
         db,
-        apiKey: config.geminiApiKey,
+        apiKey: resolveApiKey(),
         environmentId: run?.environmentId ?? '',
         fetchImpl,
       },
