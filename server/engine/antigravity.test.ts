@@ -465,6 +465,51 @@ describe('failures', () => {
     );
   });
 
+  test('a persistent 500 fails fast instead of parking the mission slot', async () => {
+    let calls = 0;
+    fake = await startFake((_req, res) => {
+      calls += 1;
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'internal error' } }));
+    });
+    const engine = engineFor(fake.base);
+    const { ctx } = makeCtx();
+
+    const started = Date.now();
+    await assert.rejects(
+      () => engine.run('always broken', ctx),
+      (err: EngineError) => err.errorType === 'upstream_error' && err.retryable === true,
+    );
+    const elapsed = Date.now() - started;
+
+    assert.equal(calls, 3, 'initial attempt plus two short retries, then fail honestly');
+    assert.ok(
+      elapsed < 10_000,
+      `must fail fast — took ${elapsed}ms (the old patient loop waited 65s first)`,
+    );
+  });
+
+  test('a transient 503 is retried and the mission continues', async () => {
+    let calls = 0;
+    fake = await startFake((_req, res) => {
+      calls += 1;
+      if (calls <= 2) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'temporarily unavailable' } }));
+        return;
+      }
+      sse(res, happyStream());
+    });
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    const result = await engine.run('flaky upstream', ctx);
+
+    assert.equal(calls, 3, 'two 503s get short retries, the third attempt runs');
+    assert.equal(result.interactionId, 'int_abc');
+    assert.ok(seen.logs.some((l) => /retry/i.test(l)), 'the retries are logged');
+  });
+
   test('a dead sandbox falls back to a fresh one', async () => {
     let calls = 0;
     fake = await startFake((_req, res, body) => {

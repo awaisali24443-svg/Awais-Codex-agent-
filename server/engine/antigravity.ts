@@ -73,7 +73,7 @@ export interface AntigravityEngineOptions {
   idleTimeoutMs?: number;
   /** How long to keep polling a stored interaction after a cut stream. */
   recoveryAttempts?: number;
-  /** Backoff before the single retry-safe retry. Tests set 0. */
+  /** Backoff between short retries of a retryable non-rate-limit 5xx. Tests set 0. */
   retryDelayMs?: number;
   /**
    * First wait when Google rate-limits the mission (TPM). Doubles each time,
@@ -102,6 +102,13 @@ const DEFAULT_RATE_LIMIT_BASE_DELAY_MS = 65_000;
 const DEFAULT_RATE_LIMIT_MAX_WAIT_MS = 30 * 60_000;
 /** Longest single wait between rate-limit retries. TPM windows clear per minute. */
 const MAX_RATE_LIMIT_DELAY_MS = 2 * 60_000;
+/**
+ * Short retries for a retryable failure that is NOT a rate limit (500/502/503/
+ * 504…). A persistent 500 must fail fast instead of inheriting the 30-minute
+ * rate-limit wait budget and parking the only mission slot: initial attempt
+ * plus this many quick re-posts, then the mission fails honestly.
+ */
+const MAX_UPSTREAM_RETRIES = 2;
 
 /** Shape of one streamed event. Every field optional: the schema is a beta. */
 interface StreamPayload {
@@ -308,20 +315,38 @@ export class AntigravityEngine implements Engine {
       }
     }
 
-    // The patient loop: TPM rate limits are waited out, not failed. A rejected
+    // The patient loop: ONLY a 429 rate limit is waited out — the TPM window
+    // clears every minute, so a bounded wait almost always succeeds. A rejected
     // request cost nothing, so re-posting it is safe. A 429 that lands
     // mid-stream resumes the stored interaction instead of restarting the
     // mission, so the agent continues where it stopped and no token is ever
     // paid twice. Only a spent daily quota fails fast — waiting cannot fix
     // that, and the run is recorded honestly instead of hanging the slot.
+    //
+    // Other retryable failures (500/502/503/504…) get a short, bounded retry:
+    // a persistent 500 must fail fast, not park the only mission slot behind
+    // the 30-minute rate-limit wait budget.
     let waits = 0;
     let waitedMs = 0;
+    let upstreamRetries = 0;
     for (;;) {
       if (!response.ok) {
         const error = classify(response.status, await failureDetail());
-        if (error.retryable) {
+        if (error.errorType === 'rate_limited' && error.retryable) {
           waitedMs = await this.waitForRateLimit(emit, controller, touch, waits, waitedMs);
           waits += 1;
+          await repost();
+          continue;
+        }
+        if (error.retryable && upstreamRetries < MAX_UPSTREAM_RETRIES) {
+          upstreamRetries += 1;
+          emit.log(
+            `Upstream error ${response.status} — retry ${upstreamRetries}/${MAX_UPSTREAM_RETRIES} ` +
+              `in ${Math.round(this.retryDelayMs / 1000)}s: ${await failureDetail()}`,
+            'warn',
+          );
+          // Abortable sleep: an operator cancel during the backoff still lands fast.
+          await this.sleep(this.retryDelayMs, controller.signal);
           await repost();
           continue;
         }
