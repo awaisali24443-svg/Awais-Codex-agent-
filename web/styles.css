@@ -1,36 +1,21 @@
 /* ==========================================================================
-   Codex — visual language borrowed from the Manus mobile app: warm cream
-   paper, an ink-dark serif wordmark, one oversized rounded composer, and pill
-   chips. Everything else is whitespace.
+   Codex — components.
+
+   Visual language borrowed from warm minimalism (Claude's register): warm
+   paper, an ink-dark serif wordmark, one oversized rounded composer, and
+   pill chips. Everything else is whitespace.
+
+   All design tokens live in theme.css (loaded before this file): color,
+   type, spacing, radius, shadow. This file defines no palette of its own —
+   hardcoded literals below are only for things tokens must not touch
+   (external web content, glyph geometry).
 
    Deliberately no web fonts. A webfont is a network request on every cold
    load, and this app has to feel instant on a phone with a metered package.
    The system serif is genuinely good on both iOS and Android.
    ========================================================================== */
 
-:root {
-  --paper:      #f5f3ef;
-  --surface:    #ffffff;
-  --surface-2:  #eceae4;
-  --ink:        #1b1a18;
-  --ink-soft:   #45423c;
-  --muted:      #8b857a;
-  --line:       #e4e0d7;
-  --line-soft:  #efebe3;
-  --danger:     #b3261e;
-  --ok:         #2e7d52;
-
-  --radius:     22px;
-  --radius-sm:  14px;
-  --radius-pill: 999px;
-
-  --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-}
+/* Tokens live in theme.css. Nothing here. */
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
@@ -41,8 +26,8 @@ html, body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 16px;
-  line-height: 1.55;
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
@@ -60,11 +45,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .brand-lg .brand-mark { width: 34px; height: 34px; }
 .wordmark {
   font-family: var(--serif);
-  font-size: 30px;
+  font-size: var(--text-2xl);
   letter-spacing: -0.01em;
   color: var(--ink);
 }
-.brand-lg .wordmark { font-size: 34px; }
+.brand-lg .wordmark { font-size: var(--text-3xl); }
 
 /* ---------------------------------------------------------------- login --- */
 
@@ -73,7 +58,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 .login-title {
   font-family: var(--serif);
-  font-weight: 400;
+  font-weight: var(--weight-normal);
   font-size: clamp(27px, 7.4vw, 34px);
   line-height: 1.28;
   letter-spacing: -0.015em;
@@ -86,7 +71,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .field { display: block; }
 .field input {
   width: 100%;
-  padding: 17px 20px;
+  padding: 17px var(--space-5);
   font: inherit;
   color: var(--ink);
   background: var(--surface-2);
@@ -100,9 +85,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 .cta {
   width: 100%;
-  padding: 17px 20px;
+  padding: 17px var(--space-5);
   font: inherit;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   color: var(--paper);
   background: var(--ink);
   border: 0;
@@ -115,18 +100,18 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .cta.ghost {
   color: var(--ink);
   background: var(--surface-2);
-  font-weight: 500;
-  padding: 14px 20px;
+  font-weight: var(--weight-medium);
+  padding: 14px var(--space-5);
 }
 
-.login-hint { margin: 4px 2px 0; font-size: 13.5px; color: var(--muted); }
+.login-hint { margin: var(--space-1) 2px 0; font-size: 13.5px; color: var(--muted); }
 .login-hint.bad { color: var(--danger); }
 
 /* --------------------------------------------------------------- topbar --- */
 
 .topbar {
   position: sticky; top: 0; z-index: 20;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--space-2);
   padding: calc(10px + var(--safe-top)) 10px 10px;
   background: color-mix(in srgb, var(--paper) 86%, transparent);
   backdrop-filter: saturate(1.4) blur(14px);
@@ -134,7 +119,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .topbar-mid { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; }
 .topbar-title {
-  font-size: 15px; font-weight: 500; color: var(--ink-soft);
+  font-size: 15px; font-weight: var(--weight-medium); color: var(--ink-soft);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
@@ -159,7 +144,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .icon-btn.sm { width: 34px; height: 34px; }
 .icon-btn svg { width: 21px; height: 21px; }
 .icon-btn:disabled { opacity: .35; cursor: default; }
-.icon-btn.listening { color: #e5484d; animation: micblink 1.1s ease-in-out infinite; }
+.icon-btn.listening { color: var(--recording); animation: micblink 1.1s ease-in-out infinite; }
 @keyframes micblink { 50% { opacity: .4; } }
 
 /* stop button: only visible while a task is running */
@@ -170,15 +155,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .stream {
   flex: 1; min-height: 0; overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 4px 18px 8px;
+  padding: var(--space-1) 18px var(--space-2);
   scroll-behavior: smooth;
 }
 .stream > * { max-width: 680px; margin-inline: auto; }
 
 .hero { padding: 12vh 0 0; text-align: center; }
 .hero-title {
-  font-family: var(--serif); font-weight: 400;
-  font-size: clamp(26px, 7vw, 33px); line-height: 1.3;
+  font-family: var(--serif); font-weight: var(--weight-normal);
+  font-size: clamp(26px, 7vw, 33px); line-height: var(--leading-tight);
   letter-spacing: -0.015em; color: var(--ink);
   margin: 30px 0 0;
 }
@@ -188,7 +173,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 /* a task the user sent */
 .ask {
   align-self: flex-end; max-width: 86%;
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
   background: var(--ink); color: var(--paper);
   border-radius: 20px 20px 6px 20px;
   font-size: 15.5px; line-height: 1.5;
@@ -197,43 +182,43 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 /* branch switcher: one pill per branch, visible only once a fork exists */
 .branch-bar {
-  display: flex; gap: 8px; padding: 8px 16px;
+  display: flex; gap: var(--space-2); padding: var(--space-2) var(--space-4);
   overflow-x: auto; border-bottom: 1px solid var(--line);
   background: var(--paper);
 }
 .branch-bar[hidden] { display: none; }
 .branch-pill {
-  flex: none; padding: 5px 13px; border-radius: 999px;
+  flex: none; padding: 5px 13px; border-radius: var(--radius-pill);
   border: 1px solid var(--line); background: transparent;
   font-size: 12.5px; color: var(--ink-soft); cursor: pointer;
 }
 .branch-pill.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
 /* per-message actions, Manus-style: small buttons on the message itself */
-.msg-actions { display: flex; gap: 6px; margin-top: 8px; }
+.msg-actions { display: flex; gap: 6px; margin-top: var(--space-2); }
 .ask .msg-actions { justify-content: flex-end; }
 .answer .msg-actions { justify-content: flex-start; }
 .msg-btn {
-  padding: 4px 11px; border-radius: 999px; font-size: 12px; line-height: 1.4;
+  padding: var(--space-1) 11px; border-radius: var(--radius-pill); font-size: 12px; line-height: 1.4;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft);
   cursor: pointer;
 }
 .msg-btn:hover { color: var(--ink); border-color: var(--ink-soft); }
 .msg-btn:disabled { opacity: .5; cursor: default; }
 .msg-btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-.ask .msg-btn { background: transparent; border-color: rgba(255,255,255,.4); color: inherit; }
+.ask .msg-btn { background: transparent; border-color: color-mix(in srgb, var(--paper) 45%, transparent); color: inherit; }
 .ask .msg-btn:hover { border-color: currentColor; color: inherit; }
 
 /* inline editor shown in place of the message being edited */
 .inline-editor textarea {
   width: 100%; box-sizing: border-box; resize: vertical;
-  font: inherit; padding: 8px 10px; border-radius: 8px;
+  font: inherit; padding: var(--space-2) 10px; border-radius: var(--radius-xs);
   border: 1px solid var(--ink-soft); background: var(--paper); color: var(--ink);
 }
-.inline-editor-btns { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
+.inline-editor-btns { display: flex; gap: var(--space-2); margin-top: var(--space-2); justify-content: flex-end; }
 .ask.editing { min-width: 60%; }
 /* the run card: thinking, steps, answer */
-.run { display: flex; flex-direction: column; gap: 12px; }
+.run { display: flex; flex-direction: column; gap: var(--space-3); }
 
 .thinking {
   border: 1px solid var(--line); border-radius: var(--radius-sm);
@@ -241,11 +226,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .thinking-head {
   display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 11px 14px; font: inherit; font-size: 14px;
+  padding: 11px 14px; font: inherit; font-size: var(--text-md);
   color: var(--ink-soft); background: transparent; border: 0;
   cursor: pointer; text-align: left;
 }
-.thinking-head .label { flex: 1; font-weight: 500; }
+.thinking-head .label { flex: 1; font-weight: var(--weight-medium); }
 .thinking-head .meta { font-size: 12.5px; color: var(--muted); }
 .thinking-chevron { width: 15px; height: 15px; color: var(--muted); transition: transform .18s; }
 .thinking[open] .thinking-chevron { transform: rotate(180deg); }
@@ -279,40 +264,40 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   color: var(--ink-soft); background: var(--paper);
 }
 .step-icon svg { width: 15px; height: 15px; }
-.step-body { flex: 1; min-width: 0; padding-bottom: 8px; }
-.step-name { font-size: 14px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.step-body { flex: 1; min-width: 0; padding-bottom: var(--space-2); }
+.step-name { font-size: var(--text-md); color: var(--ink-soft); overflow-wrap: anywhere; }
 .step-detail {
-  margin-top: 2px; font-family: var(--mono); font-size: 11.5px;
+  margin-top: 2px; font-family: var(--mono); font-size: var(--text-xs);
   color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 
 /* the answer */
 .answer {
-  font-size: 15.5px; line-height: 1.66; color: var(--ink);
+  font-size: 15.5px; line-height: var(--leading-relaxed); color: var(--ink);
   overflow-wrap: anywhere;
 }
-.answer p { margin: 0 0 12px; }
+.answer p { margin: 0 0 var(--space-3); }
 .answer p:last-child { margin-bottom: 0; }
 .answer h1, .answer h2, .answer h3 {
-  font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em;
-  margin: 20px 0 8px; line-height: 1.3;
+  font-family: var(--serif); font-weight: var(--weight-normal); letter-spacing: -0.01em;
+  margin: var(--space-5) 0 var(--space-2); line-height: var(--leading-tight);
 }
 .answer h1 { font-size: 23px; } .answer h2 { font-size: 20px; } .answer h3 { font-size: 17.5px; }
-.answer ul, .answer ol { margin: 0 0 12px; padding-left: 22px; }
+.answer ul, .answer ol { margin: 0 0 var(--space-3); padding-left: 22px; }
 .answer li { margin: 3px 0; }
 .answer code {
-  font-family: var(--mono); font-size: 13px;
+  font-family: var(--mono); font-size: var(--text-sm);
   background: var(--surface-2); padding: 1.5px 5px; border-radius: 5px;
 }
 .answer pre {
-  margin: 0 0 12px; padding: 13px 14px;
+  margin: 0 0 var(--space-3); padding: 13px 14px;
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius-sm); overflow-x: auto;
 }
 .answer pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.6; }
 .answer a { color: var(--ink); text-underline-offset: 2px; }
-.answer strong { font-weight: 600; }
+.answer strong { font-weight: var(--weight-semibold); }
 .caret {
   display: inline-block; width: 2px; height: 1.05em;
   background: var(--ink); vertical-align: text-bottom;
@@ -322,8 +307,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 .notice {
   display: flex; gap: 9px; align-items: flex-start;
-  padding: 12px 14px; border-radius: var(--radius-sm);
-  font-size: 14px; line-height: 1.5;
+  padding: var(--space-3) 14px; border-radius: var(--radius-sm);
+  font-size: var(--text-md); line-height: 1.5;
   background: var(--surface-2); color: var(--ink-soft);
 }
 .notice.bad { background: color-mix(in srgb, var(--danger) 8%, var(--paper)); color: var(--danger); }
@@ -338,11 +323,11 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .composer-wrap > * { max-width: 680px; margin-inline: auto; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 2px 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: 0 2px var(--space-3); }
 .chips.hide { display: none; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 14px; font: inherit; font-size: 13.5px; color: var(--ink-soft);
+  padding: var(--space-2) 14px; font: inherit; font-size: 13.5px; color: var(--ink-soft);
   background: var(--surface-2); border: 0; border-radius: var(--radius-pill);
   cursor: pointer; white-space: nowrap;
 }
@@ -350,51 +335,51 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .chip:active { background: var(--line); }
 
 .composer {
-  padding: 12px 14px 10px;
+  padding: var(--space-3) 14px 10px;
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
-  box-shadow: 0 1px 2px rgba(27, 26, 24, .04), 0 10px 30px -18px rgba(27, 26, 24, .3);
+  box-shadow: var(--shadow-md);
 }
 .composer textarea {
   width: 100%; max-height: 34vh; min-height: 26px;
-  font: inherit; font-size: 16px; line-height: 1.5; color: var(--ink);
+  font: inherit; font-size: var(--text-base); line-height: 1.5; color: var(--ink);
   background: transparent; border: 0; outline: none; resize: none;
   overflow-y: auto; padding: 0;
 }
 .composer textarea::placeholder { color: var(--muted); }
-.composer-row { display: flex; align-items: center; margin-top: 8px; }
+.composer-row { display: flex; align-items: center; margin-top: var(--space-2); }
 .composer-row .icon-btn { margin-left: -6px; }
 
 /* WhatsApp "done" ping toggle. Quiet by default; lights up only when checked,
    so an unchecked task never looks like it will make a sound. */
 .ping-toggle {
-  display: inline-flex; align-items: center; gap: 4px;
-  margin-left: 4px; padding: 6px 8px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  margin-left: var(--space-1); padding: 6px var(--space-2); border-radius: var(--radius-pill);
   color: var(--muted); font-size: 12px; cursor: pointer;
   border: 1px solid transparent; user-select: none;
 }
 .ping-toggle svg { width: 18px; height: 18px; }
 .ping-toggle input { position: absolute; opacity: 0; pointer-events: none; }
-.ping-toggle:has(input:checked) { color: #25d366; border-color: #25d36655; background: #25d36614; }
+.ping-toggle:has(input:checked) { color: var(--wa); border-color: color-mix(in srgb, var(--wa) 33%, transparent); background: color-mix(in srgb, var(--wa) 8%, transparent); }
 .ping-toggle:has(input:focus-visible) { outline: 2px solid var(--accent); }
 
 /* Deep-research mode picker: same pill language as the ping toggle, plus a
    duration select that only appears while the mode is on. */
 .research-toggle {
-  display: inline-flex; align-items: center; gap: 4px;
-  margin-left: 4px; padding: 6px 8px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  margin-left: var(--space-1); padding: 6px var(--space-2); border-radius: var(--radius-pill);
   color: var(--muted); font-size: 12px; cursor: pointer;
   border: 1px solid transparent; user-select: none;
 }
 .research-toggle svg { width: 18px; height: 18px; }
 .research-toggle input[type="checkbox"] { position: absolute; opacity: 0; pointer-events: none; }
-.research-toggle:has(input[type="checkbox"]:checked) { color: var(--ok); border-color: #2e7d5255; background: #2e7d5214; }
+.research-toggle:has(input[type="checkbox"]:checked) { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 33%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
 .research-toggle:has(input[type="checkbox"]:focus-visible) { outline: 2px solid var(--ok); }
 .research-toggle select,
 .research-toggle input[type="number"] {
   font: inherit; color: inherit; background: transparent;
-  border: 1px solid var(--line); border-radius: 8px; padding: 2px 4px;
+  border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 2px var(--space-1);
   max-width: 76px;
 }
 .research-toggle select option { color: initial; }
@@ -409,20 +394,20 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   background: var(--surface);
 }
 .plan-row {
-  display: flex; align-items: baseline; gap: 8px;
-  padding: 5px 0; font-size: 13px;
+  display: flex; align-items: baseline; gap: var(--space-2);
+  padding: 5px 0; font-size: var(--text-sm);
   border-bottom: 1px dashed var(--line);
 }
 .plan-row:last-child { border-bottom: none; }
 .plan-check {
-  width: 16px; height: 16px; flex: none; align-self: center;
+  width: var(--space-4); height: var(--space-4); flex: none; align-self: center;
   border: 1.5px solid var(--muted); border-radius: 50%;
 }
-.plan-row.done .plan-check { border-color: #25d366; background: #25d36622; }
+.plan-row.done .plan-check { border-color: var(--wa); background: color-mix(in srgb, var(--wa) 13%, transparent); }
 .plan-row.done .plan-check::after {
   content: ''; display: block;
-  width: 4px; height: 8px; margin: 2px 0 0 4.5px;
-  border: solid #25d366; border-width: 0 2px 2px 0;
+  width: var(--space-1); height: var(--space-2); margin: 2px 0 0 4.5px;
+  border: solid var(--wa); border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
 .plan-num { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; flex: none; }
@@ -430,24 +415,24 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 /* Plan preview actions: Approve / Edit under the proposed steps, and the
    inline inputs while the operator is editing the plan. */
-.plan-actions { display: flex; gap: 8px; padding: 10px 2px 4px; }
+.plan-actions { display: flex; gap: var(--space-2); padding: 10px 2px var(--space-1); }
 .plan-edit {
-  flex: 1; min-width: 0; font: inherit; font-size: 13px;
+  flex: 1; min-width: 0; font: inherit; font-size: var(--text-sm);
   color: var(--ink); background: var(--paper);
-  border: 1px solid var(--ink-soft); border-radius: 8px; padding: 4px 8px;
+  border: 1px solid var(--ink-soft); border-radius: var(--radius-xs); padding: var(--space-1) var(--space-2);
 }
 
 /* Retry button on a failed task's notice. */
 .retry-btn {
-  margin-left: auto; padding: 7px 14px; border-radius: 999px;
+  margin-left: auto; padding: 7px 14px; border-radius: var(--radius-pill);
   border: 1px solid var(--line); background: var(--surface);
-  color: var(--ink); font-size: 13px; cursor: pointer; flex: none;
+  color: var(--ink); font-size: var(--text-sm); cursor: pointer; flex: none;
 }
 .retry-btn:disabled { opacity: .5; cursor: default; }
 .retry-btn:not(:disabled):active { background: var(--surface-2); }
 
 /* Retry / edit-prompt button group on a finished task's notice. */
-.run-btns { margin-left: auto; display: flex; gap: 8px; flex: none; align-items: center; }
+.run-btns { margin-left: auto; display: flex; gap: var(--space-2); flex: none; align-items: center; }
 .run-btns .retry-btn { margin-left: 0; }
 /* The same actions under a historical run's answer. Left-aligned, unlike the
    live card's right-aligned notice group. */
@@ -465,26 +450,26 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .send[disabled] { opacity: .25; cursor: default; }
 
 .composer-note {
-  margin: 9px 4px 0; font-size: 12.5px; color: var(--muted); text-align: center;
+  margin: 9px var(--space-1) 0; font-size: 12.5px; color: var(--muted); text-align: center;
   min-height: 17px;
 }
 
 /* Pre-flight cost line: the estimate plus the optional per-task token cap. */
 .estimate-line {
-  display: inline-flex; align-items: center; gap: 8px;
+  display: inline-flex; align-items: center; gap: var(--space-2);
   font-size: 12px; color: var(--muted); white-space: nowrap;
 }
-.cap-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.cap-toggle { display: inline-flex; align-items: center; gap: var(--space-1); cursor: pointer; }
 .cap-toggle input {
-  width: 44px; padding: 2px 4px; font-size: 12px; border-radius: 6px;
-  border: 1px solid var(--line, #ddd); background: transparent; color: inherit;
+  width: 44px; padding: 2px var(--space-1); font-size: 12px; border-radius: 6px;
+  border: 1px solid var(--line); background: transparent; color: inherit;
 }
 
 /* --------------------------------------------------------------- drawer --- */
 
 .scrim {
   position: fixed; inset: 0; z-index: 40;
-  background: rgba(27, 26, 24, .32);
+  background: var(--scrim);
   backdrop-filter: blur(2px); opacity: 0; transition: opacity .22s;
 }
 .scrim.show { opacity: 1; }
@@ -493,7 +478,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   position: fixed; top: 0; bottom: 0; left: 0; z-index: 50;
   width: min(86vw, 340px);
   display: flex; flex-direction: column;
-  padding: calc(14px + var(--safe-top)) 16px calc(14px + var(--safe-bottom));
+  padding: calc(14px + var(--safe-top)) var(--space-4) calc(14px + var(--safe-bottom));
   background: var(--paper);
   border-right: 1px solid var(--line);
   transform: translateX(-102%);
@@ -504,31 +489,31 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .drawer-title { flex: 1; font-family: var(--serif); font-size: 21px; }
 
 .budget {
-  margin: 16px 0 6px; padding: 12px 14px;
+  margin: var(--space-4) 0 6px; padding: var(--space-3) 14px;
   background: var(--surface); border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm); font-size: 13px; color: var(--ink-soft);
+  border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--ink-soft);
 }
-.budget-bar { height: 4px; margin-top: 9px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.budget-bar { height: var(--space-1); margin-top: 9px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
 .budget-fill { height: 100%; background: var(--ink); border-radius: 2px; transition: width .3s; }
 .budget-fill.low { background: var(--danger); }
 
 /* ---- memory: what the agent has learned about you ---- */
 .memory {
-  margin: 6px 0 4px;
+  margin: 6px 0 var(--space-1);
   background: var(--surface); border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm); overflow: hidden;
 }
 .memory-head {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 11px 14px; font: inherit; font-size: 13px; color: var(--ink-soft);
+  display: flex; align-items: center; gap: var(--space-2); width: 100%;
+  padding: 11px 14px; font: inherit; font-size: var(--text-sm); color: var(--ink-soft);
   background: transparent; border: 0; cursor: pointer;
 }
 .memory-title { flex: 1; text-align: left; }
 .memory-chevron { width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 2; transition: transform .2s; }
 .memory-head[aria-expanded="true"] .memory-chevron { transform: rotate(180deg); }
-.memory-body { padding: 0 14px 12px; }
+.memory-body { padding: 0 14px var(--space-3); }
 .memory-item {
-  padding: 7px 0; font-size: 13px; color: var(--ink-soft); line-height: 1.45;
+  padding: 7px 0; font-size: var(--text-sm); color: var(--ink-soft); line-height: 1.45;
   border-top: 1px solid var(--line-soft);
 }
 .memory-item .tag {
@@ -539,15 +524,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .memory-forget {
   margin-top: 10px; padding: 7px 10px; width: 100%;
   font: inherit; font-size: 12.5px; color: var(--danger);
-  background: transparent; border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
+  background: transparent; border: 1px solid var(--line); border-radius: var(--radius-xs); cursor: pointer;
 }
 .memory-note { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 
 /* ---- artifact chips on a finished run ---- */
-.files { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.files { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 10px 0 2px; }
 .file {
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 8px 13px; font-size: 13px; color: var(--ink);
+  padding: var(--space-2) 13px; font-size: var(--text-sm); color: var(--ink);
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius-pill); cursor: pointer; text-decoration: none;
 }
@@ -558,21 +543,21 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 /* ---- live website preview overlay ---- */
 .preview-overlay {
   position: fixed; inset: 0; z-index: 70;
-  background: rgba(27, 26, 24, 0.55);
+  background: var(--overlay);
   display: flex; flex-direction: column;
-  padding: calc(var(--safe-top) + 12px) 12px calc(var(--safe-bottom) + 12px);
+  padding: calc(var(--safe-top) + 12px) var(--space-3) calc(var(--safe-bottom) + 12px);
 }
 .preview-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
   background: var(--surface); border: 1px solid var(--line); border-bottom: none;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0; padding: 10px 14px;
 }
 .preview-title {
-  font-size: 14px; color: var(--ink-soft);
+  font-size: var(--text-md); color: var(--ink-soft);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .preview-close {
-  flex: none; padding: 8px 14px; font-size: 13px; color: var(--ink);
+  flex: none; padding: var(--space-2) 14px; font-size: var(--text-sm); color: var(--ink);
   background: var(--surface-2); border: 1px solid var(--line);
   border-radius: var(--radius-pill); cursor: pointer;
 }
@@ -585,12 +570,12 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .convos {
   flex: 1; min-height: 0; overflow-y: auto;
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-  margin: 12px -6px 0;
+  margin: var(--space-3) -6px 0;
 }
 .convo {
   display: block; width: 100%; text-align: left;
-  padding: 11px 12px; margin-bottom: 2px;
-  font: inherit; font-size: 14px; color: var(--ink-soft);
+  padding: 11px var(--space-3); margin-bottom: 2px;
+  font: inherit; font-size: var(--text-md); color: var(--ink-soft);
   background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer;
 }
 .convo:active { background: var(--surface-2); }
@@ -599,10 +584,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .convo-title {
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.empty-note { padding: 14px 12px; font-size: 13.5px; color: var(--muted); }
+.empty-note { padding: 14px var(--space-3); font-size: 13.5px; color: var(--muted); }
 
 .drawer-foot {
-  margin-top: 10px; padding: 12px;
+  margin-top: 10px; padding: var(--space-3);
   font: inherit; font-size: 13.5px; color: var(--muted);
   background: transparent; border: 0; border-top: 1px solid var(--line-soft);
   cursor: pointer;
@@ -614,10 +599,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   position: fixed; left: 50%; bottom: calc(96px + var(--safe-bottom));
   transform: translate(-50%, 8px); z-index: 60;
   max-width: min(88vw, 420px);
-  padding: 11px 16px;
-  font-size: 14px; color: var(--paper); background: var(--ink);
+  padding: 11px var(--space-4);
+  font-size: var(--text-md); color: var(--paper); background: var(--ink);
   border-radius: var(--radius-pill);
-  box-shadow: 0 12px 30px -12px rgba(27, 26, 24, .55);
+  box-shadow: var(--shadow-lg);
   opacity: 0; transition: opacity .2s, transform .2s;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
@@ -645,28 +630,28 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-size: 11px; color: var(--muted);
 }
 .setting-input {
-  width: 100%; padding: 8px 10px; font: inherit; font-size: 13.5px; color: var(--ink);
+  width: 100%; padding: var(--space-2) 10px; font: inherit; font-size: 13.5px; color: var(--ink);
   background: var(--surface-2); border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: var(--radius-xs);
 }
 .setting-input:focus { outline: none; border-color: var(--line); }
 
 .secret { padding: 9px 0; border-top: 1px solid var(--line-soft); }
-.secret-main { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.secret-name { font-size: 13px; color: var(--ink-soft); }
+.secret-main { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.secret-name { font-size: var(--text-sm); color: var(--ink-soft); }
 .secret-state { font-size: 11px; color: var(--muted); text-align: right; }
 .secret-state.ok { color: var(--ok); }
 .secret-state.bad { color: var(--danger); }
-.secret-actions { display: flex; gap: 8px; margin-top: 7px; }
+.secret-actions { display: flex; gap: var(--space-2); margin-top: 7px; }
 .secret-actions button {
   flex: 1; padding: 7px 10px; font: inherit; font-size: 12.5px; color: var(--ink-soft);
-  background: transparent; border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
+  background: transparent; border: 1px solid var(--line); border-radius: var(--radius-xs); cursor: pointer;
 }
 .secret-actions button.primary { color: var(--surface); background: var(--ink); border-color: var(--ink); }
 .secret-actions button.danger { color: var(--danger); }
 .secret-input {
-  width: 100%; margin-top: 7px; padding: 8px 10px; font: inherit; font-size: 13px;
-  background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 9px;
+  width: 100%; margin-top: 7px; padding: var(--space-2) 10px; font: inherit; font-size: var(--text-sm);
+  background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: var(--radius-xs);
 }
 .secret-input:focus { outline: none; border-color: var(--line); }
 .setting-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }

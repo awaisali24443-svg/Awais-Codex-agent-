@@ -7,9 +7,20 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <title>Codex</title>
+<script>
+/* Theme before first paint: avoids a light flash for dark-mode users.
+   The toggle lives in app.js; this only reads the saved choice. */
+try {
+  var __pref = localStorage.getItem('codex-theme') || 'system';
+  var __dark = __pref === 'dark' ||
+    (__pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (__dark) document.documentElement.dataset.theme = 'dark';
+} catch (e) { /* private mode: stay light */ }
+</script>
 <link rel="manifest" href="/manifest.json" />
 <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/theme.css" />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -53,6 +64,9 @@
     </button>
     <button class="icon-btn" id="btn-new" aria-label="New task">
       <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-theme" aria-label="Theme: system">
+      <svg viewBox="0 0 24 24"><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>
     </button>
   </header>
 

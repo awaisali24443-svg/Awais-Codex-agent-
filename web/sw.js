@@ -30,10 +30,11 @@
  * @property {(response: Promise<Response> | Response) => void} [respondWith]
  */
 
-const VERSION = 'codex-v2';
+const VERSION = 'codex-v3';
 const SHELL = [
   '/',
   '/index.html',
+  '/theme.css',
   '/styles.css',
   '/app.js',
   '/manifest.json',

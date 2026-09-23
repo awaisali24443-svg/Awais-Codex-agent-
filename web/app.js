@@ -2481,6 +2481,66 @@ function relativeTime(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/* ----------------------------------------------------------------- theme -- */
+
+/* Light / dark / system. The choice persists on this device; "system" follows
+   the OS. The attribute is set on <html> as data-theme before first paint by
+   the inline snippet in index.html — this only owns the toggle and OS
+   changes. Zero network cost: everything is local. */
+const THEME_KEY = 'codex-theme';
+const THEME_ICONS = {
+  light:
+    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>',
+  dark:
+    '<svg viewBox="0 0 24 24"><path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5Z"/></svg>',
+  system:
+    '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>',
+};
+
+function themePreference() {
+  try {
+    return localStorage.getItem(THEME_KEY) || 'system';
+  } catch {
+    return 'system';
+  }
+}
+
+function applyTheme(pref) {
+  const dark =
+    pref === 'dark' ||
+    (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', dark ? '#201e1b' : '#f5f3ef');
+  const btn = $('btn-theme');
+  if (btn) {
+    btn.setAttribute('aria-label', `Theme: ${pref} — tap to change`);
+    btn.innerHTML = THEME_ICONS[pref] || THEME_ICONS.system;
+  }
+}
+
+function initTheme() {
+  applyTheme(themePreference());
+  const btn = $('btn-theme');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const order = ['light', 'dark', 'system'];
+      const next = order[(order.indexOf(themePreference()) + 1) % order.length];
+      try {
+        localStorage.setItem(THEME_KEY, next);
+      } catch {
+        /* private mode: apply for this session only */
+      }
+      applyTheme(next);
+    });
+  }
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  const onChange = () => {
+    if (themePreference() === 'system') applyTheme('system');
+  };
+  if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onChange);
+}
+
 /* ------------------------------------------------------------------ pwa -- */
 
 /* Installable, and usable with no network. The worker itself is network-first,
@@ -2499,6 +2559,7 @@ function registerWorker() {
 
 (async function start() {
   registerWorker();
+  initTheme();
   setupVoiceInput();
   try {
     await api('/api/auth/session');

@@ -1,0 +1,121 @@
+/* ==========================================================================
+   Codex — design tokens.
+
+   The single source of truth for color, type, spacing, radius and shadow.
+   styles.css consumes these; it defines no palette of its own.
+
+   Themes: the default (light) is the warm paper the app has always worn.
+   [data-theme="dark"] is a warm charcoal in the Claude vein — never pure
+   black, so the warm accent and serif wordmark still feel at home.
+   The attribute is set on <html> by the snippet in index.html before first
+   paint, then owned by the toggle in app.js.
+
+   Deliberately no web fonts: a webfont is a network request on every cold
+   load, and this app has to feel instant on a metered package.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ---- color: warm minimal, Claude-inspired ---- */
+  --paper:      #f5f3ef;  /* app background            */
+  --surface:    #ffffff;  /* cards, composer, sheets   */
+  --surface-2:  #eceae4;  /* quiet fills, chips        */
+  --ink:        #1b1a18;  /* primary text, solid fills */
+  --ink-soft:   #45423c;  /* secondary text            */
+  --muted:      #8b857a;  /* tertiary text, hints      */
+  --line:       #e4e0d7;  /* borders                   */
+  --line-soft:  #efebe3;  /* hairlines                 */
+  --danger:     #b3261e;
+  --ok:         #2e7d52;
+  --accent:     #c2613e;  /* warm terracotta: focus, highlights */
+  --focus:      var(--accent);
+  --recording:  #e5484d;  /* mic-live indicator        */
+  --wa:         #25d366;  /* WhatsApp ping affordance  */
+
+  /* ---- elevation ---- */
+  --scrim:      rgba(27, 26, 24, .32);
+  --overlay:    rgba(27, 26, 24, .55);
+  --shadow-sm:  0 1px 2px rgba(27, 26, 24, .05);
+  --shadow-md:  0 1px 2px rgba(27, 26, 24, .04), 0 10px 30px -18px rgba(27, 26, 24, .3);
+  --shadow-lg:  0 12px 30px -12px rgba(27, 26, 24, .55);
+
+  /* ---- spacing scale ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+
+  /* ---- radius scale ---- */
+  --radius-xs:   8px;
+  --radius-sm:   14px;
+  --radius:      22px;
+  --radius-pill: 999px;
+
+  /* ---- type ---- */
+  --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-xs:   11.5px;
+  --text-sm:   13px;
+  --text-md:   14px;
+  --text-base: 16px;
+  --text-lg:   20px;
+  --text-xl:   24px;
+  --text-2xl:  30px;
+  --text-3xl:  34px;
+
+  --leading-tight:   1.3;
+  --leading-snug:    1.45;
+  --leading-normal:  1.55;
+  --leading-relaxed: 1.66;
+
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  /* ---- device ---- */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ---- dark: warm charcoal, same tokens, same shapes ---- */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --paper:      #201e1b;
+  --surface:    #2b2925;
+  --surface-2:  #38352f;
+  --ink:        #ede9df;
+  --ink-soft:   #cfc8b9;
+  --muted:      #a29b8c;
+  --line:       #45413a;
+  --line-soft:  #35322c;
+  --danger:     #e0786e;
+  --ok:         #6fbf8f;
+  --accent:     #d97757;
+  --recording:  #f0665e;
+  --wa:         #25d366;
+
+  --scrim:      rgba(0, 0, 0, .5);
+  --overlay:    rgba(0, 0, 0, .6);
+  --shadow-sm:  0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-md:  0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px -18px rgba(0, 0, 0, .6);
+  --shadow-lg:  0 12px 30px -12px rgba(0, 0, 0, .7);
+}
+
+/* ---- selection & focus: one language everywhere ---- */
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
