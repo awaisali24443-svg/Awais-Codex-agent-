@@ -307,7 +307,27 @@ and Tier 2 wait on a decision or on Google.
 
 ---
 
-## 5. Sources
+## 5. Shipped while this audit was being written
+
+Two things on this list are no longer gaps:
+
+* **The run timer and the spinner beside it** (`fcf9a2c`) — the clock is a
+  stopwatch seeded from the run's own start time, so a task that reconnects
+  three minutes in shows three minutes rather than restarting at zero, and the
+  phase sits on the panel head where the body cannot scroll it away. This was
+  the other half of the same request, and it is the AI-Studio pattern: the
+  spinner says the task is alive, the clock says how long it has been.
+* **Pictures as attachments** (gap 1) — the composer takes screenshots now,
+  read in the browser, carried in the request, shown as thumbnails, capped and
+  refused in sentences. The pixels are never written to a row.
+
+Still open from the list: the queue, steering, event triggers, deep links and
+the share sheet, cost at a glance, artifact history, projects, the eval loop,
+and connectors.
+
+---
+
+## 6. Sources
 
 Platform claims above, and where they were read (all fetched 2026-09-24):
 
