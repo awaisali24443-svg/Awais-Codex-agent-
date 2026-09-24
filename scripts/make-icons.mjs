@@ -57,6 +57,11 @@ for (const dir of ['web']) {
 
   await write(path.join(dir, 'pwa-192x192.png'), await mark(source, 192));
   await write(path.join(dir, 'pwa-512x512.png'), await mark(source, 512));
+  // The large one exists because the install prompt on Android and the app
+  // stores both ask for it, and a manifest that offers only a 512 gets
+  // "no icon available at 1024" — which is how an installable app looks
+  // unfinished at the exact moment somebody decides to install it.
+  await write(path.join(dir, 'pwa-1024x1024.png'), await mark(source, 1024));
   // Maskable: the launcher crops this to a circle or a squircle that reaches the
   // edges, so the badge's own rounded corners and hairline border would show up
   // inside the crop as a seam. The maskable copy therefore squares the corners,
