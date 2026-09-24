@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Codex — components.
+   WAIS — components.
 
    Visual language borrowed from warm minimalism (Claude's register): warm
    paper, an ink-dark serif wordmark, one oversized rounded composer, and
@@ -40,16 +40,88 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 /* ---------------------------------------------------------------- brand --- */
 
-.brand { display: flex; align-items: center; justify-content: center; gap: 10px; }
-.brand-mark { width: 30px; height: 30px; fill: var(--ink); stroke: none; }
-.brand-lg .brand-mark { width: 34px; height: 34px; }
+.brand { display: flex; align-items: center; justify-content: center; gap: 12px; }
 .wordmark {
   font-family: var(--serif);
   font-size: var(--text-2xl);
-  letter-spacing: -0.01em;
+  letter-spacing: 0.02em;   /* an acronym wants air, not the -0.01 of a word */
   color: var(--ink);
 }
 .brand-lg .wordmark { font-size: var(--text-3xl); }
+
+/* ---- the badge: the app's face, drawn once and animated everywhere -------- */
+
+/* The mark is its own artwork (web/icon.svg): a deep indigo-charcoal badge, a
+   warm ivory W, and a terracotta spark. It is deliberately *not* tinted by
+   currentColor — an app icon that changes colour with the theme stops being an
+   icon — so it keeps its palette in both themes and on the login screen. */
+.badge {
+  display: inline-flex; flex: none;
+  border-radius: 26%;
+  box-shadow: 0 1px 2px rgba(27, 26, 24, .18), 0 10px 26px -14px rgba(27, 26, 24, .55);
+}
+.badge-art { display: block; width: 100%; height: 100%; overflow: visible; }
+.badge-login { width: 44px; height: 44px; }
+.badge-hero  { width: 76px; height: 76px; }
+
+/* The welcome screen: the piece that has to feel alive without being a
+   screensaver. One pass on arrival — the badge rises, the W draws itself, the
+   spark lands — then only the spark breathes. ~1.1s in total. */
+.badge-hero .badge-w {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: badge-write .9s cubic-bezier(.2, .7, .25, 1) .12s forwards;
+}
+.badge-hero .badge-spark {
+  transform-origin: 50px 26.5px;
+  transform: scale(0);
+  animation: badge-spark .6s cubic-bezier(.2, 1.4, .4, 1) .62s forwards,
+             badge-twinkle 4.2s ease-in-out 1.6s infinite;
+}
+.badge-hero .badge-glow {
+  transform-origin: 70px 26px;
+  opacity: 0;
+  animation: badge-bloom 1.6s ease-out .2s forwards;
+}
+.badge-login .badge-w {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: badge-write .8s cubic-bezier(.2, .7, .25, 1) .1s forwards;
+}
+.badge-login .badge-spark { transform-origin: 50px 26.5px; animation: badge-spark .5s cubic-bezier(.2, 1.4, .4, 1) .5s backwards; }
+
+@keyframes badge-write { to { stroke-dashoffset: 0; } }
+@keyframes badge-spark { from { transform: scale(0) rotate(-35deg); } to { transform: scale(1) rotate(0); } }
+@keyframes badge-twinkle {
+  0%, 100% { opacity: 1; transform: scale(1) rotate(0); }
+  50%      { opacity: .78; transform: scale(.9) rotate(-6deg); }
+}
+@keyframes badge-bloom { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
+
+/* Arrival: everything on the welcome screen rises in behind the badge. */
+.hero .brand-lg { animation: rise-in .55s cubic-bezier(.2, .7, .25, 1) backwards; }
+.hero-name  { animation: rise-in .5s cubic-bezier(.2, .7, .25, 1) .1s backwards; }
+.hero-greet { animation: rise-in .5s cubic-bezier(.2, .7, .25, 1) .18s backwards; }
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Chips come in one after another rather than all at once — the staggered
+   arrival is what makes the empty screen read as "ready", not "loading". */
+.hero-chips .chip { animation: rise-in .4s cubic-bezier(.2, .7, .25, 1) backwards; }
+.hero-chips .chip:nth-child(1) { animation-delay: .26s; }
+.hero-chips .chip:nth-child(2) { animation-delay: .32s; }
+.hero-chips .chip:nth-child(3) { animation-delay: .38s; }
+.hero-chips .chip:nth-child(4) { animation-delay: .44s; }
+.hero-chips .chip:nth-child(5) { animation-delay: .50s; }
+.hero-chips .chip:nth-child(6) { animation-delay: .56s; }
+
+/* The login screen: the badge settles, then the form arrives under it. */
+.login .brand   { animation: rise-in .5s cubic-bezier(.2, .7, .25, 1) backwards; }
+.login-title    { animation: rise-in .5s cubic-bezier(.2, .7, .25, 1) .1s backwards; }
+.login-form     { animation: rise-in .5s cubic-bezier(.2, .7, .25, 1) .2s backwards; }
 
 /* ---------------------------------------------------------------- login --- */
 

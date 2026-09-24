@@ -17,7 +17,7 @@ import {
 } from './panel.js';
 
 /* ==========================================================================
-   Codex — client.
+   WAIS — client.
 
    The rule this file follows: the server owns the run, this only draws it.
    Nothing here is required for a task to finish, so a dropped connection, a
@@ -284,7 +284,7 @@ async function openConversation(id, branchId = null) {
   // says busy.
   el.topbarTitle.textContent = state.running
     ? 'Working…'
-    : (state.conversations.find((c) => c.id === id)?.title ?? 'Awais Codex');
+    : (state.conversations.find((c) => c.id === id)?.title ?? 'WAIS');
   showHero(false);
   renderThread([]);
 
@@ -1737,7 +1737,7 @@ function setRunning(on) {
   el.statusDot.hidden = !on;
   el.stop.hidden = !on;
   el.stop.disabled = false;
-  el.topbarTitle.textContent = on ? 'Working…' : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'Awais Codex');
+  el.topbarTitle.textContent = on ? 'Working…' : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'WAIS');
   el.send.disabled = on || !el.prompt.value.trim();
 }
 
@@ -2234,7 +2234,8 @@ async function renderLinkedInCard() {
   el.settingsBody.append(card);
 
   card.addEventListener('click', async (e) => {
-    const btn = e.target.closest('[data-li]');
+    const target = /** @type {HTMLElement} */ (e.target);
+    const btn = /** @type {HTMLButtonElement | null} */ (target.closest('[data-li]'));
     if (!btn) return;
     btn.disabled = true;
     try {
@@ -2300,7 +2301,8 @@ async function renderGoogleCard() {
   el.settingsBody.append(card);
 
   card.addEventListener('click', async (e) => {
-    const btn = e.target.closest('[data-go]');
+    const target = /** @type {HTMLElement} */ (e.target);
+    const btn = /** @type {HTMLButtonElement | null} */ (target.closest('[data-go]'));
     if (!btn) return;
     btn.disabled = true;
     try {
@@ -2719,7 +2721,7 @@ function newTask() {
   renderThread([]);
   el.branchBar.hidden = true;
   showHero(true);
-  el.topbarTitle.textContent = 'Awais Codex';
+  el.topbarTitle.textContent = 'WAIS';
   el.prompt.focus();
   renderConversations();
 }

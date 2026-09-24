@@ -35,7 +35,16 @@ function sha256Digest(content: Buffer): string {
  * "the build produced a file" so the artifact path can be exercised offline, and
  * a real, installable APK has to come out of the sandbox's own toolchain.
  */
-export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 'com.awaiscodex.app'): Buffer {
+/**
+ * The label Android shows under the icon, and the id it uses to decide whether
+ * this is the same app it already has installed.
+ *
+ * The id is deliberately left at the name the app has always shipped under:
+ * changing it makes Android treat an update as a *different* app, so the
+ * operator would end up with two copies on the phone. The label is what people
+ * read, so that follows the product.
+ */
+export function generateStandaloneApkBuffer(appName = 'WAIS', packageName = 'com.awaiscodex.app'): Buffer {
   // A minimal valid ZIP archive containing AndroidManifest.xml and DEX headers
   const manifestXml = `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -67,7 +76,7 @@ export function generateStandaloneApkBuffer(appName = 'HelloApp', packageName = 
   const metaInfMf = Buffer.from(
     [
       'Manifest-Version: 1.0',
-      'Created-By: Awais Codex Antigravity Build Tool',
+      'Created-By: WAIS Build Tool',
       '',
       'Name: AndroidManifest.xml',
       `SHA-256-Digest: ${sha256Digest(manifestBuf)}`,

@@ -2,7 +2,7 @@
  * Brand + third-party scrub tests.
  *
  * The product must look like it was made by Awais Ali: the brand is
- * "Awais Codex" everywhere a user can see, the credit names him, and no
+ * "WAIS" everywhere a user can see, the credit names him, and no
  * user-visible text mentions third-party products, models, or companies
  * (Antigravity, Manus, Gemini, OpenAI, ChatGPT, Claude, Meta, Muse...).
  *
@@ -112,15 +112,15 @@ function userVisibleText(raw: string, file: string): string {
 }
 
 describe('brand', () => {
-  test('page title is Awais Codex', () => {
-    assert.ok(read('web/index.html').includes('<title>Awais Codex</title>'));
+  test('page title is WAIS', () => {
+    assert.ok(read('web/index.html').includes('<title>WAIS</title>'));
   });
 
   test('login screen and header carry the brand', () => {
     const html = read('web/index.html');
-    assert.ok(html.includes('Leave it all to Awais Codex'));
-    assert.ok(html.includes('id="topbar-title">Awais Codex'));
-    assert.ok(html.includes('>Awais Codex</span>'));
+    assert.ok(html.includes('Leave it all to WAIS'));
+    assert.ok(html.includes('id="topbar-title">WAIS'));
+    assert.ok(html.includes('>WAIS</span>'));
   });
 
   test('credit names Awais Ali', () => {
@@ -128,14 +128,82 @@ describe('brand', () => {
     assert.ok(read('server/share.ts').includes('Created by Awais Ali'));
   });
 
-  test('manifest names the app Awais Codex', () => {
-    const manifest = JSON.parse(read('web/manifest.json')) as { name: string };
-    assert.equal(manifest.name, 'Awais Codex');
+  test('manifest names the app WAIS', () => {
+    const manifest = JSON.parse(read('web/manifest.json')) as { name: string; short_name: string };
+    assert.equal(manifest.name, 'WAIS');
+    assert.equal(manifest.short_name, 'WAIS');
   });
 
-  test('assistant and share pages are branded Awais Codex', () => {
-    assert.ok(read('web/welcome.js').includes('Awais Codex'));
-    assert.ok(read('server/share.ts').includes('Awais Codex'));
+  test('assistant and share pages are branded WAIS', () => {
+    assert.ok(read('web/welcome.js').includes('WAIS'));
+    assert.ok(read('server/share.ts').includes('WAIS'));
+  });
+
+  test('no surface still says the old name', () => {
+    for (const file of ['web/index.html', 'web/app.js', 'web/welcome.js', 'web/manifest.json', 'server/share.ts']) {
+      assert.ok(!read(file).includes('Awais Codex'), `${file} still shows the old name`);
+    }
+  });
+});
+
+/**
+ * The mark.
+ *
+ * One drawing, three consumers: the favicon (web/icon.svg), the PWA icons that
+ * are rendered from it (`npm run icons`), and the two inline copies on the
+ * login and welcome screens. These tests pin the parts that break silently —
+ * a missing gradient id renders black, a missing file is an invisible icon, and
+ * a duplicated id means whichever copy the browser sees first wins.
+ */
+describe('logo', () => {
+  test('web/icon.svg is the WAIS mark, not a placeholder', () => {
+    const svg = read('web/icon.svg');
+    assert.ok(svg.includes('viewBox="0 0 100 100"'), 'it is a square viewBox');
+    assert.ok(svg.includes('id="wais-mark"'), 'the monogram is a group the icon script can scale');
+    assert.ok(svg.includes('aria-label="WAIS"'));
+    // The three stops that make it the product's mark and not a generic glyph.
+    assert.ok(svg.includes('#c2613e'), 'the spark carries the accent colour');
+    assert.ok(svg.includes('#0f0e16'), 'the badge has its own dark ground');
+  });
+
+  test('the page loads the mark and the PWA icons', () => {
+    const html = read('web/index.html');
+    assert.ok(html.includes('href="/icon.svg"'));
+    assert.ok(html.includes('href="/apple-touch-icon.png"'));
+    const manifest = JSON.parse(read('web/manifest.json')) as {
+      icons: Array<{ src: string; purpose?: string }>;
+    };
+    const sources = manifest.icons.map((i) => i.src);
+    for (const src of ['/icon.svg', '/pwa-192x192.png', '/pwa-512x512.png', '/pwa-maskable-512x512.png']) {
+      assert.ok(sources.includes(src), `${src} is declared`);
+    }
+    assert.ok(manifest.icons.some((i) => i.purpose === 'maskable'), 'Android needs a maskable icon');
+    for (const icon of manifest.icons) {
+      assert.ok(fs.existsSync(path.join(ROOT, 'web', icon.src)), `${icon.src} exists`);
+    }
+  });
+
+  test('the logo is on the welcome screen, animated', () => {
+    const html = read('web/index.html');
+    assert.ok(html.includes('badge-hero'), 'the welcome screen shows the mark');
+    assert.ok(html.includes('class="hero-name">WAIS'), 'with the name under it');
+    const css = read('web/styles.css');
+    assert.ok(css.includes('@keyframes badge-write'), 'the W draws itself in');
+    assert.ok(css.includes('@keyframes badge-spark'), 'the spark lands');
+    assert.ok(css.includes('@keyframes rise-in'), 'the screen arrives, it does not appear');
+  });
+
+  test('every inline copy has its own gradient ids', () => {
+    const html = read('web/index.html');
+    const ids = [...html.matchAll(/id="(wa-[a-z-]+)"/g)].map((m) => m[1]);
+    assert.ok(ids.length >= 8, `expected both badge copies to define gradients, saw ${ids.length}`);
+    assert.equal(new Set(ids).size, ids.length, 'duplicate ids would make the second copy borrow the first');
+  });
+
+  test('the animation still stops for anyone who asked it to', () => {
+    const css = read('web/styles.css');
+    const reduce = css.slice(css.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
+    assert.ok(reduce.includes('animation-duration: .01ms'), 'motion is opt-out, always');
   });
 });
 

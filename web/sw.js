@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Codex — service worker.
+   WAIS — service worker.
 
    Deliberately tiny and deliberately dull, because the failure mode of a
    clever service worker is a user staring at a stale app that never updates.
