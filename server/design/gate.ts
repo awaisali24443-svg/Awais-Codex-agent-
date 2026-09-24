@@ -359,6 +359,56 @@ export function checkBuild(files: readonly BuiltFile[], directionId?: DirectionI
   return findings;
 }
 
+/**
+ * The gate's rules, as the checklist the builder runs on its own work.
+ *
+ * The server cannot read the files an engine builds in its own sandbox — they
+ * are pulled only when someone downloads or previews one — so the checks have
+ * to travel to the only place that can run them, which is the model that wrote
+ * the page. It is the same rule set as `checkBuild`, keyed by the same ids, so
+ * the checklist cannot quietly fall out of step with the checker: `Record<RuleId,
+ * …>` means adding a rule without a line here does not compile.
+ *
+ * It is written as an instruction, not a warning, and it is last thing on the
+ * wire before the operator's own words.
+ */
+export function gateChecklist(directionId?: DirectionId | string | null): string {
+  const direction = directionById(typeof directionId === 'string' ? directionId : undefined);
+  const floor = minDisplayRem(direction);
+  const lines = (Object.entries(CHECKLIST_LINES) as Array<[RuleId, (floorRem: number) => string]>)
+    .map(([, line], i) => `${i + 1}. ${line(floor)}`);
+  return [
+    'SELF-CHECK before you call this page finished — the same checks the server runs on a',
+    'finished build. Fix every one that fails, in the files you already wrote:',
+    ...lines,
+    'Then the passes: 320px with no horizontal scroll, every tap target at least 44px, the',
+    'tab order following the page, and every string read aloud.',
+  ].join('\n');
+}
+
+/**
+ * One line per rule, in the order they matter. A `Record` rather than a list, so
+ * a new rule that nobody wrote a checklist line for does not compile.
+ */
+const CHECKLIST_LINES: Record<RuleId, (floorRem: number) => string> = {
+  'tokens-missing': () =>
+    'tokens.css exists and declares the palette, the type scale, the spacing scale, radii, shadows and motion curves — and everything else uses var() from it.',
+  'colour-outside-tokens': () =>
+    'Search every file you wrote for "#" and "rgb(" outside tokens.css. Each hit is a defect: move the value into tokens or use var(). Colours inside generated SVG and data URIs are fine.',
+  'display-scale': (floorRem) =>
+    `The largest type on the page is at least ${floorRem}rem and reached with clamp(), so it scales. A heading the size of body text with a bold face on fails this check.`,
+  'reduced-motion': () =>
+    'Every transition and animation sits inside a prefers-reduced-motion guard, and the reduced page is complete — just still.',
+  'layout-transition': () =>
+    'Nothing animates width, height, top, left, right, margin or padding: transform and opacity only, and never transition: all.',
+  'placeholder-copy': () =>
+    'Every string is final and real — no lorem, no "coming soon", no "your headline here", no TODO, no href="#" dead links, no fake phone numbers.',
+  'generic-shape': () =>
+    'It is not the shape: a centred hero, three equal cards, and one gradient behind them, all at once. Asymmetry, or a different structure, is the fix.',
+  'no-imagery': () =>
+    'There is real visual content — an image, an SVG illustration, a generated gradient or mesh, a canvas — and the signature moment is built and working.',
+};
+
 /** True when the build may be called done. */
 export function gatePassed(findings: readonly Finding[]): boolean {
   return findings.length === 0;

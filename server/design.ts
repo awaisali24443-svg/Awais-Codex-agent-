@@ -37,6 +37,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { findDir } from './paths.js';
 import { directionById, recipeFor } from './design/directions.js';
+import { gateChecklist } from './design/gate.js';
 import type { DirectionId } from './design/types.js';
 
 /** Verbs that signal the operator wants something built or shaped. */
@@ -90,6 +91,12 @@ whole page in it: it is not a theme, and it does not blend with another.]
 
 `;
 
+const SELF_CHECK_PREAMBLE = `[Self-check — the same checks the server runs on a finished
+build. Run them on your own work before you say the page is done, and fix what
+fails in the files you already wrote.]
+
+`;
+
 /**
  * Prepend the direction's recipe and the craft guide, on the wire only, when
  * the task is UI-building. Non-UI tasks get the identical string back — zero
@@ -103,6 +110,12 @@ export function withDesignGuide(prompt: string, directionId?: DirectionId | stri
   return (
     (direction ? DIRECTION_PREAMBLE + recipeFor(direction) + '\n\n' : '') +
     (guide ? GUIDE_PREAMBLE + guide + '\n\n' : '') +
+    // The server cannot read what the engine builds in its own sandbox, so the
+    // gate's rules travel to the one thing that can run them: the model that
+    // wrote the page. Same rules, same ids — see `gateChecklist`.
+    SELF_CHECK_PREAMBLE +
+    gateChecklist(direction?.id) +
+    '\n\n' +
     prompt
   );
 }

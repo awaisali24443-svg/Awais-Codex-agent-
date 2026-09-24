@@ -697,6 +697,23 @@ export class RunExecutor {
       // their tail if the upstream stream is cut, and some engines only produce
       // the complete text at the end. Whichever is longer is the better record,
       // and the `final: true` snapshot below overwrites what the client drew.
+      // The scanner holds a tail while it could still turn into a reason, so a
+      // reason at the very end of the stream — with no newline after it — is
+      // still in that tail when the text stops. Finishing the scan flushes it:
+      // the reason becomes an event, and whatever is not a reason is text. The
+      // buffer still accepts an append after its final snapshot, and the final
+      // snapshot is written below, so nothing is dropped either way.
+      if (decisions) {
+        const tail = decisions.finish();
+        for (const why of tail.decisions) {
+          saidWhy.push(why);
+          await writer.write('decision', { text: why });
+        }
+        if (tail.text) {
+          text.append(tail.text);
+          bus.publishTransient(run.id, 'text.delta', { chunk: tail.text });
+        }
+      }
       const streamed = text.text;
       // The engine's own copy of the answer still carries the decision lines
       // it streamed past us — it wrote them, we lifted them out. Stripping

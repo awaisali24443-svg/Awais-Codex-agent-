@@ -10,6 +10,7 @@ import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   checkBuild,
+  gateChecklist,
   gatePassed,
   gateRepairPrompt,
   gateSummary,
@@ -231,5 +232,42 @@ describe('the display-size reader', () => {
   test('nonsense does not throw', () => {
     assert.equal(largestDisplayPx('.h { font-size: clamp(calc(1px + 2vw), var(--x), 3rem); }'), 48);
     assert.equal(largestDisplayPx(''), 0);
+  });
+});
+
+describe('the checklist the builder runs on its own work', () => {
+  test('it covers every rule the checker enforces', () => {
+    // The server cannot read the engine's sandbox, so these rules only ever run
+    // if the builder runs them. A rule with no line here is a rule that is
+    // never applied to anything.
+    const checklist = gateChecklist('nocturne');
+    const ruleIds: Array<Parameters<typeof gateChecklist>[0]> = [];
+    void ruleIds;
+    const ids = [
+      'tokens-missing',
+      'colour-outside-tokens',
+      'display-scale',
+      'reduced-motion',
+      'layout-transition',
+      'placeholder-copy',
+      'generic-shape',
+      'no-imagery',
+    ];
+    assert.equal((checklist.match(/^\d+\. /gm) ?? []).length, ids.length, 'one numbered line per rule');
+    for (const phrase of ['tokens.css', '#', 'rgb(', 'clamp()', 'prefers-reduced-motion', 'transform and opacity', 'lorem', 'three equal cards', 'SVG']) {
+      assert.ok(checklist.includes(phrase), `the checklist says ${phrase}`);
+    }
+  });
+
+  test('it carries the direction-specific threshold, not a generic one', () => {
+    assert.ok(gateChecklist('blueprint').includes('at least 1.5rem'), 'dense documentation is allowed small headings');
+    assert.ok(gateChecklist('kinetic').includes('at least 2.2rem'));
+    assert.ok(gateChecklist().includes('at least 2.2rem'), 'and without a direction it is strict');
+  });
+
+  test('it is an instruction, and the last thing before the operator is', () => {
+    const checklist = gateChecklist('atelier');
+    assert.ok(checklist.startsWith('SELF-CHECK before you call this page finished'));
+    assert.ok(!/\bmaybe\b|\btry to\b|\bconsider\b/i.test(checklist), 'no hedging: a gate is not a suggestion');
   });
 });

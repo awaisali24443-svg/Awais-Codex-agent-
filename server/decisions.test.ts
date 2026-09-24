@@ -162,3 +162,44 @@ describe('the stored answer never carries the protocol', () => {
     assert.equal(stripDecisions(''), '');
   });
 });
+
+describe('a reason at the very end of the stream', () => {
+  test('finish() releases what the scanner was still holding', () => {
+    // The scanner holds a tail while it could still become a reason. If the
+    // stream stops mid-tail, that hold has to be released or the last thing the
+    // model said is lost — which is exactly the likely case, a reason written
+    // last with no newline after it.
+    const scanner = new DecisionScanner();
+    assert.deepEqual(scanner.push('WHY: the price changes weekly'), { text: '', decisions: [] }, 'held, not yet a reason');
+    assert.deepEqual(scanner.finish(), { text: '', decisions: ['the price changes weekly'] });
+    // The decorated forms hold too, and land the same way.
+    const decorated = new DecisionScanner();
+    assert.deepEqual(decorated.push('**WHY:** because the second source disagrees'), { text: '', decisions: [] });
+    assert.deepEqual(decorated.finish().decisions, ['because the second source disagrees']);
+  });
+
+  test('a partial line that can never be a reason is text, not a swallow', () => {
+    // The hold is not "keep the last N characters": it is "hold while this
+    // could still turn into a reason line". A single letter that cannot, is
+    // handed straight back.
+    const scanner = new DecisionScanner();
+    scanner.push('W');
+    assert.equal(scanner.finish().text, 'W');
+  });
+
+  test('nothing is invented when the text already ended cleanly, and finishing twice is safe', () => {
+    const scanner = new DecisionScanner();
+    assert.equal(scanner.push('The price list has not changed\n').text, 'The price list has not changed\n');
+    assert.deepEqual(scanner.finish(), { text: '', decisions: [] });
+    assert.deepEqual(scanner.finish(), { text: '', decisions: [] });
+  });
+
+  test('a reason glued mid-sentence is prose, and prose is never cut on a guess', () => {
+    // The honest limit of the protocol: a reason the model refuses to put on
+    // its own line stays in the answer, because the alternative is a pattern
+    // hunt for "why:" that would eat real sentences like this one.
+    assert.equal(decisionInLine('Reading it through. WHY: the prices change weekly'), null);
+    const scanner = new DecisionScanner();
+    assert.equal(scanner.push('Reading it through. WHY: the prices change weekly').text, 'Reading it through. WHY: the prices change weekly');
+  });
+});

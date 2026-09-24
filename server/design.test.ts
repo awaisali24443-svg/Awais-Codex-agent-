@@ -71,6 +71,19 @@ describe('withDesignGuide — the art direction rides on the wire too', () => {
     assert.ok(wired.indexOf('ART DIRECTION') < wired.indexOf('Craft guide'), 'direction first, craft second');
   });
 
+  it('the self-check travels with the direction, because only the builder can run it', () => {
+    // The built files live in the engine's own sandbox and the server can only
+    // read them when someone downloads one, so the checks have to reach the
+    // model that wrote the page — and they have to be the last instruction
+    // before the operator's own words.
+    const prompt = 'Design a landing page for a music festival';
+    const wired = withDesignGuide(prompt, 'kinetic');
+    assert.ok(wired.includes('SELF-CHECK'), 'the checklist is on the wire');
+    assert.ok(wired.includes('at least 2.2rem'), 'with the direction-specific threshold');
+    assert.ok(wired.indexOf('SELF-CHECK') < wired.indexOf(prompt), 'and before the operator prompt');
+    assert.ok(wired.indexOf('ART DIRECTION') < wired.indexOf('SELF-CHECK'), 'direction, craft, then the check');
+  });
+
   it('a task that is not building a UI gets the identical string back, direction or not', () => {
     const prompt = 'Summarize this article about AI agents';
     assert.equal(withDesignGuide(prompt, 'kinetic'), prompt);
