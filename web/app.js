@@ -852,7 +852,16 @@ function createRunCard(runId = null) {
   const rail = document.createElement('div');
   rail.className = 'rail-slot';
 
-  card.append(thinking, plan, steps, rail, answer, sources, files);
+  // The steps belong to the thinking, so they live *inside* it: a step drawn
+  // outside the panel read as a second, competing box ("Still thinking —
+  // retrying the request." with a tick, sitting under the panel that was
+  // supposed to contain it). Folding the working away now folds all of it away,
+  // which is what the fold is for.
+  //
+  // The plan stays outside on purpose: it is a decision with an Approve button,
+  // and a decision must not be able to hide behind a collapsed panel.
+  thinking.append(steps);
+  card.append(thinking, plan, rail, answer, sources, files);
   el.thread.append(card);
   startRunClock(card);
   scrollToEnd();
@@ -4306,6 +4315,16 @@ el.panelBackdrop.addEventListener('click', closeOutputs);
 function newTask() {
   state.freshAnswer = false;
   closeDrawer();
+  // Starting a new task while one is running is not something the server allows
+  // (it answers 409 while a run is active), so this button must not pretend the
+  // running one is gone. It used to clear the thread, drop the stream and show
+  // the starter cards *while the task was still working* — the live card
+  // vanished, nothing was streaming, and the app looked idle and broken.
+  if (liveRun()) {
+    void ensureLiveRun({ announce: false });
+    toast('Your task is still running — showing it live. Stop it to start another.');
+    return;
+  }
   closeStream();
   state.conversationId = null;
   state.branchId = null;

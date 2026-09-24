@@ -412,6 +412,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* mission timeline: connected status nodes on a rail */
+/* The steps live inside the panel that is doing the work: under the thinking
+   text, over a hairline, so the panel reads as one box with a list in it. */
+.thinking > .steps {
+  padding: 11px 14px 13px;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 2px;
+}
 .steps { display: flex; flex-direction: column; }
 .step { display: flex; gap: 11px; padding: 2px 0; animation: rise var(--dur-2) var(--ease-out) both; }
 .step-rail { position: relative; width: 20px; flex: none; display: flex; justify-content: center; }

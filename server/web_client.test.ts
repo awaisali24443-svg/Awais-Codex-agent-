@@ -573,7 +573,8 @@ describe('a task that goes looking says where', () => {
     // In the buffered list too: a reconnect replays into the same rail.
     assert.ok(client.includes("'sources.seen', 'sources.checked',"), 'the event is durable, so it replays');
     assert.ok(client.includes('const rail = document.createElement'), 'the card has somewhere to put it');
-    assert.ok(client.includes('card.append(thinking, plan, steps, rail, answer, sources, files);'), 'above the answer, where the working is');
+    assert.ok(client.includes('card.append(thinking, plan, rail, answer, sources, files);'), 'above the answer, where the working is');
+    assert.ok(client.includes('thinking.append(steps);'), 'and the steps are part of the panel that is working');
   });
 
   test('it is a rail, not a transcript: newest first, few rows, one tap wider', () => {
@@ -781,6 +782,29 @@ describe('the card tells the truth while the model is silent', () => {
     assert.ok(engine.includes('heartbeatMs?: number;'), 'the interval is configurable for tests');
     assert.ok(engine.includes('Nothing from the model yet — ${silent}s in.'), 'the line is emitted from the read loop');
     assert.ok(engine.includes('clearInterval(beat);'), 'and the timer dies with the socket');
+  });
+});
+
+describe('the card is one box, and the page knows a task is running', () => {
+  test('the steps are inside the thinking panel', () => {
+    const client = app();
+    // The screenshot: a "Still thinking — retrying the request." step with a
+    // green tick, drawn outside the panel that was supposed to contain it.
+    assert.ok(client.includes('thinking.append(steps);'), 'the steps are appended to the panel');
+    assert.ok(client.includes('card.append(thinking, plan, rail, answer, sources, files);'), 'and the plan stays outside it');
+    // The plan carries the Approve button: a decision must never hide behind a
+    // collapsed panel.
+    assert.ok(!client.includes('thinking.append(plan'), 'the plan is not folded into the working');
+    const cssText = css();
+    assert.ok(cssText.includes('.thinking > .steps'), 'the steps are drawn as part of the panel');
+  });
+
+  test('"New task" cannot abandon a task that is still running', () => {
+    const client = app();
+    const fn = client.slice(client.indexOf('function newTask()'), client.indexOf("$('btn-new').addEventListener"));
+    assert.ok(fn.includes('if (liveRun()) {'), 'it checks for a live run first');
+    assert.ok(fn.includes('Your task is still running — showing it live.'), 'and says why it will not start another');
+    assert.ok(fn.indexOf('if (liveRun())') < fn.indexOf('renderThread([])'), 'before it clears the thread');
   });
 });
 
