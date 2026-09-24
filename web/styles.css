@@ -1337,3 +1337,48 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   /* Nothing is behind the panel when it is docked, so it never dims the page. */
   .app.docked .stream { padding-right: 0; }
 }
+
+/* ------------------------------------------------------------ ratings ---
+   Quiet by design: the thumbs sit at the end of the answer's action row like
+   every other action, and the reason chips only exist once he says something
+   was wrong. Nothing here should compete with the answer. */
+
+.feedback { display: flex; flex-direction: column; gap: var(--space-2); }
+.feedback-row { display: flex; align-items: center; }
+.feedback-status { margin-left: 6px; font-size: var(--text-xs); color: var(--muted); }
+.msg-btn.on { color: var(--accent); }
+.msg-btn.on svg { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
+.feedback-why {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3); margin-top: 2px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface);
+  animation: rise-in var(--dur-2) var(--ease-out) both;
+}
+.feedback-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.feedback-chip {
+  padding: 6px 12px; font: inherit; font-size: var(--text-sm);
+  color: var(--ink-soft); background: var(--surface-2);
+  border: 1px solid transparent; border-radius: var(--radius-pill); cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.feedback-chip:hover { background: color-mix(in srgb, var(--ink) 8%, var(--surface-2)); }
+.feedback-chip.on { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.feedback-note { display: flex; gap: var(--space-2); }
+.feedback-note input {
+  flex: 1; min-width: 0; padding: 8px 12px; font: inherit; font-size: var(--text-sm);
+  color: var(--ink); background: var(--surface-2);
+  border: 1px solid transparent; border-radius: var(--radius-sm); outline: none;
+}
+.feedback-note input:focus { background: var(--surface); border-color: var(--ink); }
+.feedback-note .msg-btn { opacity: 1; }
+.feedback-summary-row {
+  display: flex; align-items: baseline; gap: var(--space-2);
+  padding: var(--space-3); font-size: var(--text-sm);
+  border-top: 1px solid var(--line-soft);
+}
+.feedback-summary-row:first-child { border-top: none; }
+.feedback-summary-mark { flex: none; }
+.feedback-summary-body { flex: 1; min-width: 0; }
+.feedback-summary-task { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feedback-summary-why { color: var(--muted); font-size: var(--text-xs); }

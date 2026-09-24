@@ -126,6 +126,24 @@ export async function saveFeedback(
   return { ok: true, feedback: rowToFeedback(saved[0]) };
 }
 
+/**
+ * The answer a run produced, if it has been stored yet.
+ *
+ * The live card knows its run id, not the row id — the message is written when
+ * the run closes, and the operator may well tap the thumb before the app has
+ * fetched the thread again. Resolving it here means the rating is about the
+ * answer either way, and shows up on the stored message when it is reopened.
+ */
+export async function assistantMessageIdForRun(db: Db, runId: string): Promise<string | null> {
+  const rows = await db.query<{ id: string }>(
+    `SELECT id FROM messages
+      WHERE run_id = $1 AND role = 'assistant'
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [runId],
+  );
+  return rows[0]?.id ?? null;
+}
+
 /** Take a rating back — the operator tapped the thumb he had already tapped. */
 export async function clearFeedback(db: Db, messageId: string): Promise<boolean> {
   const result = await db.query(`DELETE FROM message_feedback WHERE message_id = $1 RETURNING message_id`, [messageId]);

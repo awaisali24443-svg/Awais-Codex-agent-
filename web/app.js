@@ -1121,6 +1121,8 @@ const ICONS = {
   spark: '<path d="M12 3v5M12 16v5M3 12h5M16 12h5"/>',
   eye: '<path d="M2 12s3.6-6.8 10-6.8S22 12 22 12s-3.6 6.8-10 6.8S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 5.5A2.5 2.5 0 0 0 12.5 3H6a2.5 2.5 0 0 0-2.5 2.5V12"/>',
+  thumbUp: '<path d="M7 21V10l4.5-7a2 2 0 0 1 3.5 1.4V9h3.6a2 2 0 0 1 2 2.4l-1.3 7A2 2 0 0 1 17.3 20H7Z"/><path d="M7 10H4v11h3"/>',
+  thumbDown: '<path d="M17 3v11l-4.5 7A2 2 0 0 1 9 19.6V15H5.4a2 2 0 0 1-2-2.4l1.3-7A2 2 0 0 1 6.7 4H17Z"/><path d="M17 14h3V3h-3"/>',
   pencil: '<path d="M4 20h4l10-10-4-4L4 16Z"/><path d="m14 6 4 4"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/>',
   play: '<path d="M7 4.5 19 12 7 19.5Z"/>',
@@ -1428,6 +1430,12 @@ function finishCard(card, outcome, data = {}) {
     noticeNode.append(runActionButtons(card, { retry: true, share: true, outputs: true, notice: noticeNode }));
   }
 
+  // A task the operator just watched deserves the same thumbs as a reopened
+  // one — the rating is about the answer, not about how it was reached.
+  if (outcome !== 'cancelled' && card.runId) {
+    feedbackControls(card.answer, { target: { runId: card.runId } });
+  }
+
   foldWork(card);
   renderSources(card);
   // If they are reading further up, this is news rather than a position.
@@ -1577,6 +1585,12 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
   // is always the operator's tap — never automatic.
   if (linkedInDraftId && message.role === 'assistant') row.append(linkedInPublishButton(linkedInDraftId));
 
+  // Ratings live on the answer, at the end of its action row: one tap, no
+  // dialog, and always in the same place.
+  if (message.role === 'assistant' && message.id) {
+    feedbackControls(node, { target: { messageId: message.id }, feedback: message.feedback ?? null });
+  }
+
   // When it was said, on the same line as what can be done with it.
   if (message.createdAt) {
     const time = document.createElement('span');
@@ -1588,6 +1602,169 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
   if (!row.children.length) return;
   node.append(row);
 }
+
+/* ============================ rating an answer ==========================
+   The research on this is unanimous and it is all about friction: the thumbs
+   sit inline with the answer, one tap, always available; the *reason* is asked
+   for only after a thumbs-down and from a short closed list, because a
+   countable reason is the only kind anything can be done with; and the free
+   text comes last, for the cases the codes do not fit. It is deliberately not
+   a dialog — a form that opens a modal kills response rate. */
+
+const FEEDBACK_REASONS = [
+  ['wrong', 'Wrong information'],
+  ['off_topic', 'Not what I asked for'],
+  ['too_long', 'Too long or too vague'],
+  ['broken', 'Something was broken'],
+  ['other', 'Something else'],
+];
+
+/**
+ * The thumbs, and the reason chips behind the thumbs-down.
+ *
+ * `target` is either a stored message ({ messageId }) or a run that has just
+ * finished ({ runId }) — the live card has the run, not the row, and the server
+ * knows which answer that run produced.
+ */
+function feedbackControls(node, options = {}) {
+  // Typed loosely on purpose: this is called with a message row in one place
+  // and a live run in another, and the checkJs pass reads the JSDoc, not the
+  // call sites.
+  const { target = {}, feedback = null } = /** @type {{ target?: { messageId?: string, runId?: string }, feedback?: { rating?: string, reason?: string, note?: string } | null }} */ (options);
+  const box = document.createElement('div');
+  box.className = 'feedback';
+
+  const row = document.createElement('div');
+  row.className = 'feedback-row';
+
+  const up = msgButton({ icon: 'thumbUp', title: 'Good answer', aria: 'This answer was good' });
+  const down = msgButton({ icon: 'thumbDown', title: 'Something was wrong with this answer', aria: 'Something was wrong with this answer' });
+  const status = document.createElement('span');
+  status.className = 'feedback-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+
+  row.append(up, down, status);
+  box.append(row);
+
+  const endpoint = target.messageId
+    ? `/api/messages/${encodeURIComponent(target.messageId)}/feedback`
+    : `/api/runs/${encodeURIComponent(target.runId)}/feedback`;
+
+  let rating = feedback?.rating ?? null;
+  let reason = feedback?.reason ?? null;
+  let why = null;
+  let noteBox = null;
+
+  /** The reasons, shown only once he has said something was wrong. */
+  function buildWhy() {
+    const panel = document.createElement('div');
+    panel.className = 'feedback-why';
+
+    const chips = document.createElement('div');
+    chips.className = 'feedback-chips';
+    for (const [id, label] of FEEDBACK_REASONS) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'feedback-chip' + (reason === id ? ' on' : '');
+      chip.textContent = label;
+      chip.setAttribute('aria-pressed', String(reason === id));
+      chip.addEventListener('click', () => {
+        for (const other of chips.children) {
+          other.classList.remove('on');
+          other.setAttribute('aria-pressed', 'false');
+        }
+        chip.classList.add('on');
+        chip.setAttribute('aria-pressed', 'true');
+        reason = id;
+        void send('down', id, noteBox?.querySelector('input')?.value ?? null, { quiet: true });
+      });
+      chips.append(chip);
+    }
+    panel.append(chips);
+
+    // A note is the third tier: available, never demanded.
+    const note = document.createElement('div');
+    note.className = 'feedback-note';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 500;
+    input.placeholder = 'Anything else? (optional)';
+    input.setAttribute('aria-label', 'What went wrong, in your own words');
+    const sendNote = document.createElement('button');
+    sendNote.type = 'button';
+    sendNote.className = 'msg-btn';
+    sendNote.textContent = 'Send note';
+    sendNote.addEventListener('click', () => {
+      if (!reason) { toast('Pick a reason first.'); return; }
+      void send('down', reason, input.value, { quiet: true });
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); sendNote.click(); }
+    });
+    note.append(input, sendNote);
+    panel.append(note);
+    noteBox = note;
+    return panel;
+  }
+
+  function paint() {
+    up.classList.toggle('on', rating === 'up');
+    down.classList.toggle('on', rating === 'down');
+    up.setAttribute('aria-pressed', String(rating === 'up'));
+    down.setAttribute('aria-pressed', String(rating === 'down'));
+    status.textContent = rating === 'up' ? 'Thanks — noted.' : rating === 'down' ? 'Noted.' : '';
+    if (rating !== 'down' && why) { why.remove(); why = null; noteBox = null; }
+    if (rating === 'down' && !why) box.append(buildWhy());
+  }
+
+  async function send(nextRating, nextReason = null, note = null, { quiet = false } = {}) {
+    up.disabled = true;
+    down.disabled = true;
+    try {
+      const body = { rating: nextRating };
+      if (nextReason) body.reason = nextReason;
+      const text = typeof note === 'string' ? note.trim() : '';
+      if (text) body.note = text;
+      await api(endpoint, { method: 'POST', body: JSON.stringify(body) });
+      rating = nextRating;
+      reason = nextReason;
+      paint();
+      if (!quiet) toast(nextRating === 'up' ? 'Noted — thanks.' : 'Noted.');
+    } catch (err) {
+      toast(err.body?.message || err.message || 'Could not keep that.');
+    } finally {
+      up.disabled = false;
+      down.disabled = false;
+    }
+  }
+
+  async function clear() {
+    up.disabled = true;
+    down.disabled = true;
+    try {
+      await api(endpoint, { method: 'DELETE' });
+      rating = null;
+      reason = null;
+      paint();
+    } catch (err) {
+      toast(err.message || 'Could not take that back.');
+    } finally {
+      up.disabled = false;
+      down.disabled = false;
+    }
+  }
+
+  // Tapping the thumb that is already on takes the rating back, which is the
+  // only undo this needs.
+  up.addEventListener('click', () => (rating === 'up' ? void clear() : void send('up')));
+  down.addEventListener('click', () => (rating === 'down' ? void clear() : void send('down')));
+
+  paint();
+  node.append(box);
+  return box;
+}
+
 
 /** "14:32" for a timestamp the server sent, or nothing at all if it is junk. */
 function clockTime(iso) {
@@ -1604,7 +1781,7 @@ function linkedInPublishButton(draftId) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'msg-btn';
-  const label = 'in Publish to LinkedIn';
+  const label = 'Publish to LinkedIn';
   btn.textContent = label;
   btn.title = 'Publish this draft to your LinkedIn profile';
   btn.addEventListener('click', async () => {
@@ -3195,6 +3372,54 @@ async function renderGoogleCard() {
   });
 }
 
+/**
+ * What the operator said about answers, shown back to him.
+ *
+ * Collecting a rating and never showing it is how a feedback button becomes
+ * furniture — the research is blunt about it: "if you ask for it and nothing
+ * visibly improves, users stop giving it". So the page that holds the knobs
+ * also holds the record: how many of each, and the last few thumbs-down with
+ * the task they were about.
+ */
+async function loadFeedbackSummary() {
+  let summary;
+  try {
+    summary = await api('/api/feedback/summary?limit=3');
+  } catch {
+    return; // the page is still usable without it
+  }
+  const total = (summary.up ?? 0) + (summary.down ?? 0);
+  const existing = el.settingsBody.querySelector('.settings-feedback');
+  existing?.remove();
+  if (!total) return;
+
+  const body = document.createElement('div');
+  body.className = 'settings-feedback';
+  const list = document.createElement('div');
+  list.className = 'settings-list';
+
+  const head = document.createElement('div');
+  head.className = 'feedback-summary-row';
+  head.innerHTML = `<span class="feedback-summary-mark">${iconFor('thumbUp')}</span><span class="feedback-summary-body"></span>`;
+  head.querySelector('.feedback-summary-body').textContent =
+    `${summary.up} good · ${summary.down} not good — the last few are below.`;
+  list.append(head);
+
+  for (const row of summary.recent ?? []) {
+    if (row.rating !== 'down') continue;
+    const line = document.createElement('div');
+    line.className = 'feedback-summary-row';
+    line.innerHTML = `<span class="feedback-summary-mark">${iconFor('thumbDown')}</span><span class="feedback-summary-body"><span class="feedback-summary-task"></span><span class="feedback-summary-why"></span></span>`;
+    line.querySelector('.feedback-summary-task').textContent = row.task || 'A task';
+    const why = [row.reasonLabel, row.note].filter(Boolean).join(' — ');
+    line.querySelector('.feedback-summary-why').textContent = why;
+    list.append(line);
+  }
+
+  body.append(list);
+  el.settingsBody.append(section('What you told me', body.outerHTML));
+}
+
 /** A titled block on the settings page. */
 function section(title, body) {
   return `<section class="settings-section">
@@ -3625,6 +3850,7 @@ let settingsOnHistory = false;
 function openSettings() {
   closeDrawer();
   void loadSettings();
+  void loadFeedbackSummary();
   switchScreen(() => {
     el.app.hidden = true;
     el.settingsScreen.hidden = false;

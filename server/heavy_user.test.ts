@@ -348,6 +348,18 @@ describe('a heavy user walks the app', () => {
     };
     const answerId = messages.messages.find((m) => m.role === 'assistant')!.id;
 
+    // The live card rates by run; the stored thread rates by message. Both have
+    // to land on the same row.
+    const byRun = await api(`/api/runs/${(messages.messages.find((m) => m.role === 'assistant') as { runId?: string }).runId}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ rating: 'down', reason: 'wrong' }),
+    });
+    assert.equal(byRun.status, 200, 'a rating can be given from the card that just finished');
+    const byRunBack = (await (await api(`/api/conversations/${conversationId}/messages`)).json()) as {
+      messages: Array<{ id: string; feedback: { rating: string } | null }>;
+    };
+    assert.equal(byRunBack.messages.find((m) => m.id === answerId)!.feedback?.rating, 'down', 'and it lands on the answer in the thread');
+
     const down = await api(`/api/messages/${answerId}/feedback`, {
       method: 'POST',
       body: JSON.stringify({ rating: 'down', reason: 'too_long', note: 'Shorter next time.' }),

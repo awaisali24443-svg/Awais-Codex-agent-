@@ -15,6 +15,7 @@ import { migrate } from './migrate.js';
 import { ensureMainBranch } from './branches.js';
 import {
   FEEDBACK_REASONS,
+  assistantMessageIdForRun,
   clearFeedback,
   feedbackForMessages,
   feedbackSummary,
@@ -131,6 +132,14 @@ test('the ratings for a set of messages come back keyed, and only for those mess
   // No ids means no query at all — an unfiltered read here would be a way to
   // pull every rating in the database by asking for nothing.
   assert.equal((await feedbackForMessages(db, [])).size, 0);
+});
+
+test('the answer can be found from the run that produced it', async () => {
+  // The live card knows its run id; the message row is written when the run
+  // closes. Rating from the card has to land on the same row the thread shows.
+  const { messageId, runId } = await seedAnsweredTask();
+  assert.equal(await assistantMessageIdForRun(db, runId), messageId);
+  assert.equal(await assistantMessageIdForRun(db, 'run_never_existed'), null, 'and a run with no answer resolves to nothing');
 });
 
 test('the summary counts both directions and names the task that disappointed him', async () => {

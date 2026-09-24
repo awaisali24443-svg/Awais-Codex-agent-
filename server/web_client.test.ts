@@ -535,6 +535,40 @@ describe('reading while it works', () => {
   });
 });
 
+describe('an answer can be rated without leaving the answer', () => {
+  test('the thumbs are inline, and the reasons come after the thumbs-down', () => {
+    const client = app();
+    assert.ok(client.includes('function feedbackControls('), 'there are rating controls');
+    assert.ok(client.includes("target: { messageId: message.id }"), 'on every stored answer');
+    assert.ok(client.includes('target: { runId: card.runId }'), 'and on the card that just finished');
+    // One tap, then the reason — never a dialog.
+    assert.ok(client.includes("down.addEventListener('click', () => (rating === 'down' ? void clear() : void send('down')))"), 'tapping the thumb again takes it back');
+    assert.ok(client.includes('function buildWhy()'), 'the reasons are built on demand');
+    assert.ok(!client.includes('showModal()'), 'with no dialog anywhere near the rating');
+  });
+
+  test('the reasons are the server\u2019s closed list, not prose', () => {
+    const client = app();
+    const server = read('server/feedback.ts');
+    for (const id of ['wrong', 'off_topic', 'too_long', 'broken', 'other']) {
+      assert.ok(server.includes(`id: '${id}'`), `${id} exists on the server`);
+      assert.ok(client.includes(`['${id}', '`), `${id} is offered by the client`);
+    }
+    // A closed list is what makes the reasons countable; a free-text box would
+    // have made this table unreadable a week in.
+    assert.ok(client.includes("if (!reason) { toast('Pick a reason first.'); return; }"), 'a note without a reason is refused');
+  });
+
+  test('the settings page shows what he said', () => {
+    // "Do not ignore the feedback you collect" — the loop has to be visible.
+    const client = app();
+    assert.ok(client.includes('async function loadFeedbackSummary()'), 'the summary is fetched');
+    assert.ok(client.includes("section('What you told me'"), 'and shown as its own block');
+    assert.ok(client.includes('/api/feedback/summary?limit=3'), 'with a small limit, not the whole history');
+    assert.ok(css().includes('.feedback-chip.on'), 'the chosen reason is visibly chosen');
+  });
+});
+
 describe('the decision points are the loudest thing on the screen', () => {
   test('a waiting plan says what it is and what happens next', () => {
     // Approving is the only irreversible tap in the app, and a plan waiting for
