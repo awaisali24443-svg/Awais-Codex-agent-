@@ -5,6 +5,7 @@ import {
   nodeIconForStatus,
   hasExpandableDetail,
   formatStepTime,
+  stripMilestones,
 } from './timeline.js';
 import {
   PANEL_SECTIONS,
@@ -65,10 +66,10 @@ const el = {
   memoryTitle: $('memory-title'),
   memoryBody: $('memory-body'),
   memoryToggle: $('memory-toggle'),
-  settings: $('settings'),
-  settingsTitle: $('settings-title'),
   settingsBody: $('settings-body'),
-  settingsToggle: $('settings-toggle'),
+  settingsScreen: $('screen-settings'),
+  settingsOpen: $('btn-settings'),
+  settingsBack: $('btn-settings-back'),
   schedules: $('schedules'),
   schedulesTitle: $('schedules-title'),
   schedulesBody: $('schedules-body'),
@@ -82,9 +83,6 @@ const el = {
   panelTabs: $('panel-tabs'),
   panelBody: $('panel-body'),
   note: $('composer-note'),
-  estimateLine: $('estimate-line'),
-  estimateText: $('estimate-text'),
-  tokenCap: $('token-cap'),
   pingToggle: $('ping-wrap'),
   pingCheck: $('ping-check'),
   researchWrap: $('research-wrap'),
@@ -142,6 +140,7 @@ async function api(path, options = {}) {
 function showLogin() {
   closeStream();
   el.app.hidden = true;
+  el.settingsScreen.hidden = true;
   el.login.hidden = false;
   el.loginKey.value = '';
   setTimeout(() => el.loginKey.focus(), 60);
@@ -149,6 +148,7 @@ function showLogin() {
 
 function showApp() {
   el.login.hidden = true;
+  el.settingsScreen.hidden = true;
   el.app.hidden = false;
 }
 
@@ -447,7 +447,11 @@ function drawThinking(card) {
 }
 
 function drawAnswer(card, streaming) {
-  const text = card.answerText + card.answerTail;
+  // The planning protocol lines ("Step 1/3: ...") are the timeline's job. The
+  // agent also writes them into its prose, which is why an answer used to open
+  // with its own plan before the reply; they are filtered out here so the
+  // answer is the answer. The stored record keeps everything.
+  const text = stripMilestones(card.answerText + card.answerTail);
   card.answer.innerHTML = markdown(text) + (streaming ? '<span class="caret"></span>' : '');
 }
 
@@ -701,13 +705,24 @@ function handleEvent(card, event, data) {
       }
       break;
 
-    case 'log':
+    case 'log': {
+      const message = data.message || 'step';
+      // A rate limit is the one wait that can last minutes, and a card that
+      // only says "Thinking" through it looks like a hang. It gets a step of
+      // its own that stays running until the mission moves again.
+      if (/rate limited|waiting \d+s/i.test(message)) {
+        addStep(card, 'rate-limit', { name: message, icon: 'warn', status: 'running' });
+        break;
+      }
+      const waiting = card.stepIndex.get('rate-limit');
+      if (waiting) setStepStatus(waiting, 'done');
       addStep(card, `log:${card.steps.children.length}`, {
-        name: data.message || 'step',
+        name: message,
         icon: data.level === 'error' ? 'warn' : data.level === 'warn' ? 'warn' : 'info',
         done: true,
       });
       break;
+    }
 
     case 'plan.milestone':
       updatePlan(card, data);
@@ -765,11 +780,14 @@ function handleEvent(card, event, data) {
       drawThinking(card);
       break;
 
-    case 'thinking.delta':
+    case 'thinking.delta': {
+      const waiting = card.stepIndex.get('rate-limit');
+      if (waiting) setStepStatus(waiting, 'done');
       card.thinkingTail += data.chunk || '';
       if (!card.thinking.open) card.thinking.open = true;
       drawThinking(card);
       break;
+    }
 
     case 'text.snapshot':
       card.answerText = data.text || '';
@@ -777,10 +795,13 @@ function handleEvent(card, event, data) {
       drawAnswer(card, false);
       break;
 
-    case 'text.delta':
+    case 'text.delta': {
+      const waiting = card.stepIndex.get('rate-limit');
+      if (waiting) setStepStatus(waiting, 'done');
       card.answerTail += data.chunk || '';
       drawAnswer(card, true);
       break;
+    }
 
     case 'run.environment':
       if (data.environmentId) {
@@ -908,26 +929,26 @@ function finishCard(card, outcome, data = {}) {
     if (data.errorType === 'interrupted') {
       // The server restarted mid-mission. Resume continues from the first
       // unfinished step; retry starts over. Both are offered, resume first.
-      noticeNode.append(runActionButtons(card, { resume: true, retry: true, edit: true, share: true, outputs: true, notice: noticeNode }));
+      noticeNode.append(runActionButtons(card, { resume: true, retry: true, share: true, outputs: true, notice: noticeNode }));
     } else {
       // A failed complex task is usually worth one more attempt, not a retyped
       // prompt. The retry starts a fresh run with the same prompt in the same
       // conversation; it costs one daily run like any other mission.
-      noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, outputs: true, notice: noticeNode }));
+      noticeNode.append(runActionButtons(card, { retry: true, share: true, outputs: true, notice: noticeNode }));
     }
   } else if (outcome === 'paused') {
-    // The token budget ran out. Pausing is not terminal: the partial answer
-    // stands and the operator resumes the same run with a higher cap.
-    const noticeNode = renderNotice(humanError('token_budget'), false, 'warn');
-    noticeNode.append(runActionButtons(card, { resume: true, edit: true, share: true, outputs: true, notice: noticeNode }));
+    // Not terminal: the partial answer stands, the finished steps are
+    // checkpointed, and resuming carries on from the first unfinished one.
+    const noticeNode = renderNotice('Stopped part-way. The finished steps are saved.', false, 'warn');
+    noticeNode.append(runActionButtons(card, { resume: true, share: true, outputs: true, notice: noticeNode }));
   } else if (outcome === 'cancelled') {
     const noticeNode = renderNotice('Stopped. Whatever it produced is kept below.', false, 'info');
-    noticeNode.append(runActionButtons(card, { edit: true, share: true, outputs: true }));
+    noticeNode.append(runActionButtons(card, { share: true, outputs: true }));
   } else {
     // A finished task can be re-run as-is or tweaked in the composer and
     // re-sent.
     const noticeNode = renderNotice('Done.', false, 'check');
-    noticeNode.append(runActionButtons(card, { retry: true, edit: true, share: true, outputs: true, notice: noticeNode }));
+    noticeNode.append(runActionButtons(card, { retry: true, share: true, outputs: true, notice: noticeNode }));
   }
 
   setRunning(false);
@@ -981,21 +1002,6 @@ async function resumeRun(card, opts) {
     button.disabled = false;
     toast(err.body?.message || err.message || 'Could not resume.');
   }
-}
-
-/* Load a run's prompt back into the composer so it can be edited and re-sent.
-   The prompt is captured from `run.started` when the card is drawn, so it is
-   exactly what the run was asked — including for retried runs. */
-function editPrompt(card) {
-  if (!card.prompt) {
-    toast('No prompt to edit on this task.');
-    return;
-  }
-  el.prompt.value = card.prompt;
-  autoGrow();
-  el.send.disabled = false;
-  el.prompt.focus();
-  el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
 }
 
 /* Manus-style per-message actions on history. Every user message gets an
@@ -1171,7 +1177,7 @@ function openInlineEditor(node, message) {
 }
 
 /* The button group appended to a finished run's notice. */
-function runActionButtons(card, { retry = false, resume = false, edit = false, share = false, outputs = false, notice = null } = {}) {
+function runActionButtons(card, { retry = false, resume = false, share = false, outputs = false, notice = null } = {}) {
   const group = document.createElement('span');
   group.className = 'run-btns';
   if (outputs) {
@@ -1200,14 +1206,6 @@ function runActionButtons(card, { retry = false, resume = false, edit = false, s
     retryBtn.textContent = 'Retry this task';
     retryBtn.addEventListener('click', () => retryRun(card, { button: retryBtn, notice }));
     group.append(retryBtn);
-  }
-  if (edit) {
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'retry-btn';
-    editBtn.textContent = 'Edit prompt';
-    editBtn.addEventListener('click', () => editPrompt(card));
-    group.append(editBtn);
   }
   if (share) {
     // Shareable replay: one tap enables the public link and copies it; the
@@ -1691,7 +1689,7 @@ function attach(runId, after = 0) {
     if (!state.running || state.runId !== runId) return;
     try {
       const { run } = await api(`/api/runs/${runId}`);
-      if (run && ['completed', 'failed', 'cancelled'].includes(run.status)) {
+      if (run && ['completed', 'failed', 'cancelled', 'paused'].includes(run.status)) {
         handleEvent(card, `run.${run.status}`, {
           errorType: run.errorType,
           errorMessage: run.errorMessage,
@@ -1760,43 +1758,8 @@ el.stop.addEventListener('click', async () => {
 el.prompt.addEventListener('input', () => {
   autoGrow();
   el.send.disabled = state.running || !el.prompt.value.trim();
-  scheduleEstimate();
 });
 
-/* Pre-flight cost estimate: a debounced read of the operator's own history,
-   shown under the composer. Never starts anything, never spends budget. */
-let estimateTimer = null;
-function scheduleEstimate() {
-  clearTimeout(estimateTimer);
-  const prompt = el.prompt.value.trim();
-  if (!prompt || state.running) {
-    el.estimateLine.hidden = true;
-    return;
-  }
-  estimateTimer = setTimeout(async () => {
-    try {
-      const deepResearch = el.researchCheck.checked;
-      const est = await api('/api/runs/estimate', {
-        method: 'POST',
-        body: JSON.stringify({
-          prompt,
-          ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: researchBudgetMinutes() } : {}),
-        }),
-      });
-      el.estimateText.textContent = `≈${formatTokens(est.estimatedTokens)} tokens`;
-      el.estimateLine.hidden = false;
-    } catch {
-      el.estimateLine.hidden = true;
-    }
-  }, 500);
-}
-el.researchCheck.addEventListener('change', scheduleEstimate);
-
-function formatTokens(n) {
-  if (n < 1000) return String(n);
-  const k = n / 1000;
-  return `${k >= 10 ? Math.round(k) : k.toFixed(1)}k`;
-}
 
 el.prompt.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -1985,26 +1948,20 @@ el.composer.addEventListener('submit', async (event) => {
   // Read before the reset below clears the picker.
   const deepResearch = el.researchCheck.checked;
   const budgetMinutes = researchBudgetMinutes();
-  // Optional per-task token cap, typed in thousands. A blank or junk value
-  // is not a cap.
-  const capK = Math.floor(Number(el.tokenCap.value));
-  const tokenBudget = Number.isFinite(capK) && capK > 0 ? Math.min(200, capK) * 1000 : null;
 
-  // The ping, the research mode, and the cap are per task, not sticky
-  // preferences: reset them with the composer.
+  // The ping and the research mode are per task, not sticky preferences:
+  // reset them with the composer.
   el.pingCheck.checked = false;
   el.researchCheck.checked = false;
-  el.tokenCap.value = '';
-  el.estimateLine.hidden = true;
   refreshResearchPicker();
   el.note.textContent = '';
-  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes, tokenBudget });
+  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes });
 });
 
 /* Start one run: the single path for the composer and for branch forks.
    The run is filed under the current branch, so a forked "what if" stays in
    its own branch instead of leaking back into the original thread. */
-async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15, tokenBudget = null } = {}) {
+async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15 } = {}) {
   el.prompt.value = '';
   autoGrow();
   el.send.disabled = true;
@@ -2021,7 +1978,6 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
         branchId: state.branchId,
         notifyWhatsapp,
         ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: budgetMinutes } : {}),
-        ...(tokenBudget ? { tokenBudget } : {}),
       }),
     });
     state.conversationId = run.conversationId;
@@ -2177,6 +2133,9 @@ const SECRET_STATE = {
   unreadable: () => ({ text: 'cannot decrypt — MASTER_KEY changed', className: 'bad' }),
 };
 
+/** The delegated settings listener is bound once per page load (see below). */
+let settingsClickBound = false;
+
 async function loadSettings() {
   try {
     state.settings = await api('/api/settings');
@@ -2325,10 +2284,6 @@ async function renderGoogleCard() {
 function renderSettings() {
   const data = state.settings;
   if (!data) return;
-  el.settings.hidden = false;
-
-  const saved = data.settings.filter((s) => s.source === 'stored').length;
-  el.settingsTitle.textContent = saved ? `Settings (${saved})` : 'Settings';
 
   const rows = data.settings.map((setting) => {
     // Boolean settings render as an on/off toggle; everything else keeps the
@@ -2392,7 +2347,13 @@ function renderSettings() {
   for (const input of el.settingsBody.querySelectorAll('.setting-input')) {
     input.addEventListener('change', () => saveSetting(input));
   }
-  el.settingsBody.addEventListener('click', onSettingsClick);
+  // The body element survives every re-render, so the delegated click handler
+  // is bound once. Binding it per render stacked identical listeners, which
+  // made one tap fire two saves.
+  if (!settingsClickBound) {
+    settingsClickBound = true;
+    el.settingsBody.addEventListener('click', onSettingsClick);
+  }
 }
 
 async function saveSetting(input) {
@@ -2702,8 +2663,39 @@ function bindPanel(toggle, body) {
 }
 
 bindPanel(el.memoryToggle, el.memoryBody);
-bindPanel(el.settingsToggle, el.settingsBody);
 bindPanel(el.schedulesToggle, el.schedulesBody);
+
+/* Settings is a page of its own, not a drawer section: it is where the keys,
+   the WhatsApp link and the account connections live, and a phone user expects
+   a page they can come back from. The back arrow and Android's own back gesture
+   both land here — the page pushes one history entry when it opens, and the
+   popstate below closes it — so nothing about it can trap the user. */
+let settingsOnHistory = false;
+
+function openSettings() {
+  closeDrawer();
+  void loadSettings();
+  el.app.hidden = true;
+  el.settingsScreen.hidden = false;
+  el.settingsScreen.scrollTop = 0;
+  if (!settingsOnHistory) {
+    settingsOnHistory = true;
+    history.pushState({ wais: 'settings' }, '');
+  }
+  requestAnimationFrame(() => el.settingsBack.focus());
+}
+
+function closeSettings({ fromHistory = false } = {}) {
+  if (!settingsOnHistory) return;
+  settingsOnHistory = false;
+  el.settingsScreen.hidden = true;
+  el.app.hidden = false;
+  if (!fromHistory) history.back();
+}
+
+el.settingsOpen.addEventListener('click', openSettings);
+el.settingsBack.addEventListener('click', () => closeSettings());
+window.addEventListener('popstate', () => closeSettings({ fromHistory: true }));
 $('btn-close-drawer').addEventListener('click', closeDrawer);
 el.scrim.addEventListener('click', closeDrawer);
 

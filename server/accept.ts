@@ -59,8 +59,6 @@ export interface AcceptInput {
   deepResearch?: boolean;
   /** Whole minutes of wall-clock research budget. */
   researchBudgetMinutes?: number | null;
-  /** Optional per-mission token cap. The executor pauses the run when spent. */
-  tokenBudget?: number | null;
   /**
    * Title for the auto-created conversation, when no conversationId is given.
    * Scheduled tasks use this so a fired run is visibly theirs in the sidebar.
@@ -121,7 +119,6 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       notifyWhatsapp: input.notifyWhatsapp ?? false,
       deepResearch: input.deepResearch === true,
       researchBudgetMinutes: input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
-      tokenBudget: input.tokenBudget ?? null,
       conversationTitle: input.conversationTitle ?? null,
     });
   } catch (err) {

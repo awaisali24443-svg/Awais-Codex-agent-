@@ -30,6 +30,11 @@ html, body {
   line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
+  /* Nothing may push the page sideways. `clip` rather than `hidden` on purpose:
+     hidden would make body a scroll container and break the sticky composer;
+     clip simply never shows what overflows. Content that is legitimately wide
+     scrolls inside its own box (.answer pre, .answer table). */
+  overflow-x: clip;
 }
 
 body { display: flex; flex-direction: column; }
@@ -279,7 +284,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .branch-pill.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
 /* per-message actions, Manus-style: small buttons on the message itself */
-.msg-actions { display: flex; gap: 6px; margin-top: var(--space-2); }
+.msg-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-2); }
 .ask .msg-actions { justify-content: flex-end; }
 .answer .msg-actions { justify-content: flex-start; }
 .msg-btn {
@@ -421,7 +426,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 @keyframes blink { 50% { opacity: 0; } }
 
 .notice {
-  display: flex; gap: 9px; align-items: flex-start;
+  display: flex; gap: 9px; align-items: flex-start; flex-wrap: wrap;
   padding: var(--space-3) 14px; border-radius: var(--radius-sm);
   font-size: var(--text-md); line-height: 1.5;
   background: var(--surface-2); color: var(--ink-soft);
@@ -461,7 +466,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   overflow-y: auto; padding: 0;
 }
 .composer textarea::placeholder { color: var(--muted); }
-.composer-row { display: flex; align-items: center; margin-top: var(--space-2); }
+/* The row is a wrapping strip, not a rigid line: on a narrow phone the ping,
+   research and send controls together are wider than the composer, and a
+   single line of `nowrap` furniture is what used to shove the whole page
+   sideways. Anything that does not fit drops to the next line instead. */
+.composer-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+  margin-top: var(--space-2);
+}
 .composer-row .icon-btn { margin-left: -6px; }
 
 /* WhatsApp "done" ping toggle. Quiet by default; lights up only when checked,
@@ -545,7 +557,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .retry-btn:not(:disabled):active { background: var(--surface-2); }
 
 /* Retry / edit-prompt button group on a finished task's notice. */
-.run-btns { margin-left: auto; display: flex; gap: var(--space-2); flex: none; align-items: center; }
+.run-btns {
+  margin-left: auto; display: flex; gap: var(--space-2); align-items: center;
+  /* Wrap, never overflow: the group is three pills on a phone and the notice is
+     the width of the thread. An unwrappable row here pushed the whole page
+     sideways. */
+  flex-wrap: wrap; justify-content: flex-end;
+}
 .run-btns .retry-btn { margin-left: 0; }
 /* The same actions under a historical run's answer. Left-aligned, unlike the
    live card's right-aligned notice group. */
@@ -567,16 +585,39 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   min-height: 17px;
 }
 
-/* Pre-flight cost line: the estimate plus the optional per-task token cap. */
-.estimate-line {
-  display: inline-flex; align-items: center; gap: var(--space-2);
-  font-size: 12px; color: var(--muted); white-space: nowrap;
+/* ------------------------------------------------------- settings page --- */
+
+/* Settings used to be a collapsible section inside the drawer, which is not
+   how a phone app works: keys, the WhatsApp link and the account connections
+   live on a page you can walk back from. It is now a third screen — a sticky
+   head with a back arrow, and a scrollable body. */
+.page { background: var(--paper); }
+.page-head {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: calc(10px + var(--safe-top)) 14px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--paper);
 }
-.cap-toggle { display: inline-flex; align-items: center; gap: var(--space-1); cursor: pointer; }
-.cap-toggle input {
-  width: 44px; padding: 2px var(--space-1); font-size: 12px; border-radius: 6px;
-  border: 1px solid var(--line); background: transparent; color: inherit;
+.page-title { font-family: var(--serif); font-size: 21px; letter-spacing: -0.01em; }
+.page-body {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: var(--space-4) 14px calc(28px + var(--safe-bottom));
 }
+.page-body > * { max-width: 680px; margin-inline: auto; }
+
+/* The drawer's own version of the same destination: one row, with a chevron
+   that says "this leaves the drawer". */
+.drawer-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  margin: 2px 0; padding: 12px 14px;
+  font: inherit; font-size: var(--text-sm); color: var(--ink-soft);
+  background: transparent; border: 0; border-radius: var(--radius-xs);
+  cursor: pointer; text-align: left;
+}
+.drawer-row:active { background: var(--surface-2); }
+.drawer-row-icon { width: 17px; height: 17px; flex: none; stroke: var(--muted); }
+.drawer-row-label { flex: 1; }
+.drawer-row-chevron { width: 15px; height: 15px; flex: none; stroke: var(--muted); }
 
 /* --------------------------------------------------------------- drawer --- */
 

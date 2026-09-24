@@ -148,17 +148,6 @@ export function triageOrphan(doneSteps: number, startedAt: Date | string): 'resu
   return 'fail';
 }
 
-/**
- * Token-budget guard. The engine reports exact token counts only at the end,
- * so mid-run the executor watches a proxy: streamed characters / 4. Rough,
- * but a rough cap that pauses is better than an exact bill with no cap.
- * Returns true when the budget is spent.
- */
-export function isTokenBudgetSpent(streamedChars: number, tokenBudget: number | null): boolean {
-  if (tokenBudget == null || tokenBudget <= 0) return false;
-  return streamedChars / 4 >= tokenBudget;
-}
-
 export function formatTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
   return String(Math.round(n));

@@ -6,6 +6,8 @@ import {
   nodeIconForStatus,
   hasExpandableDetail,
   formatStepTime,
+  isMilestoneLine,
+  stripMilestones,
 } from '../web/timeline.js';
 
 describe('step status derivation', () => {
@@ -69,5 +71,56 @@ describe('detail and time', () => {
 
   it('defaults to now', () => {
     assert.match(formatStepTime(), /^\d{2}:\d{2}$/);
+  });
+});
+
+describe('plan-protocol lines are kept out of the answer', () => {
+  it('recognises a step announcement', () => {
+    assert.equal(isMilestoneLine('Step 1/1: Greet the operator and request the mission instructions.'), true);
+    assert.equal(isMilestoneLine('Step 12/14 done: shipped'), true);
+    assert.equal(isMilestoneLine('  Step 3/3 - rebuilt the page'), true);
+  });
+
+  it('leaves ordinary prose alone', () => {
+    assert.equal(isMilestoneLine('Stepping through the code now'), false);
+    assert.equal(isMilestoneLine('The first step is to install it'), false);
+    assert.equal(isMilestoneLine('Step 1 of 3 steps is done: here is the summary.'), false);
+    assert.equal(isMilestoneLine(''), false);
+  });
+
+  it('drops the announcements and keeps the reply', () => {
+    // The exact shape from the phone: the agent narrated its plan, then greeted
+    // the operator — and the greeting was buried under its own table of contents.
+    const answer = [
+      'Step 1/1: Greet the operator and request the mission instructions.',
+      'Step 1/1 done: Greeted the operator and requested mission details.',
+      '',
+      'Hello! I am ready to help. Please provide the details or instructions for your mission so we can get started.',
+    ].join('\n');
+    assert.equal(
+      stripMilestones(answer),
+      'Hello! I am ready to help. Please provide the details or instructions for your mission so we can get started.',
+    );
+  });
+
+  it('drops an echoed protocol block', () => {
+    const echoed = [
+      '[Planning protocol — work in visible steps.',
+      'Step k/N done: <one-line outcome>]',
+      '',
+      'Here is the answer you asked for.',
+    ].join('\n');
+    assert.equal(stripMilestones(echoed), 'Here is the answer you asked for.');
+  });
+
+  it('is a no-op on an answer that never had a plan', () => {
+    const prose = 'Two things to fix:\n\n1. the first\n2. the second';
+    assert.equal(stripMilestones(prose), prose);
+  });
+
+  it('tolerates empty and non-string input', () => {
+    assert.equal(stripMilestones(''), '');
+    assert.equal(stripMilestones(undefined), '');
+    assert.equal(stripMilestones(null), '');
   });
 });

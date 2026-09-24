@@ -162,12 +162,6 @@ try {
         <button type="submit" class="send" id="btn-send" aria-label="Send" disabled>
           <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
         </button>
-        <span class="estimate-line" id="estimate-line" hidden>
-          <span id="estimate-text"></span>
-          <label class="cap-toggle" title="Stop this task if it passes this many tokens — finished steps are saved">
-            cap <input id="token-cap" type="number" min="1" max="200" step="1" placeholder="k" aria-label="Token budget in thousands">
-          </label>
-        </span>
       </div>
     </form>
     <p class="composer-note" id="composer-note"></p>
@@ -192,13 +186,11 @@ try {
     </button>
     <div class="memory-body" id="memory-body" hidden></div>
   </section>
-  <section class="memory" id="settings" hidden>
-    <button class="memory-head" id="settings-toggle" aria-expanded="false">
-      <span class="memory-title" id="settings-title">Settings</span>
-      <svg class="memory-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
-    </button>
-    <div class="memory-body" id="settings-body" hidden></div>
-  </section>
+  <button class="drawer-row" id="btn-settings">
+    <svg class="drawer-row-icon" viewBox="0 0 24 24"><path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/></svg>
+    <span class="drawer-row-label">Settings</span>
+    <svg class="drawer-row-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+  </button>
   <section class="memory" id="schedules" hidden>
     <button class="memory-head" id="schedules-toggle" aria-expanded="false">
       <span class="memory-title" id="schedules-title">Scheduled</span>
@@ -209,6 +201,17 @@ try {
   <nav class="convos" id="convos"></nav>
   <button class="drawer-foot" id="btn-signout">Sign out</button>
 </aside>
+
+<!-- ======================= settings (its own page) ======================= -->
+<section id="screen-settings" class="screen page" hidden>
+  <header class="page-head">
+    <button class="icon-btn" id="btn-settings-back" aria-label="Back">
+      <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <span class="page-title">Settings</span>
+  </header>
+  <div class="page-body" id="settings-body"></div>
+</section>
 
 <!-- ======================= outputs panel ======================= -->
 <div class="panel-backdrop" id="panel-backdrop" hidden></div>

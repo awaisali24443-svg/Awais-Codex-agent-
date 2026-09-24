@@ -177,7 +177,6 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       notifyWhatsapp?: unknown;
       deepResearch?: unknown;
       researchBudgetMinutes?: unknown;
-      tokenBudget?: unknown;
     };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
 
@@ -218,10 +217,6 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         deepResearch: research.deepResearch,
         researchBudgetMinutes: research.researchBudgetMinutes,
         // Optional per-mission token cap. A non-number is not a cap.
-        tokenBudget:
-          typeof body.tokenBudget === 'number' && Number.isFinite(body.tokenBudget) && body.tokenBudget > 0
-            ? Math.round(body.tokenBudget)
-            : null,
       },
     );
 

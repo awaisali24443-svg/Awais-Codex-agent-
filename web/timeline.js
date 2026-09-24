@@ -49,3 +49,57 @@ export function formatStepTime(ts = Date.now()) {
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${hh}:${mm}`;
 }
+
+/**
+ * The planning protocol, as it appears in the agent's own text.
+ *
+ * `withPlanning()` asks the agent to announce "Step 1/N: ..." and
+ * "Step k/N done: ..." lines, and the executor turns each one into a
+ * `plan.milestone` event — the checklist the operator watches. The agent also
+ * leaves those same lines in the prose it writes, and an answer drawn straight
+ * from that text therefore opens with its own table of contents: raw protocol
+ * lines above the actual reply.
+ *
+ * So the prose is filtered, not the record: the milestones are already on
+ * screen in the timeline, and repeating them in the answer is noise. Only
+ * lines that match the protocol exactly are dropped — a sentence that merely
+ * begins with the word "step" survives.
+ */
+const MILESTONE_LINE = /^\s*step\s+\d+\s*\/\s*\d+\s*(?:done\s*)?[:.\u2014-]?\s*.*$/i;
+
+/** True when a line is a planning-protocol announcement, not prose. */
+export function isMilestoneLine(line) {
+  return MILESTONE_LINE.test(String(line ?? ''));
+}
+
+/**
+ * The agent's answer with its planning protocol lines removed.
+ *
+ * Also drops an echoed copy of the protocol block itself ("[Planning protocol —
+ * ...]"), which a chatty model occasionally repeats back before answering.
+ */
+export function stripMilestones(text) {
+  if (typeof text !== 'string' || text.length === 0) return '';
+  const kept = [];
+  let inProtocolEcho = false;
+  for (const line of text.split('\n')) {
+    if (/^\s*\[Planning protocol/i.test(line)) {
+      inProtocolEcho = true;
+      continue;
+    }
+    if (inProtocolEcho) {
+      // The block runs to the blank line that follows it; its own lines are
+      // skipped whole, including the "Step k/N done: ..." template inside.
+      if (line.trim() === '') {
+        inProtocolEcho = false;
+        continue;
+      }
+      if (/^\s*(\[|step\s+(?:\d+|k)\b)/i.test(line)) continue;
+      inProtocolEcho = false;
+    }
+    if (isMilestoneLine(line)) continue;
+    kept.push(line);
+  }
+  // Collapse the blank runs the removed lines leave behind.
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}

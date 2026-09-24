@@ -62,8 +62,6 @@ export interface Run {
    */
   deepResearch: boolean;
   researchBudgetMinutes: number | null;
-  /** Optional per-mission token cap (chars/4 proxy while streaming). */
-  tokenBudget: number | null;
   /** When resuming an interrupted mission, the first step not yet done. */
   resumeFromStep: number | null;
   /** The operator-visible plan, set by the planning pass; null until then. */
@@ -166,7 +164,6 @@ function mapRun(row: RunRow): Run {
     notifyWhatsapp: row.notify_whatsapp ?? false,
     deepResearch: row.deep_research ?? false,
     researchBudgetMinutes: row.research_budget_minutes ?? null,
-    tokenBudget: row.token_budget ?? null,
     resumeFromStep: row.resume_from_step ?? null,
     plan: parsePlan(row.plan_json),
     verification: parseVerification(row.verification_json),
@@ -287,8 +284,6 @@ export interface CreateRunInput {
    */
   deepResearch?: boolean;
   researchBudgetMinutes?: number | null;
-  /** Optional per-mission token cap. The executor pauses the run when spent. */
-  tokenBudget?: number | null;
   /**
    * Names the conversation when this run has to create one. Scheduled tasks use
    * it so the list reads "⏰ Morning digest" instead of the prompt text.
@@ -335,8 +330,8 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
       await tx.query(
         `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine,
                            previous_interaction_id, environment_id, notify_whatsapp,
-                           deep_research, research_budget_minutes, token_budget)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11)`,
+                           deep_research, research_budget_minutes)
+         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10)`,
         [
           id,
           conversationId,
@@ -348,7 +343,6 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
           input.notifyWhatsapp === true,
           input.deepResearch === true,
           input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
-          input.tokenBudget ?? null,
         ],
       );
       await tx.query(

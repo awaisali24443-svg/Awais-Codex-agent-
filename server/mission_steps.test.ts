@@ -4,7 +4,7 @@
  * The two promises under test: (1) a "Step k/N" announcement is checkpointed
  * the moment it is made, so a crash loses nothing finished; (2) boot triage
  * resumes the newest orphan with progress and fails the rest as resumable
- * 'interrupted' runs. Plus the token-budget guard and the pre-flight
+ * 'interrupted' runs. Plus the token accounting and the pre-flight
  * estimate that feeds the composer's cost line.
  */
 import test, { after, before, beforeEach, describe } from 'node:test';
@@ -22,7 +22,6 @@ import {
   firstPendingStep,
   formatTokens,
   getMissionSteps,
-  isTokenBudgetSpent,
   recordMissionStep,
   triageOrphan,
 } from './mission_steps.js';
@@ -127,14 +126,7 @@ describe('triageOrphan', () => {
   });
 });
 
-describe('token budget guard', () => {
-  test('spent when chars/4 reaches the cap; inert without a cap', () => {
-    assert.equal(isTokenBudgetSpent(4000, 1000), true);
-    assert.equal(isTokenBudgetSpent(3999, 1000), false);
-    assert.equal(isTokenBudgetSpent(1_000_000, null), false);
-    assert.equal(isTokenBudgetSpent(1_000_000, 0), false);
-  });
-
+describe('token formatting', () => {
   test('formatTokens stays phone-readable', () => {
     assert.equal(formatTokens(800), '800');
     assert.equal(formatTokens(8200), '8.2k');
@@ -284,7 +276,9 @@ describe('mission routes', () => {
     const run = await createRun(db, { prompt: 'long build', engine: 'scripted' });
     await recordMissionStep(db, run.id, milestone('Step 1/4 done: planned'));
     await recordMissionStep(db, run.id, milestone('Step 2/4: coding'));
-    await db.query(`UPDATE runs SET status = 'paused', error_type = 'token_budget' WHERE id = $1`, [run.id]);
+    // A paused run is what an interrupted (server-restarted) run looks like now
+    // that the per-task token cap is gone; resume is unchanged either way.
+    await db.query(`UPDATE runs SET status = 'paused', error_type = 'interrupted' WHERE id = $1`, [run.id]);
 
     const res = await post(`/api/runs/${run.id}/resume`, {});
     assert.equal(res.status, 200);

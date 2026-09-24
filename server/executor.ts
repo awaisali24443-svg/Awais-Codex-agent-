@@ -46,8 +46,6 @@ import {
 } from './google.js';
 import {
   buildResumePreamble,
-  formatTokens,
-  isTokenBudgetSpent,
   recordMissionStep,
 } from './mission_steps.js';
 import {
@@ -404,9 +402,6 @@ export class RunExecutor {
       console.error(`[executor] event write failed for ${run.id}:`, err.message);
     });
 
-    // Declared outside the try so the catch below can tell a budget abort
-    // apart from a real engine failure.
-    let budgetBreached = false;
     // Every milestone checkpoint is fired without awaiting (a slow database
     // must not stall the mission), but the pre-close verification below reads
     // mission_steps — so the promises are collected here and settled there,
@@ -455,20 +450,6 @@ export class RunExecutor {
         writer.write('thinking.snapshot', { text: value }),
       );
 
-      // Token-budget guard: the engine reports exact tokens only at the end,
-      // so mid-run this watches a chars/4 proxy on every streamed chunk. When
-      // the cap is spent the run is aborted and settled as 'paused' — partial
-      // results kept, resumable — instead of failing.
-      const tokenBudget = run.tokenBudget ?? null;
-      const checkTokenBudget = () => {
-        if (budgetBreached || controller.signal.aborted) return;
-        if (isTokenBudgetSpent(text.text.length + thinking.text.length, tokenBudget)) {
-          budgetBreached = true;
-          console.log(`[run] ${run.id} paused: token budget spent`);
-          controller.abort();
-        }
-      };
-
       const ctx: EngineContext = {
         runId: run.id,
         signal: controller.signal,
@@ -479,13 +460,11 @@ export class RunExecutor {
           text.append(chunk);
           // Straight to the browser, never stored: the snapshot is the record.
           bus.publishTransient(run.id, 'text.delta', { chunk });
-          checkTokenBudget();
         },
 
         thinking: (chunk) => {
           thinking.append(chunk);
           bus.publishTransient(run.id, 'thinking.delta', { chunk });
-          checkTokenBudget();
         },
 
         tool: (name, args) => {
@@ -700,29 +679,18 @@ export class RunExecutor {
     } catch (err) {
       const error = err as Error & { errorType?: string };
       const aborted = controller.signal.aborted || error instanceof EngineAbortedError;
-      // A spent token budget pauses the mission instead of failing it: the
-      // partial results are kept and the operator resumes with a higher cap.
-      if (budgetBreached) {
-        await this.pause(
-          run,
-          await this.snapshotOf(run.id),
-          `Token budget spent (≈${formatTokens((run.tokenBudget ?? 0))} tokens). ` +
-            `The finished steps are checkpointed — resume to continue with a higher budget.`,
-        );
-      } else {
-        const status = aborted ? 'cancelled' : 'failed';
-        // Engines label their own failures so the run records something the
-        // operator can act on (quota_exceeded vs auth_failed vs engine_error)
-        // rather than a bare stack-trace-shaped string.
-        const type = aborted ? null : error.errorType ?? (error.name === 'Error' ? 'engine_error' : error.name);
-        await this.settle(
-          run,
-          status,
-          await this.snapshotOf(run.id),
-          type,
-          aborted ? null : error.message,
-        );
-      }
+      const status = aborted ? 'cancelled' : 'failed';
+      // Engines label their own failures so the run records something the
+      // operator can act on (quota_exceeded vs auth_failed vs engine_error)
+      // rather than a bare stack-trace-shaped string.
+      const type = aborted ? null : error.errorType ?? (error.name === 'Error' ? 'engine_error' : error.name);
+      await this.settle(
+        run,
+        status,
+        await this.snapshotOf(run.id),
+        type,
+        aborted ? null : error.message,
+      );
     } finally {
       // Learning happens after the run is settled, on purpose: extraction can
       // never delay a mission or fail one. It reads the operator's own words,
@@ -1033,29 +1001,6 @@ export class RunExecutor {
       console.log(`[run] ${runId} ${status}${errorMessage ? `: ${errorMessage}` : ''}`);
     } catch (err) {
       console.error(`[run] ${runId} could not be closed as ${status}:`, (err as Error).message);
-    }
-  }
-
-  /**
-   * Pause a run whose token budget is spent. Not terminal: the partial answer
-   * is kept, the checkpoints stand, and the operator resumes (or raises the
-   * cap) from the same run. Deliberately skips afterTerminal — a pause is not
-   * a completion, so no "done" ping goes out.
-   */
-  private async pause(run: Run, inMemoryText: string, message: string): Promise<void> {
-    const runId = run.id;
-    const text = inMemoryText || (await this.snapshotOf(runId));
-    try {
-      const seq = await finishRun(this.deps.db, runId, {
-        status: 'paused',
-        text,
-        errorType: 'token_budget',
-        errorMessage: message,
-      });
-      this.deps.bus.publish(runId, { seq, type: 'run.paused', payload: { status: 'paused' } });
-      console.log(`[run] ${runId} paused: token budget spent`);
-    } catch (err) {
-      console.error(`[run] ${runId} could not be paused:`, (err as Error).message);
     }
   }
 
