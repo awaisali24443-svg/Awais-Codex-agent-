@@ -152,6 +152,58 @@ try {
       <div class="attach-row" id="attachments" hidden></div>
       <textarea id="prompt" rows="1" placeholder="Assign a task, or ask anything"
                 autocomplete="off" spellcheck="false"></textarea>
+      <!-- How hard the task works is a property of the composer, so it lives in
+           the composer: one chip in the control row unfolds this tray. There is
+           no modal to appear over the page, which is what made the old bottom
+           sheet arrive uninvited — and no dialog to dismiss, so a half-made
+           choice is never lost to a mis-tap either. -->
+      <div class="composer-tray" id="composer-tray" hidden>
+      <div class="tray-head">
+      <span class="tray-title">How much work should this task get?</span>
+      <button type="button" class="icon-btn sm" id="mode-close" aria-label="Hide these options">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      </div>
+      <div class="tray-modes" role="radiogroup" aria-label="How hard this task works">
+      <button type="button" class="mode-option" id="mode-standard" role="radio" aria-checked="true">
+      <span class="mode-option-name">Standard</span>
+      <span class="mode-option-note">One pass. The answer arrives in a minute or two.</span>
+      <span class="mode-tick" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="mode-option" id="mode-research" role="radio" aria-checked="false">
+      <span class="mode-option-name">Deep research</span>
+      <span class="mode-option-note">Keeps digging, checking and following up until the time you allow runs out.</span>
+      <span class="mode-tick" aria-hidden="true"></span>
+      </button>
+      </div>
+      <div class="mode-detail" id="research-detail" hidden>
+      <label class="field">
+      <span class="field-label">Time to allow</span>
+      <select id="research-minutes" aria-label="Deep research time budget">
+      <option value="15">15 minutes</option>
+      <option value="30">30 minutes</option>
+      <option value="60">1 hour</option>
+      <option value="custom">custom…</option>
+      </select>
+      </label>
+      <label class="field" id="research-custom-wrap" hidden>
+      <span class="field-label">Minutes</span>
+      <input id="research-custom" type="number" min="5" max="480" step="1" value="30"
+      aria-label="Custom research budget in minutes" />
+      </label>
+      </div>
+      <label class="mode-option toggle" id="ping-wrap" hidden>
+      <span class="mode-option-name">Ping me on WhatsApp</span>
+      <span class="mode-option-note">One message when this task finishes.</span>
+      <input type="checkbox" id="ping-check" />
+      </label>
+      <!-- The two state inputs the rest of the client already reads. They are
+      driven by the controls above; keeping them means the send path and
+      the tests around it did not have to move. -->
+      <input type="checkbox" id="research-check" class="state-input" aria-hidden="true" tabindex="-1" />
+      </div>
+      
+      
       <div class="composer-row">
         <button type="button" class="icon-btn sm" id="btn-attach"
                 aria-label="Add a file to this task" title="Add a file">
@@ -164,57 +216,6 @@ try {
           <span id="mode-label">Standard</span>
           <svg class="mode-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
-<!-- How hard the task works is a property of the composer, so it lives in the
-     composer: one chip in the control row that unfolds this tray. There is no
-     modal to appear over the page, which is what made the old bottom sheet
-     arrive uninvited — and no dialog to dismiss, so a half-made choice is
-     never lost to a mis-tap either. -->
-      <div class="composer-tray" id="composer-tray" hidden>
-        <div class="tray-head">
-          <span class="tray-title">How much work should this task get?</span>
-          <button type="button" class="icon-btn sm" id="mode-close" aria-label="Hide these options">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-        </div>
-        <div class="tray-modes" role="radiogroup" aria-label="How hard this task works">
-          <button type="button" class="mode-option" id="mode-standard" role="radio" aria-checked="true">
-            <span class="mode-option-name">Standard</span>
-            <span class="mode-option-note">One pass. The answer arrives in a minute or two.</span>
-            <span class="mode-tick" aria-hidden="true"></span>
-          </button>
-          <button type="button" class="mode-option" id="mode-research" role="radio" aria-checked="false">
-            <span class="mode-option-name">Deep research</span>
-            <span class="mode-option-note">Keeps digging, checking and following up until the time you allow runs out.</span>
-            <span class="mode-tick" aria-hidden="true"></span>
-          </button>
-        </div>
-        <div class="mode-detail" id="research-detail" hidden>
-          <label class="field">
-            <span class="field-label">Time to allow</span>
-            <select id="research-minutes" aria-label="Deep research time budget">
-              <option value="15">15 minutes</option>
-              <option value="30">30 minutes</option>
-              <option value="60">1 hour</option>
-              <option value="custom">custom…</option>
-            </select>
-          </label>
-          <label class="field" id="research-custom-wrap" hidden>
-            <span class="field-label">Minutes</span>
-            <input id="research-custom" type="number" min="5" max="480" step="1" value="30"
-                   aria-label="Custom research budget in minutes" />
-          </label>
-        </div>
-        <label class="mode-option toggle" id="ping-wrap" hidden>
-          <span class="mode-option-name">Ping me on WhatsApp</span>
-          <span class="mode-option-note">One message when this task finishes.</span>
-          <input type="checkbox" id="ping-check" />
-        </label>
-        <!-- The two state inputs the rest of the client already reads. They are
-             driven by the controls above; keeping them means the send path and
-             the tests around it did not have to move. -->
-        <input type="checkbox" id="research-check" class="state-input" aria-hidden="true" tabindex="-1" />
-      </div>
-
         <span class="composer-gap"></span>
         <button type="submit" class="send" id="btn-send" aria-label="Send" disabled>
           <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
