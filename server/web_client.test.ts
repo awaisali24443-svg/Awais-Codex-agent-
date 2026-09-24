@@ -603,6 +603,55 @@ describe('a task that goes looking says where', () => {
   });
 });
 
+describe('the keyboard is a first-class citizen, and it shows its work', () => {
+  test('? opens an honest list of what the keys do', () => {
+    const client = app();
+    assert.ok(html().includes('id="keys-sheet"'), 'there is a sheet');
+    assert.ok(html().includes('aria-label="Keyboard shortcuts"'), 'announced as what it is');
+    assert.ok(client.includes('function renderKeys('), 'and drawn from data, not from markup');
+    assert.ok(client.includes('SHORTCUT_GROUPS'), 'the data lives in palette.js, where a test can walk it');
+    assert.ok(css().includes('.keys-keys'), 'with the keys in a fixed column so the list scans');
+  });
+
+  test('? never fires while he is typing', () => {
+    // The difference between a shortcut and a bug: `?` is a character, and a
+    // cheat sheet that opens mid-sentence is worse than none.
+    const client = app();
+    assert.ok(client.includes("if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;"), 'typing wins over the shortcut');
+    assert.ok(client.includes("if (event.key !== '?' || event.metaKey || event.ctrlKey || event.altKey) return;"), 'plain ? only');
+    assert.ok(client.includes('if (!el.login.hidden) return; // the login screen runs no shortcuts'), 'and nothing fires signed out');
+  });
+
+  test('every shortcut listed is a shortcut the app really has', () => {
+    // A cheat sheet that lists a key nobody implemented is worse than no cheat
+    // sheet: it teaches the operator to distrust the list.
+    const client = app();
+    const groups = read('web/palette.js');
+    assert.ok(groups.includes('export const SHORTCUT_GROUPS'), 'the list is data');
+    assert.ok(client.includes("event.key !== '?'"), '? is handled');
+    assert.ok(client.includes("event.key === 'k' || event.key === 'K'"), 'the palette key is handled');
+    assert.ok(client.includes("event.key === 'ArrowDown'"), 'the arrows are handled');
+    assert.ok(client.includes("event.key === 'Enter'"), 'Enter is handled');
+    assert.ok(client.includes("if (event.key === 'Tab')"), 'Tab is handled');
+    assert.ok(client.includes("if (event.key === 'Escape')"), 'Escape is handled');
+    assert.ok(client.includes("if (event.key === 'Enter' && !event.shiftKey && !event.isComposing)"), 'and Shift+Enter is left for a new line');
+  });
+
+  test('Escape closes everything that can be open', () => {
+    const client = app();
+    // The drawer and Settings were the two that had no Escape handler at all.
+    assert.ok(client.includes('function escapeShortcut('), 'one handler owns Escape');
+    assert.ok(client.includes('closeKeys();'), 'the cheat sheet closes');
+    assert.ok(client.includes('closeSettings();'), 'Settings goes back');
+    assert.ok(client.includes('closeDrawer();'), 'and the drawer closes');
+    // The palette keeps its own, which is why this one steps aside for it.
+    assert.ok(client.includes('if (el.palette.hidden === false) return; // the palette owns its own Escape'), 'without fighting the palette');
+    // The sheet is reachable from the palette as well as from the key: a list
+    // only a keyboard can open is a list half the devices cannot read.
+    assert.ok(client.includes("case 'shortcuts':"), 'the palette carries a row for it');
+  });
+});
+
 describe('a plan is a list, and it is edited like one', () => {
   test('a step moves, rewrites, drops, and can be added', () => {
     // Borrowed from the research plan that Deep Research shows before it runs,
@@ -664,7 +713,7 @@ describe('everything is a keystroke away', () => {
     // where palette.test.ts can reach them; app.js only draws what it returns.
     const client = app();
     assert.ok(
-      client.includes("import { RESUME_ACTIONS, RUNNING_ACTIONS, buildResults, flatten, moveSelection, selectionAfter } from './palette.js';"),
+      client.includes("import { RESUME_ACTIONS, RUNNING_ACTIONS, SHORTCUT_GROUPS, buildResults, flatten, moveSelection, selectionAfter } from './palette.js';"),
       'the palette logic is imported, not reimplemented',
     );
     // "Resume" is the row that matters most after a closed tab: the task is

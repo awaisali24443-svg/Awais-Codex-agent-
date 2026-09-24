@@ -5,7 +5,7 @@
    styles.css consumes these; it defines no palette of its own.
 
    Themes: the default (light) is the warm paper the app has always worn.
-   [data-theme="dark"] is a warm charcoal in the Claude vein — never pure
+   [data-theme="dark"] is a warm charcoal — never pure
    black, so the warm accent and serif wordmark still feel at home.
    The attribute is set on <html> by the snippet in index.html before first
    paint, then owned by the toggle in app.js.
@@ -17,7 +17,7 @@
 :root {
   color-scheme: light;
 
-  /* ---- color: warm minimal, Claude-inspired ---- */
+  /* ---- color: warm minimal: paper, ink, one terracotta accent ---- */
   --paper:      #f5f3ef;  /* app background            */
   --surface:    #ffffff;  /* cards, composer, sheets   */
   --surface-2:  #eceae4;  /* quiet fills, chips        */

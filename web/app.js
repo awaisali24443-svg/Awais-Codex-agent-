@@ -1,6 +1,6 @@
 import { stripMarkdownForSpeech, combineTranscripts, recognitionErrorMessage } from './voice.js';
 import { artifactKind, artifactMeta, markDead, sourcesFromText, sourcesSummary } from './records.js';
-import { RESUME_ACTIONS, RUNNING_ACTIONS, buildResults, flatten, moveSelection, selectionAfter } from './palette.js';
+import { RESUME_ACTIONS, RUNNING_ACTIONS, SHORTCUT_GROUPS, buildResults, flatten, moveSelection, selectionAfter } from './palette.js';
 import { SUGGESTIONS, suggestionFill, fillComposerFromChip } from './welcome.js';
 import {
   statusForStep,
@@ -73,6 +73,10 @@ const el = {
   paletteList: $('palette-list'),
   paletteClose: $('palette-close'),
   paletteButton: $('btn-search'),
+  keysSheet: $('keys-sheet'),
+  keysBackdrop: $('keys-backdrop'),
+  keysList: $('keys-list'),
+  keysClose: $('keys-close'),
   jump: $('jump-latest'),
   jumpLabel: $('jump-label'),
   budget: $('budget'),
@@ -4609,6 +4613,9 @@ function runPaletteAction(id) {
     case 'resume':
       resumeRunningTask();
       return;
+    case 'shortcuts':
+      openKeys();
+      return;
     default:
       return;
   }
@@ -4665,6 +4672,121 @@ function paletteShortcut(event) {
 }
 
 document.addEventListener('keydown', paletteShortcut);
+
+/* ========================= keyboard shortcuts ===========================
+   The cheat sheet behind `?`, and the two Escape gaps next to it.
+
+   The list is data (SHORTCUT_GROUPS in web/palette.js) so it can be walked by
+   a test; this file only draws it. */
+
+let keysOpen = false;
+let keysReturnFocus = null;
+
+function openKeys(from = null) {
+  if (keysOpen) return;
+  keysOpen = true;
+  keysReturnFocus = from ?? document.activeElement;
+  el.keysSheet.hidden = false;
+  el.keysBackdrop.hidden = false;
+  if (el.keysList.childElementCount === 0) renderKeys();
+  requestAnimationFrame(() => {
+    el.keysBackdrop.classList.add('show');
+    el.keysSheet.classList.add('open');
+  });
+  /** @type {HTMLButtonElement | null} */ (el.keysClose)?.focus();
+}
+
+function closeKeys() {
+  if (!keysOpen) return;
+  keysOpen = false;
+  el.keysSheet.classList.remove('open');
+  el.keysBackdrop.classList.remove('show');
+  setTimeout(() => {
+    el.keysSheet.hidden = true;
+    el.keysBackdrop.hidden = true;
+  }, 180);
+  if (keysReturnFocus && document.contains(keysReturnFocus)) keysReturnFocus.focus();
+  keysReturnFocus = null;
+}
+
+function renderKeys() {
+  el.keysList.innerHTML = '';
+  for (const group of SHORTCUT_GROUPS) {
+    const head = document.createElement('div');
+    head.className = 'palette-group';
+    head.textContent = group.label;
+    el.keysList.append(head);
+
+    for (const row of group.rows) {
+      const line = document.createElement('div');
+      line.className = 'keys-row';
+      const keys = document.createElement('span');
+      keys.className = 'keys-keys';
+      for (const key of row.keys) {
+        const chip = document.createElement('kbd');
+        chip.textContent = key;
+        keys.append(chip);
+      }
+      const label = document.createElement('span');
+      label.className = 'keys-label';
+      label.textContent = row.label;
+      line.append(keys, label);
+      el.keysList.append(line);
+    }
+  }
+}
+
+/**
+ * `?` opens the list — but never while the operator is typing.
+ *
+ * That guard is the whole difference between a shortcut and a bug: `?` is a
+ * character people type, and a cheat sheet that appears in the middle of a
+ * sentence is worse than no cheat sheet at all.
+ */
+function keysShortcut(event) {
+  if (event.key !== '?' || event.metaKey || event.ctrlKey || event.altKey) return;
+  const target = /** @type {HTMLElement | null} */ (event.target);
+  const tag = target?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+  if (!el.login.hidden) return; // the login screen runs no shortcuts
+  event.preventDefault();
+  if (keysOpen) closeKeys();
+  else openKeys();
+}
+
+document.addEventListener('keydown', keysShortcut);
+el.keysClose?.addEventListener('click', () => closeKeys());
+el.keysBackdrop?.addEventListener('click', () => closeKeys());
+
+/**
+ * Escape closes the drawer — the one overlay that was missing it. A drawer you
+ * can only close with the mouse is a drawer that punishes the keyboard, and the
+ * app has a command palette precisely because the keyboard matters here.
+ *
+ * Settings is a screen rather than an overlay, so Escape goes *back* from it,
+ * the same thing the phone's back gesture and the header back arrow do.
+ */
+function escapeShortcut(event) {
+  if (event.key !== 'Escape') return;
+  if (keysOpen) {
+    event.preventDefault();
+    closeKeys();
+    return;
+  }
+  if (el.palette.hidden === false) return; // the palette owns its own Escape
+  if (!el.settingsScreen.hidden) {
+    event.preventDefault();
+    closeSettings();
+    return;
+  }
+  if (!el.drawer.hidden || el.drawer.classList.contains('open')) {
+    event.preventDefault();
+    closeDrawer();
+  }
+}
+
+document.addEventListener('keydown', escapeShortcut);
+
 el.paletteInput?.addEventListener('input', paletteTyped);
 el.paletteInput?.addEventListener('keydown', paletteKeydown);
 el.paletteClose?.addEventListener('click', closePalette);
@@ -4702,11 +4824,13 @@ function applyTheme(pref) {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', dark ? '#201e1b' : '#f5f3ef');
-  const btn = $('btn-theme');
-  if (btn) {
-    btn.setAttribute('aria-label', `Theme: ${pref} — tap to change`);
-    btn.innerHTML = THEME_ICONS[pref] || THEME_ICONS.system;
-  }
+  // One place to read the current theme, and it says so twice: the drawer row
+  // prints the state in words, and its mark changes to match (sun, moon, or
+  // monitor for "follow the system"), which an icon alone could never do.
+  // The mark is swapped, the label node is left where it is: rebuilding the row
+  // would throw away the focused element under the operator's finger.
+  const mark = $('btn-theme-2')?.querySelector('svg');
+  if (mark) mark.outerHTML = THEME_ICONS[pref] || THEME_ICONS.system;
   const label = $('theme-label');
   if (label) label.textContent = `Theme: ${pref}`;
 }
@@ -4725,12 +4849,11 @@ function cycleTheme() {
 
 function initTheme() {
   applyTheme(themePreference());
-  // Three ways in, one behaviour: the top bar's icon, the drawer's row (which
-  // says in words what the icon can only draw), and the palette.
-  for (const id of ['btn-theme', 'btn-theme-2']) {
-    const btn = $(id);
-    if (btn) btn.addEventListener('click', cycleTheme);
-  }
+  // Two ways in, one behaviour: the drawer's row, and the palette's "Switch
+  // theme". (The top bar's icon is gone — on a phone it was the fifth control
+  // in the row, and the drawer says it better.)
+  const btn = $('btn-theme-2');
+  if (btn) btn.addEventListener('click', cycleTheme);
   const mq = window.matchMedia('(prefers-color-scheme: dark)');
   const onChange = () => {
     if (themePreference() === 'system') applyTheme('system');

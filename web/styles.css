@@ -1,7 +1,7 @@
 /* ==========================================================================
    WAIS — components.
 
-   Visual language borrowed from warm minimalism (Claude's register): warm
+   Visual language: warm minimalism — warm
    paper, an ink-dark serif wordmark, one oversized rounded composer, and
    pill chips. Everything else is whitespace.
 
@@ -163,7 +163,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   background: var(--surface-2);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  outline: none;
   transition: background .15s, border-color .15s;
 }
 .field input::placeholder { color: var(--muted); }
@@ -607,13 +606,24 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .send:active { transform: scale(.94); }
 .send[disabled] { opacity: .25; cursor: default; }
 
-/* ------------------------------------------------------------- composer --- */
+/* ------------------------------------------------------------- composer ---
 
-.composer-wrap {
-  position: sticky; bottom: 0; z-index: 15;
-  padding: 6px 14px calc(10px + var(--safe-bottom));
-  background: linear-gradient(to top, var(--paper) 62%, transparent);
-}
+   The stacking ladder, in one place, because "which layer is this on" is the
+   question every one of these numbers answers:
+
+     15  composer (sticky, under the top bar)
+     20  top bar (sticky)
+     40  sheet + scrim, and the drawer's scrim
+     41  the mode sheet
+     50  the drawer
+     65  outputs panel backdrop  ·  66  the panel itself
+     70  artifact preview overlay ·  70/71  the command palette and its backdrop
+     80  the toast
+
+   The toast is last on purpose: it is the app's only voice for "copied",
+   "could not save that", "thanks — noted", and it used to sit *under* the
+   outputs panel and the palette, which are exactly the two surfaces you are
+   looking at when you do something worth confirming. */
 
 /* One card. The field on top, one row of controls underneath — the arrangement
    every chat app has settled on, because a row of labelled pills beside the
@@ -1004,7 +1014,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 .toast {
   position: fixed; left: 50%; bottom: calc(96px + var(--safe-bottom));
-  transform: translate(-50%, 8px); z-index: 60;
+  transform: translate(-50%, 8px); z-index: 80;
   max-width: min(88vw, 420px);
   padding: 11px var(--space-4);
   font-size: var(--text-md); color: var(--paper); background: var(--ink);
@@ -1041,7 +1051,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   background: var(--surface-2); border: 1px solid var(--line-soft);
   border-radius: var(--radius-xs);
 }
-.setting-input:focus { outline: none; border-color: var(--line); }
+.setting-input:focus { border-color: var(--line); }
 .setting-input.setting-toggle {
   width: 22px; height: 22px; padding: 0; accent-color: var(--ink);
   margin-top: 4px; cursor: pointer;
@@ -1064,7 +1074,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   width: 100%; margin-top: 7px; padding: var(--space-2) 10px; font: inherit; font-size: var(--text-sm);
   background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: var(--radius-xs);
 }
-.secret-input:focus { outline: none; border-color: var(--line); }
+.secret-input:focus { border-color: var(--line); }
 .setting-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .setting-note.bad { color: var(--danger); }
 
@@ -1099,7 +1109,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
 }
 .convo:hover { background: var(--surface-2); }
-.convo.on { background: var(--surface-2); }
 .convo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .convo-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .convo-preview { font-size: var(--text-xs); color: var(--muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1125,7 +1134,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 @keyframes spark { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
 
 /* ------------------------------------------------------- outputs panel --- */
-/* Claude-style slide-over: run outputs (files, preview, plan, proof) open
+/* The slide-over: run outputs (files, preview, plan, proof) open
    from the right edge instead of cramped inline cards. On narrow screens it
    becomes a bottom sheet with a backdrop; the global reduced-motion rule
    above already disables the slide for users who ask for it. */
@@ -1199,60 +1208,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   }
   .panel.open { transform: none; }
 }
-
-/* ------------------------------------------------------------- the drawer ---
-   The list is the app's front door, so it gets the front door's furniture:
-   search at the top, one obvious way to start something, the recents in the
-   middle, and everything else at the foot where a thumb rests. */
-
-.drawer-search {
-  display: flex; align-items: center; gap: var(--space-2);
-  margin: 0 var(--space-3) var(--space-3);
-  padding: 8px 12px; border-radius: var(--radius-pill);
-  background: var(--surface-2); color: var(--muted);
-}
-.drawer-search svg { width: 16px; height: 16px; flex: none; }
-.drawer-search input {
-  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
-  font: inherit; font-size: 15px; color: var(--ink);
-}
-.drawer-search input::placeholder { color: var(--muted); }
-
-.cta.new-task { display: flex; align-items: center; justify-content: center; gap: var(--space-2); }
-.cta.new-task svg { width: 16px; height: 16px; }
-
-.convo-group {
-  margin: var(--space-4) var(--space-2) var(--space-1);
-  font-size: var(--text-xs); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-}
-.convo {
-  display: flex; align-items: flex-start; gap: var(--space-2);
-  width: 100%; padding: 10px var(--space-2); border-radius: var(--radius-xs);
-  border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
-}
-.convo:hover { background: var(--surface-2); }
-.convo.on { background: var(--surface-2); }
-.convo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.convo-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.convo-preview { font-size: var(--text-xs); color: var(--muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.convo-date { flex: none; font-size: var(--text-xs); color: var(--muted); padding-top: 2px; font-variant-numeric: tabular-nums; }
-.drawer-actions { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-1); padding-top: var(--space-3); }
-
-/* --------------------------------------------------------- screen changes ---
-   One transition for every screen change, owned by the View Transitions API
-   when it exists: the leaving screen fades and lifts, the arriving one settles
-   from just below. No library, no layout thrash, and nothing at all under
-   prefers-reduced-motion (theme.css switches every animation off). */
-
-::view-transition-old(root) { animation: screen-out var(--dur-2) var(--ease-out) both; }
-::view-transition-new(root) { animation: screen-in var(--dur-3) var(--ease-spring) both; }
 @keyframes screen-out { to { opacity: 0; transform: translateY(-6px); } }
 @keyframes screen-in { from { opacity: 0; transform: translateY(10px); } }
-
-/* The mark on the welcome screen draws itself in once, when the app first
-   paints: the two strokes of the W, then the spark. */
-.badge-art .badge-w { stroke-dasharray: 100; stroke-dashoffset: 100; animation: draw 700ms var(--ease-out) 80ms forwards; }
-.badge-art .badge-spark { opacity: 0; animation: spark 520ms var(--ease-out) 620ms forwards; }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes spark { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
 
@@ -1313,7 +1270,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   animation: spin .7s linear infinite;
 }
 .jump.done .jump-spin { border: 0; background: var(--ok); animation: none; }
-.composer-wrap { position: sticky; }
 
 /* ------------------------------------------------- the panel as a column ---
    Above 1100px the outputs panel stops being a drawer over the conversation and
@@ -1368,7 +1324,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .feedback-note input {
   flex: 1; min-width: 0; padding: 8px 12px; font: inherit; font-size: var(--text-sm);
   color: var(--ink); background: var(--surface-2);
-  border: 1px solid transparent; border-radius: var(--radius-sm); outline: none;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
 }
 .feedback-note input:focus { background: var(--surface); border-color: var(--ink); }
 .feedback-note .msg-btn { opacity: 1; }
@@ -1410,7 +1366,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .palette-field > svg { width: 18px; height: 18px; flex: none; color: var(--muted); }
 .palette-field input {
-  flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+  flex: 1; min-width: 0; border: 0; background: transparent;
   font: inherit; font-size: 16px; color: var(--ink);
 }
 .palette-field input::placeholder { color: var(--muted); }
@@ -1546,4 +1502,72 @@ kbd {
 .msg-usage {
   margin: 6px 0 0; font-size: 11.5px; color: var(--muted);
   font-variant-numeric: tabular-nums; letter-spacing: .01em;
+}
+
+/* -------------------------------------------------------- keyboard focus ---
+   A focus ring for people who navigate with the keyboard — which is a real
+   population here, because the app ships a ⌘K palette and arrow-key lists.
+
+   One pair of rules does the whole job:
+
+     :focus-visible        every keyboard focus gets a ring, on any element
+     :focus:not(...)       no pointer focus gets one, so no rule anywhere else
+                           in this file needs `outline: none` to switch it off
+
+   The ring sits 2px outside the element, except on the four surfaces that live
+   inside a scrolling container, where an outside ring would be clipped. */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+.palette-row:focus-visible,
+.drawer-row:focus-visible,
+.convo:focus-visible,
+.msg-btn:focus-visible,
+.source:focus-visible {
+  outline-offset: -2px;
+}
+
+/* ------------------------------------------------------ thumbs, not mice ---
+   On a touch screen every control is at least 44px on its longest side — the
+   number Apple and Google both publish — because a 34px target is a coin flip
+   with a finger. A mouse is precise, so the desktop keeps its denser sizes and
+   nothing here applies.
+
+   Widths only: the layouts were already built to wrap rather than overflow
+   (the composer row wraps, the top bar is a flex row of icon buttons), so a
+   bigger target grows the row instead of pushing the page sideways. */
+
+@media (hover: none) and (pointer: coarse) {
+  .icon-btn { width: 44px; height: 44px; }
+  .icon-btn.sm { width: 40px; height: 40px; }
+  .msg-btn { min-height: 36px; padding: 7px 10px; }
+  .msg-btn.icon { min-width: 40px; min-height: 40px; }
+  .send { width: 44px; height: 44px; }
+  .drawer-row, .memory-head, .convo { min-height: 44px; }
+  .chip, .mode-chip { min-height: 40px; }
+  .feedback-chip { min-height: 36px; padding: 8px 12px; }
+  .rail-toggle { min-height: 32px; padding: 5px 10px; }
+  .mode-option { min-height: 56px; }
+}
+
+/* ------------------------------------------------------- the cheat sheet ---
+   The `?` list. Same shell as the palette, a two-column layout inside: the keys
+   hold a fixed width so the descriptions line up, which is what makes a list of
+   shortcuts scannable rather than a paragraph. */
+
+.keys-title { flex: 1; font-size: var(--text-md); font-weight: 550; color: var(--ink); }
+.keys-row {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 7px 10px; font-size: var(--text-sm); color: var(--ink-soft);
+}
+.keys-keys { flex: none; min-width: 74px; display: inline-flex; gap: 3px; }
+.keys-label { flex: 1; min-width: 0; }
+/* A phone has no keyboard, so the sheet has nothing to say there — the palette
+   still lists it, and it says so rather than opening an empty box. */
+@media (hover: none) and (pointer: coarse) {
+  .keys-keys { min-width: 64px; }
 }

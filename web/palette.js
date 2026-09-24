@@ -23,7 +23,43 @@ export const ACTIONS = [
   { id: 'settings', label: 'Settings', hint: 'Keys, budget, the phone channel', keywords: 'preferences keys api budget' },
   { id: 'theme', label: 'Switch theme', hint: 'Light, dark, or follow the system', keywords: 'dark light appearance colour color' },
   { id: 'drawer', label: 'Recent tasks', hint: 'Open the drawer and search them', keywords: 'history sidebar list conversations' },
+  { id: 'shortcuts', label: 'Keyboard shortcuts', hint: 'Everything the keyboard can do', keys: ['?'], keywords: 'help keys bindings cheatsheet' },
   { id: 'signout', label: 'Sign out', hint: 'Forget this browser', keywords: 'log out leave' },
+];
+
+/**
+ * The cheat sheet, as data.
+ *
+ * Two rules make a shortcut list worth reading: it only contains keys the app
+ * really listens for, and it is grouped by *where you are* — a list of fifteen
+ * keys in one column is a list nobody finishes. `web_client.test.ts` walks this
+ * array and asserts each shortcut has a handler in the client, so a row cannot
+ * outlive the feature it describes.
+ */
+export const SHORTCUT_GROUPS = [
+  {
+    label: 'Anywhere',
+    rows: [
+      { keys: ['⌘', 'K'], label: 'Search tasks and run a command' },
+      { keys: ['?'], label: 'Show this list' },
+      { keys: ['Esc'], label: 'Close the panel, sheet, drawer or list that is open' },
+    ],
+  },
+  {
+    label: 'In the search box',
+    rows: [
+      { keys: ['↑', '↓'], label: 'Move through the results' },
+      { keys: ['↵'], label: 'Open the highlighted one' },
+      { keys: ['Tab'], label: 'Keep moving, without leaving the box' },
+    ],
+  },
+  {
+    label: 'In the task box',
+    rows: [
+      { keys: ['↵'], label: 'Send the task' },
+      { keys: ['⇧', '↵'], label: 'Start a new line instead' },
+    ],
+  },
 ];
 
 /** Actions that only make sense while a task is running. */

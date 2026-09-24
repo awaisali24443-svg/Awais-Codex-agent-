@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   ACTIONS,
   RUNNING_ACTIONS,
+  SHORTCUT_GROUPS,
   buildResults,
   flatten,
   moveSelection,
@@ -105,5 +106,25 @@ describe('moving through the list', () => {
     assert.equal(moveSelection(0, 0, 1), -1);
     assert.equal(selectionAfter(-1, 4), 0, 'something is always selected when there is something to select');
     assert.equal(selectionAfter(9, 3), 2, 'and it can never point past the end');
+  });
+});
+
+describe('the cheat sheet is data, and it is honest', () => {
+  test('it is grouped, and every row says something', () => {
+    assert.ok(SHORTCUT_GROUPS.length >= 3, 'more than one group, because one column of keys is unreadable');
+    for (const group of SHORTCUT_GROUPS) {
+      assert.ok(group.label, 'every group is named');
+      assert.ok(group.rows.length > 0, `${group.label} has rows`);
+      for (const row of group.rows) {
+        assert.ok(row.keys.length > 0, `"${row.label}" shows its keys`);
+        assert.ok(row.label.length > 8, 'and says what they do in words');
+      }
+    }
+  });
+
+  test('the palette can open it, because a phone has no ? key', () => {
+    const row = ACTIONS.find((action) => action.id === 'shortcuts');
+    assert.ok(row, 'there is a row for it');
+    assert.equal(row?.keys?.[0], '?', 'showing the key that opens it');
   });
 });
