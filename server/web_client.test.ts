@@ -894,8 +894,9 @@ describe('Settings is a directory, not a form', () => {
     assert.ok(page.indexOf('id="settings-search"') < bodyStart, 'and sits above the content');
     assert.ok(
       page.indexOf('id="settings-body"') > page.indexOf('id="settings-search"'),
-      'the list is what gets re-rendered, not the box: re-creating the input on every',
-      'keystroke loses focus and, on a phone, the keyboard',
+      // Re-creating the input on every keystroke loses focus and, on a phone,
+      // the keyboard — so the list is what gets re-rendered, not the box.
+      'the list is re-rendered, the box is not',
     );
     const client = app();
     assert.ok(client.includes("state.settingsQuery = el.settingsSearch.value;"), 'typing filters');
