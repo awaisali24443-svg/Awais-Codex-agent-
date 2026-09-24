@@ -535,6 +535,80 @@ describe('reading while it works', () => {
   });
 });
 
+describe('everything is a keystroke away', () => {
+  test('one box, opened from the keyboard and from a visible button', () => {
+    // ⌘K for the operator at his desk; the button because a phone has no ⌘
+    // key, and a palette that only a keyboard can open is a palette half the
+    // time cannot use.
+    const markup = html();
+    assert.ok(markup.includes('id="palette-input"'), 'there is one input');
+    assert.ok(markup.includes('role="combobox"'), 'and it is a combobox, not a search field');
+    assert.ok(markup.includes('aria-controls="palette-list"') && markup.includes('role="listbox"'), 'wired to its own listbox');
+    assert.ok(markup.includes('id="btn-search"'), 'with a button in the top bar');
+    const client = app();
+    assert.ok(client.includes("event.key === 'k' || event.key === 'K'"), 'the key is K');
+    assert.ok(client.includes('event.metaKey || event.ctrlKey'), 'on both platforms');
+    assert.ok(client.includes('if (paletteOpen) closePalette();'), 'and the same keys close it');
+  });
+
+  test('the list it draws is the one that was tested', () => {
+    // The ranking, the grouping and the wrap-around live in web/palette.js,
+    // where palette.test.ts can reach them; app.js only draws what it returns.
+    const client = app();
+    assert.ok(
+      client.includes("import { RESUME_ACTIONS, RUNNING_ACTIONS, buildResults, flatten, moveSelection, selectionAfter } from './palette.js';"),
+      'the palette logic is imported, not reimplemented',
+    );
+    // "Resume" is the row that matters most after a closed tab: the task is
+    // still running, this tab just stopped watching it.
+    assert.ok(client.includes("paletteRunningElsewhere = active && active.id !== state.runId ? active : null;"), 'a run owned elsewhere is noticed');
+    assert.ok(client.includes('case \'resume\':'), 'and offered');
+    assert.ok(client.includes('attach(run.id, 0);'), 'through the same attach path as the boot recovery');
+    assert.ok(!client.includes('function paletteScore('), 'no second copy of the ranking');
+  });
+
+  test('it is quick, and it teaches its own keys', () => {
+    const client = app();
+    assert.ok(client.includes('clearTimeout(paletteTimer)'), 'keystrokes are debounced');
+    assert.ok(client.includes('setTimeout(() => void refreshPalette(el.paletteInput.value), 140)'), 'by ~140 ms, so nothing waits on a request');
+    assert.ok(client.includes("if (event.key === 'Escape')"), 'Escape closes');
+    assert.ok(client.includes('movePalette(1)') && client.includes('movePalette(-1)'), 'the arrows move the highlight');
+    assert.ok(client.includes("if (event.key === 'Enter')"), 'Enter runs what is highlighted');
+    assert.ok(client.includes("if (event.key === 'Tab')"), 'Tab stays inside the combobox');
+    assert.ok(html().includes('<kbd>'), 'and the footer prints them');
+    // No dialog element: this is a layer over the thread, and the click-away
+    // has to work on a phone as well.
+    assert.ok(html().includes('id="palette-backdrop"'), 'with a backdrop to tap out of');
+  });
+});
+
+describe('the live stream stays in one card', () => {
+  // The operator's question, answered in the code: when a task streams, its
+  // events go into the card for *that run* — and a card is found by run id, so
+  // a reconnect, a return to the foreground, or a second look at a running task
+  // replays into the card that is already there instead of drawing another one.
+  test('a run has exactly one card, found by its id', () => {
+    const client = app();
+    assert.ok(client.includes('if (runId) card.dataset.runId = runId;'), 'the card is keyed by the run');
+    assert.ok(client.includes('return el.thread.querySelector(`.run[data-run-id="${runId}"]`);'), 'and looked up by it');
+    assert.ok(
+      client.includes('const card = cardFor(runId) ? existingCard(runId) : createRunCard(runId);'),
+      'attaching reuses the card it already has, and only creates one when there is none',
+    );
+    assert.ok(client.includes('function existingCard(runId)'), 'the reused card is rebuilt from the DOM');
+  });
+
+  test('every way back into a run goes through that one guard', () => {
+    const client = app();
+    // A reconnect, a foreground return, "Review plan", a resume after the
+    // server restarted — each of them replays a run the thread may already be
+    // showing.
+    const attaches = client.split('attach(').length - 1;
+    assert.ok(attaches >= 8, `all re-entry points use attach() (${attaches} call sites)`);
+    assert.ok(client.includes('if (ownsLiveRun) attach(state.runId, 0);'), 'including reopening its conversation');
+  });
+});
+
 describe('an answer can be rated without leaving the answer', () => {
   test('the thumbs are inline, and the reasons come after the thumbs-down', () => {
     const client = app();

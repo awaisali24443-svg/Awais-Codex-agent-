@@ -85,6 +85,9 @@ try {
     <button class="icon-btn" id="btn-stop" aria-label="Stop task" hidden>
       <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2.5" fill="currentColor" stroke="none"/></svg>
     </button>
+    <button class="icon-btn" id="btn-search" aria-label="Search tasks and commands" title="Search and commands">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+    </button>
     <button class="icon-btn" id="btn-new" aria-label="New task">
       <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
     </button>
@@ -281,6 +284,30 @@ try {
   </header>
   <div class="page-body" id="settings-body"></div>
 </section>
+
+<!-- ======================= command palette ======================= -->
+<!-- One box for tasks and commands. Focus stays in the input (this is a
+     combobox, not a row of tab stops) and the highlighted row is announced
+     through aria-activedescendant, which is the part of the pattern that
+     usually gets skipped. -->
+<div class="palette-backdrop" id="palette-backdrop" hidden></div>
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Search tasks and commands" hidden>
+  <div class="palette-field">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+    <input id="palette-input" type="text" role="combobox" aria-expanded="true"
+           aria-controls="palette-list" aria-autocomplete="list"
+           placeholder="Search tasks, or type a command" autocomplete="off" spellcheck="false" />
+    <button class="icon-btn sm" id="palette-close" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <div class="palette-list" id="palette-list" role="listbox" aria-label="Results"></div>
+  <div class="palette-foot">
+    <span class="palette-hint keys-only"><kbd>&#8593;</kbd> <kbd>&#8595;</kbd> move &middot; <kbd>&#8629;</kbd> open &middot; <kbd>esc</kbd> close</span>
+    <span class="palette-hint touch-only">Tap a result</span>
+    <span class="palette-hint keys-only"><kbd>&#8984;</kbd><kbd>K</kbd></span>
+  </div>
+</div>
 
 <!-- ======================= outputs panel ======================= -->
 <div class="panel-backdrop" id="panel-backdrop" hidden></div>

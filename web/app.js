@@ -1,5 +1,6 @@
 import { stripMarkdownForSpeech, combineTranscripts, recognitionErrorMessage } from './voice.js';
 import { artifactKind, artifactMeta, markDead, sourcesFromText, sourcesSummary } from './records.js';
+import { RESUME_ACTIONS, RUNNING_ACTIONS, buildResults, flatten, moveSelection, selectionAfter } from './palette.js';
 import { SUGGESTIONS, suggestionFill, fillComposerFromChip } from './welcome.js';
 import {
   statusForStep,
@@ -66,6 +67,12 @@ const el = {
   convos: $('convos'),
   drawerSearch: $('drawer-search'),
   screenApp: $('screen-app'),
+  palette: $('palette'),
+  paletteBackdrop: $('palette-backdrop'),
+  paletteInput: $('palette-input'),
+  paletteList: $('palette-list'),
+  paletteClose: $('palette-close'),
+  paletteButton: $('btn-search'),
   jump: $('jump-latest'),
   jumpLabel: $('jump-label'),
   budget: $('budget'),
@@ -3902,11 +3909,14 @@ function newTask() {
 $('btn-new').addEventListener('click', newTask);
 $('btn-new-2').addEventListener('click', newTask);
 
-$('btn-signout').addEventListener('click', async () => {
+/** Forget this browser. Named so the palette and the button cannot drift apart. */
+async function signOut() {
   try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
   closeDrawer();
   showLogin();
-});
+}
+
+$('btn-signout').addEventListener('click', signOut);
 
 /* ---------------------------------------------------------------- scroll -- */
 
@@ -4075,6 +4085,293 @@ function relativeTime(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/* ============================== the palette =============================
+   One box for everything, on the keyboard. The research on this pattern is
+   clear about the parts that matter: it holds actions *and* tasks, it is
+   grouped and ranked (never a flat list), it teaches its own shortcuts, it is
+   the same box on every screen, and on a phone — where there is no ⌘ — it has
+   a visible way in.
+
+   This half is only the wiring. Which rows appear, what order they are in, and
+   where the highlight goes are pure functions in web/palette.js, because those
+   are the decisions worth testing. */
+
+let paletteOpen = false;
+let paletteRows = [];
+let paletteIndex = -1;
+let paletteSeq = 0;
+let paletteTimer = null;
+let paletteReturnFocus = null;
+/* A run this tab is not watching — closed tab, second device — is worth one
+   row in the palette: it is the one thing here that changes on its own. */
+let paletteRunningElsewhere = null;
+
+function paletteRoot() {
+  return el.palette;
+}
+
+function isPaletteOpen() {
+  return paletteOpen;
+}
+
+function openPalette({ from = null } = {}) {
+  if (paletteOpen) return;
+  paletteOpen = true;
+  paletteReturnFocus = from ?? document.activeElement;
+  el.palette.hidden = false;
+  el.paletteBackdrop.hidden = false;
+  requestAnimationFrame(() => {
+    el.paletteBackdrop.classList.add('show');
+    el.palette.classList.add('open');
+  });
+  el.paletteInput.value = '';
+  paletteIndex = -1;
+  void refreshPalette('');
+  // The input keeps focus the whole time: this is a combobox, and the list is
+  // announced through aria-activedescendant rather than by moving focus.
+  el.paletteInput.focus();
+}
+
+function closePalette() {
+  if (!paletteOpen) return;
+  paletteOpen = false;
+  el.palette.classList.remove('open');
+  el.paletteBackdrop.classList.remove('show');
+  setTimeout(() => {
+    el.palette.hidden = true;
+    el.paletteBackdrop.hidden = true;
+  }, 180);
+  paletteRows = [];
+  paletteIndex = -1;
+  if (paletteReturnFocus && document.contains(paletteReturnFocus)) paletteReturnFocus.focus();
+  paletteReturnFocus = null;
+}
+
+/** 140 ms behind the last keystroke: one request per pause, not per letter. */
+function paletteTyped() {
+  clearTimeout(paletteTimer);
+  paletteTimer = setTimeout(() => void refreshPalette(el.paletteInput.value), 140);
+}
+
+async function refreshPalette(query) {
+  const seq = ++paletteSeq;
+  let conversations = [];
+  let active = null;
+  try {
+    const q = String(query ?? '').trim();
+    const [list, activeRun] = await Promise.all([
+      api(`/api/conversations${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+      api('/api/runs/active').catch(() => ({ run: null })),
+    ]);
+    conversations = Array.isArray(list.conversations) ? list.conversations : [];
+    active = activeRun?.run ?? null;
+  } catch {
+    // The palette still works without the task list: the actions are local.
+  }
+  if (seq !== paletteSeq || !paletteOpen) return; // a later keystroke won
+
+  paletteRunningElsewhere = active && active.id !== state.runId ? active : null;
+  const groups = buildResults({
+    // Only offered while there is something to stop.
+    actions: liveRun() ? RUNNING_ACTIONS : paletteRunningElsewhere ? RESUME_ACTIONS : [],
+    conversations,
+    query,
+    activeConversationId: state.conversationId,
+  });
+  paletteRows = flatten(groups);
+  paletteIndex = selectionAfter(paletteIndex, paletteRows.length);
+  renderPalette(groups);
+}
+
+function renderPalette(groups) {
+  el.paletteList.innerHTML = '';
+  if (paletteRows.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'palette-empty';
+    empty.setAttribute('role', 'status');
+    // Written as a sentence, because a screen reader reads this out.
+    empty.textContent = 'Nothing matches that yet. Try a word from a task, or a command like settings.';
+    el.paletteList.append(empty);
+    el.paletteInput.setAttribute('aria-activedescendant', '');
+    return;
+  }
+
+  let index = -1;
+  for (const group of groups) {
+    const label = document.createElement('div');
+    label.className = 'palette-group';
+    label.textContent = group.label;
+    el.paletteList.append(label);
+
+    for (const row of group.rows) {
+      index += 1;
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'palette-row' + (row.kind === 'task' ? ' task' : '');
+      option.id = `palette-row-${index}`;
+      option.setAttribute('role', 'option');
+      option.dataset.index = String(index);
+      option.setAttribute('aria-selected', String(index === paletteIndex));
+
+      const main = document.createElement('span');
+      main.className = 'palette-main';
+      const title = document.createElement('span');
+      title.className = 'palette-label';
+      title.textContent = row.label;
+      main.append(title);
+      if (row.hint) {
+        const hint = document.createElement('span');
+        hint.className = 'palette-hint';
+        // A match inside a task shows the line it matched — "here is why this
+        // is in the list".
+        hint.textContent = row.matched === 'preview' ? `…${row.hint}` : row.hint;
+        main.append(hint);
+      }
+      option.append(main);
+
+      if (row.keys) {
+        const keys = document.createElement('span');
+        keys.className = 'palette-keys';
+        for (const key of row.keys) {
+          const chip = document.createElement('kbd');
+          chip.textContent = key;
+          keys.append(chip);
+        }
+        option.append(keys);
+      }
+      if (row.active) {
+        const here = document.createElement('span');
+        here.className = 'palette-here';
+        here.textContent = 'open now';
+        option.append(here);
+      }
+
+      option.addEventListener('click', () => runPaletteRow(index));
+      el.paletteList.append(option);
+    }
+  }
+  highlightPalette();
+}
+
+function highlightPalette() {
+  const options = el.paletteList.querySelectorAll('.palette-row');
+  options.forEach((option) => {
+    const on = Number(option.dataset.index) === paletteIndex;
+    option.setAttribute('aria-selected', String(on));
+    option.classList.toggle('on', on);
+    if (on) option.scrollIntoView({ block: 'nearest' });
+  });
+  const current = options[paletteIndex];
+  el.paletteInput.setAttribute('aria-activedescendant', current ? current.id : '');
+}
+
+function movePalette(delta) {
+  paletteIndex = moveSelection(paletteIndex, paletteRows.length, delta);
+  highlightPalette();
+}
+
+async function runPaletteRow(index) {
+  const row = paletteRows[index];
+  if (!row) return;
+  closePalette();
+  switch (row.kind) {
+    case 'task':
+      await openConversation(row.id);
+      return;
+    case 'action':
+      runPaletteAction(row.id);
+      return;
+    default:
+      return;
+  }
+}
+
+function runPaletteAction(id) {
+  switch (id) {
+    case 'new-task':
+      newTask();
+      return;
+    case 'settings':
+      openSettings();
+      return;
+    case 'theme':
+      cycleTheme();
+      return;
+    case 'drawer':
+      openDrawer();
+      el.drawerSearch?.focus();
+      return;
+    case 'signout':
+      void signOut();
+      return;
+    case 'stop':
+      el.stop?.click();
+      return;
+    case 'resume':
+      resumeRunningTask();
+      return;
+    default:
+      return;
+  }
+}
+
+function paletteKeydown(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closePalette();
+    return;
+  }
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    movePalette(1);
+    return;
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    movePalette(-1);
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    if (paletteIndex < 0 && paletteRows.length > 0) paletteIndex = 0;
+    void runPaletteRow(paletteIndex);
+    return;
+  }
+  if (event.key === 'Tab') {
+    // The input keeps focus: Tab in a combobox moves through the listbox.
+    event.preventDefault();
+    movePalette(event.shiftKey ? -1 : 1);
+  }
+}
+
+/** Pick up the run this tab is not watching — same path as the boot recovery. */
+function resumeRunningTask() {
+  const run = paletteRunningElsewhere;
+  if (!run) return;
+  paletteRunningElsewhere = null;
+  state.conversationId = run.conversationId;
+  renderAsk(run.prompt);
+  attach(run.id, 0);
+  setRunning(true);
+  toast('A task is already running — showing it live.');
+}
+
+/** ⌘K on a Mac, Ctrl+K everywhere else — and the same keys close it again. */
+function paletteShortcut(event) {
+  if (!(event.key === 'k' || event.key === 'K')) return;
+  if (!(event.metaKey || event.ctrlKey)) return;
+  event.preventDefault();
+  if (paletteOpen) closePalette();
+  else openPalette();
+}
+
+document.addEventListener('keydown', paletteShortcut);
+el.paletteInput?.addEventListener('input', paletteTyped);
+el.paletteInput?.addEventListener('keydown', paletteKeydown);
+el.paletteClose?.addEventListener('click', closePalette);
+el.paletteBackdrop?.addEventListener('click', closePalette);
+el.paletteButton?.addEventListener('click', (event) => openPalette({ from: event.currentTarget }));
+
 /* ----------------------------------------------------------------- theme -- */
 
 /* Light / dark / system. The choice persists on this device; "system" follows
@@ -4115,23 +4412,25 @@ function applyTheme(pref) {
   if (label) label.textContent = `Theme: ${pref}`;
 }
 
+/** Light → dark → follow the system → light. One behaviour, several ways in. */
+function cycleTheme() {
+  const order = ['light', 'dark', 'system'];
+  const next = order[(order.indexOf(themePreference()) + 1) % order.length];
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    /* private mode: apply for this session only */
+  }
+  applyTheme(next);
+}
+
 function initTheme() {
   applyTheme(themePreference());
-  const cycle = () => {
-    const order = ['light', 'dark', 'system'];
-    const next = order[(order.indexOf(themePreference()) + 1) % order.length];
-    try {
-      localStorage.setItem(THEME_KEY, next);
-    } catch {
-      /* private mode: apply for this session only */
-    }
-    applyTheme(next);
-  };
-  // Two ways in, one behaviour: the top bar's icon and the drawer's row, which
-  // says in words what the icon can only draw.
+  // Three ways in, one behaviour: the top bar's icon, the drawer's row (which
+  // says in words what the icon can only draw), and the palette.
   for (const id of ['btn-theme', 'btn-theme-2']) {
     const btn = $(id);
-    if (btn) btn.addEventListener('click', cycle);
+    if (btn) btn.addEventListener('click', cycleTheme);
   }
   const mq = window.matchMedia('(prefers-color-scheme: dark)');
   const onChange = () => {
