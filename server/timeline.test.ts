@@ -10,9 +10,25 @@ import {
   stripMilestones,
 } from '../web/timeline.js';
 
+describe('a warning is not an accomplishment', () => {
+  it('a note claims nothing, and is not a tick', () => {
+    // The engine says "Still thinking — retrying the request." and the client
+    // rendered it as a completed step: a green check next to a retry, in the
+    // screenshot that started this. A note carries no outcome.
+    assert.equal(statusForStep({ status: 'note' }), 'note');
+    assert.equal(nodeIconForStatus('note'), 'info');
+    assert.equal(nodeIconForStatus('done'), 'check');
+    // And a warn line no longer becomes `done` by accident of ordering.
+    assert.notEqual(statusForStep({ icon: 'warn', status: 'note' }), 'done');
+    assert.equal(statusForStep({ icon: 'warn' }), 'failed', 'a plain warning still reads as a problem');
+  });
+});
+
 describe('step status derivation', () => {
-  it('knows the four timeline statuses', () => {
-    assert.deepEqual([...STEP_STATUSES].sort(), ['done', 'failed', 'running', 'skipped']);
+  it('knows the five timeline statuses', () => {
+    // `note` joined the list when a retry warning was being drawn as a green
+    // tick: an engine's line about what it is doing has no outcome to report.
+    assert.deepEqual([...STEP_STATUSES].sort(), ['done', 'failed', 'note', 'running', 'skipped']);
   });
 
   it('derives done from the done flag', () => {

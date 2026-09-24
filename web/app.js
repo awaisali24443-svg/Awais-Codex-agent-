@@ -306,17 +306,7 @@ async function enter() {
     if (noticeShown) note('');
   }
 
-  try {
-    const { run } = await api('/api/runs/active');
-    if (run) {
-      state.conversationId = run.conversationId;
-      renderAsk(run.prompt);
-      attach(run.id, 0);
-      setRunning(true);
-      toast('A task is already running — showing it live.');
-      return;
-    }
-  } catch { /* not fatal: just means nothing is running */ }
+  if (await ensureLiveRun()) return;
 
   // The WhatsApp "done" ping toggle only appears when a key is configured —
   // offering a ping we cannot send would be a lie.
@@ -448,8 +438,10 @@ async function openConversation(id, branchId = null) {
     for (const d of drafts ?? []) draftByRun.set(d.runId, d.id);
   } catch { /* LinkedIn not connected or not configured — no buttons */ }
   let ownsLiveRun = false;
+  /** @type {Array<any>} */
+  let messages = [];
   try {
-    const { messages } = await api(`/api/conversations/${id}/messages${qs}`);
+    ({ messages } = await api(`/api/conversations/${id}/messages${qs}`));
     for (const message of messages) {
       // The question that started the live run is written down the moment the
       // run exists (the answer is not, until the run closes), so its runId is
@@ -476,9 +468,18 @@ async function openConversation(id, branchId = null) {
   // back: without this the operator returns to their finished question, no
   // answer arriving, no spinner, "Working…" in the header, and a locked
   // composer. The task looked lost while it was still running.
+  // A conversation whose own messages say a run is still going gets that run
+  // back, with no extra request and no dependence on `state.runId` — which after
+  // a reload is null, and used to be the only thing this check looked at.
+  const liveMessage = messages.find((m) => m.runId && LIVE_RUN_STATUSES.includes(m.runStatus));
   if (liveRun()) {
     if (ownsLiveRun) attach(state.runId, 0);
     else renderLiveRunElsewhere();
+  } else if (liveMessage && !(await ensureLiveRun({ announce: false }))) {
+    // The server no longer has it running (it finished, or the process that
+    // owned it is gone): replay that run's own stream so the thread catches up
+    // to whatever it actually became, instead of showing a question forever.
+    attachLiveRun({ id: liveMessage.runId, conversationId: id, prompt: '' });
   }
 
   renderConversations();
@@ -735,6 +736,65 @@ function foldWork(card) {
   if (card.thinking) card.thinking.open = false;
 }
 
+/**
+ * Make sure a task that is running is on screen.
+ *
+ * The complaint that started this: "I submitted a task and waited for more than
+ * three minutes — no live stream, just a retrying line." The stream was fine.
+ * Finding it was not. Three holes, all here:
+ *
+ *   - the boot recovery asked `/api/runs/active` once, inside a silent `catch`;
+ *     one failed request (a cold start, a phone waking, a dropped connection)
+ *     and the app decided nothing was running, forever;
+ *   - opening the conversation that owns a run re-attached only if `state.runId`
+ *     was already set — which after a reload it never is;
+ *   - not one of those paths hid the starter cards, so a reload mid-task showed
+ *     the hero *and* the live card.
+ *
+ * So: one function, used from every entry point, which retries once before
+ * giving up, says so when even that failed, and always leaves the screen
+ * matching the server.
+ */
+async function ensureLiveRun({ attempts = 2, announce = true } = {}) {
+  if (liveRun()) return true;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const { run } = await api('/api/runs/active');
+      if (!run) return false;
+      attachLiveRun(run);
+      if (announce) toast('A task is still running — showing it live.');
+      return true;
+    } catch {
+      // A sleeping instance refuses the first request of the day; one retry is
+      // the difference between "nothing is running" and "I could not ask".
+      if (attempt < attempts - 1) await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  const notice = renderNotice('Could not check whether a task is running.', false, 'warn');
+  const again = document.createElement('button');
+  again.type = 'button';
+  again.className = 'retry-btn';
+  again.textContent = 'Check again';
+  again.addEventListener('click', () => {
+    notice.remove();
+    void ensureLiveRun({ announce: false });
+  });
+  notice.append(again);
+  return false;
+}
+
+/** Put a run the server says is live on screen, in its own card. */
+function attachLiveRun(run) {
+  state.conversationId = run.conversationId;
+  state.runConversationId = run.conversationId;
+  showHero(false);
+  // The question is written down the moment a run exists; a recovery that does
+  // not find it in the thread draws it, and one that does leaves it alone.
+  if (!cardFor(run.id)) renderAsk(run.prompt);
+  setRunning(true);
+  attach(run.id, 0);
+}
+
 /* A run in progress is drawn as one card: thinking, then steps, then answer. */
 function createRunCard(runId = null) {
   const card = document.createElement('div');
@@ -754,7 +814,12 @@ function createRunCard(runId = null) {
       <span class="meta"></span>
       <svg class="thinking-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
     </summary>
-    <div class="thinking-body"></div>`;
+    <div class="thinking-body"><p class="thinking-wait"></p></div>`;
+  // The panel is open from the first second, and for the first while it has
+  // nothing in it — which is what an empty box with a chevron looks like: a
+  // bug. It says what is true instead: the request is out, nothing is back yet.
+  thinking.querySelector('.thinking-wait').textContent =
+    'The request is out. Nothing has come back from the model yet.';
 
   const steps = document.createElement('div');
   steps.className = 'steps';
@@ -823,8 +888,17 @@ function createRunCard(runId = null) {
 
 function drawThinking(card) {
   const text = card.thinkingText + card.thinkingTail;
-  card.thinkingBody.textContent = text;
-  card.thinkingMeta.textContent = card.elapsed ?? `${Math.round(text.length / 4)} tok`;
+  // Once there is something to read, the placeholder goes for good.
+  card.thinkingBody.querySelector('.thinking-wait')?.remove();
+  if (text) {
+    // The text node is written only when it changed: replacing it on every
+    // token would restart selection and scroll inside the panel.
+    const body = card.thinkingBody;
+    const existing = body.lastChild;
+    if (existing && existing.nodeType === Node.TEXT_NODE) existing.nodeValue = text;
+    else body.append(document.createTextNode(text));
+  }
+  card.thinkingMeta.textContent = card.elapsed ?? (text ? `${Math.round(text.length / 4)} tok` : '');
 }
 
 /**
@@ -1469,11 +1543,15 @@ function handleEvent(card, event, data) {
         break;
       }
       const waiting = card.stepIndex.get('rate-limit');
-      if (waiting) setStepStatus(waiting, 'done');
-      addStep(card, `log:${card.steps.children.length}`, {
+      if (waiting && data.level !== 'warn') setStepStatus(waiting, 'done');
+      // Keyed by the message, not by position: an engine that retries says the
+      // same sentence every time, and five identical rows is not five pieces of
+      // information. A warning is also not a result — it gets the `note`
+      // status, which claims nothing, instead of the green check it used to get.
+      addStep(card, `log:${message}`, {
         name: message,
-        icon: data.level === 'error' ? 'warn' : data.level === 'warn' ? 'warn' : 'info',
-        done: true,
+        icon: data.level === 'info' ? 'info' : 'warn',
+        status: data.level === 'info' ? 'done' : 'note',
       });
       break;
     }
@@ -2867,7 +2945,13 @@ function attach(runId, after = 0) {
 // refresh the whole conversation instead of resuming the dead position.
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
-  if (!state.runId) return;
+  // Nothing attached at all: this is the phone waking up on a task started
+  // somewhere else (a laptop, another tab, WhatsApp). Ask the server before
+  // deciding there is nothing to show.
+  if (!state.runId) {
+    void ensureLiveRun({ attempts: 1, announce: false });
+    return;
+  }
   let run = null;
   try {
     ({ run } = await api(`/api/runs/${state.runId}`));
@@ -4800,13 +4884,16 @@ el.paletteButton?.addEventListener('click', (event) => openPalette({ from: event
    the inline snippet in index.html — this only owns the toggle and OS
    changes. Zero network cost: everything is local. */
 const THEME_KEY = 'codex-theme';
+/* The class is part of the icon, not decoration: a bare inline SVG in a flex
+   row has no intrinsic size and grows to fill the container — which is how this
+   row once rendered as a moon the width of the drawer. */
 const THEME_ICONS = {
   light:
-    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>',
+    '<svg class="drawer-row-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>',
   dark:
-    '<svg viewBox="0 0 24 24"><path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5Z"/></svg>',
+    '<svg class="drawer-row-icon" viewBox="0 0 24 24"><path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5Z"/></svg>',
   system:
-    '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>',
+    '<svg class="drawer-row-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>',
 };
 
 function themePreference() {

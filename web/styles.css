@@ -811,6 +811,12 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .drawer-row:active { background: var(--surface-2); }
 .drawer-row-icon { width: 17px; height: 17px; flex: none; stroke: var(--muted); }
+/* Belt and braces on the bug that shipped a moon the width of the drawer: any
+   icon inside a drawer row is sized by the row, so losing an icon's class can
+   never grow it to fill the container again. An inline SVG with no intrinsic
+   size does exactly that. */
+.drawer-row > svg,
+.drawer-foot > svg { width: 17px; height: 17px; flex: none; }
 .drawer-row-label { flex: 1; }
 .drawer-row-chevron { width: 15px; height: 15px; flex: none; stroke: var(--muted); }
 
@@ -1585,3 +1591,21 @@ kbd {
 @media (hover: none) and (pointer: coarse) {
   .keys-keys { min-width: 64px; }
 }
+
+/* ------------------------------------------------------------- the wait ---
+   What a card says while the model has said nothing. The panel used to be an
+   empty box with a chevron, which reads as a broken app; it now says the true
+   thing until there is something to say. */
+
+.thinking-wait {
+  margin: 0; padding: 2px 0 4px;
+  font-size: var(--text-sm); color: var(--muted); font-style: italic;
+}
+
+/* A note is not a result: the engine's own line about what it is doing gets a
+   plain mark instead of the green tick a `done` step carries. */
+.step[data-status="note"] .step-icon {
+  border-color: transparent; background: transparent; color: var(--muted);
+}
+.step[data-status="note"] .step-name { color: var(--muted); }
+.step[data-status="note"] .step-rail::before { opacity: .5; }

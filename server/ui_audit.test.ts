@@ -339,6 +339,28 @@ describe('the stylesheet does not grow by accident', () => {
   });
 });
 
+describe('an icon cannot grow to fill its row', () => {
+  test('the drawer sizes the icons itself, not their classes', () => {
+    // The bug: `applyTheme` swapped the drawer row's mark by replacing the SVG's
+    // markup, and the replacement had no class — so `.drawer-row-icon`'s 17px
+    // never applied, and an inline SVG with no intrinsic size grew to the width
+    // of the drawer. What shipped was a moon the size of a phone screen.
+    assert.ok(css().includes('.drawer-row > svg'), 'the row sizes any icon inside it');
+    assert.ok(/^\.drawer-row > svg,[\s\S]{0,80}flex: none/m.test(css()), 'with a fixed size and no flex growth');
+  });
+
+  test('every icon the client injects carries the class its styles expect', () => {
+    const client = app();
+    // The theme marks are injected as markup, so their class is part of the fix.
+    const themeIcons = client.slice(client.indexOf('const THEME_ICONS'), client.indexOf('function themePreference'));
+    const svgs = themeIcons.match(/<svg[^>]*>/g) ?? [];
+    assert.ok(svgs.length >= 3, 'there are three theme marks');
+    for (const svg of svgs) {
+      assert.match(svg, /class="drawer-row-icon"/, `a theme mark without its class grows: ${svg}`);
+    }
+  });
+});
+
 describe('the small things a reader notices', () => {
   test('motion is opt-in everywhere it is used', () => {
     const animations = (css().match(/animation:/g) ?? []).length;

@@ -2,7 +2,13 @@
    Manus-style timeline rendering. DOM wiring stays in web/app.js; everything
    here is testable without a browser. */
 
-export const STEP_STATUSES = ['running', 'done', 'skipped', 'failed'];
+/**
+ * `note` is the one status that claims nothing: an engine's own line about what
+ * it is doing has no outcome to report, and rendering it as `done` (which is
+ * what the client did) put a green check next to "Still thinking — retrying the
+ * request." A retry is not an accomplishment.
+ */
+export const STEP_STATUSES = ['running', 'done', 'skipped', 'failed', 'note'];
 
 /**
  * Derive a timeline status from the options a step was drawn with. An
@@ -29,6 +35,7 @@ export function nodeIconForStatus(status) {
     case 'done': return 'check';
     case 'skipped': return 'dash';
     case 'failed': return 'cross';
+    case 'note': return 'info';
     default: return 'spinner';
   }
 }

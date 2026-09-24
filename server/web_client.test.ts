@@ -742,6 +742,72 @@ describe('everything is a keystroke away', () => {
   });
 });
 
+describe('the card tells the truth while the model is silent', () => {
+  test('the thinking panel is never an empty box', () => {
+    const client = app();
+    assert.ok(client.includes('thinking-wait'), 'there is a line for the wait');
+    assert.ok(
+      client.includes('The request is out. Nothing has come back from the model yet.'),
+      'and it says the true thing',
+    );
+    assert.ok(client.includes("card.thinkingBody.querySelector('.thinking-wait')?.remove();"), 'it goes when the text arrives');
+    assert.ok(css().includes('.thinking-wait'), 'and it is styled as the quietest thing in the panel');
+  });
+
+  test('a retry is a note, and repeats collapse into one row', () => {
+    const client = app();
+    assert.ok(client.includes("status: data.level === 'info' ? 'done' : 'note',"), 'only an info line claims a result');
+    // Keyed by message, not by position: an engine that retries says the same
+    // sentence every ten seconds, and five identical rows is not five facts.
+    assert.ok(client.includes('addStep(card, `log:${message}`, {'), 'log rows are keyed by the line itself');
+    assert.ok(!client.includes('addStep(card, `log:${card.steps.children.length}`'), 'not by their position in the list');
+    assert.ok(css().includes('.step[data-status="note"]'), 'a note is drawn without the tick styling');
+  });
+});
+
+describe('a running task cannot hide from you', () => {
+  // This is the bug the operator photographed: a submitted task, a three-minute
+  // wait, no live stream on screen — only a "retrying" line. The stream was
+  // fine; finding it was not. These are the three holes, pinned.
+  test('every way into the app can find a live run', () => {
+    const client = app();
+    assert.ok(client.includes('async function ensureLiveRun('), 'there is one recovery path');
+    assert.ok(client.includes('async function ensureLiveRun({ attempts = 2, announce = true } = {}) {'), 'and it retries before giving up');
+    // The boot recovery used to be a single request inside a silent catch:
+    // one cold-start failure and the app decided nothing was running forever.
+    assert.ok(client.includes("const notice = renderNotice('Could not check whether a task is running.'"), 'a failed check says so instead of pretending');
+    assert.ok(client.includes("again.textContent = 'Check again'"), 'and offers the retry');
+    assert.ok(!/catch \{ \/\* not fatal: just means nothing is running \*\/ \}/.test(client), 'the silent version is gone');
+    // Recovery hides the starter cards. Without this a reload mid-task showed
+    // the hero *and* the live card, which is the screenshot.
+    assert.ok(client.includes('showHero(false);\n  // The question is written down'), 'recovery hides the hero');
+  });
+
+  test('opening a conversation puts its live run back', () => {
+    const client = app();
+    // It no longer depends on `state.runId`, which is null after a reload.
+    assert.ok(
+      client.includes("const liveMessage = messages.find((m) => m.runId && LIVE_RUN_STATUSES.includes(m.runStatus));"),
+      'the thread reads the run state out of its own messages',
+    );
+    assert.ok(client.includes('} else if (liveMessage && !(await ensureLiveRun({ announce: false })))'), 'and re-attaches, or catches up if it has since ended');
+    // And the messages array has to survive the try block for that to work.
+    assert.ok(client.includes('let messages = [];'), 'the message list is in scope');
+  });
+
+  test('the phone re-checks when it comes back to the app', () => {
+    const client = app();
+    assert.ok(/visibilitychange/.test(client), 'waking the app is an entry point too');
+    // With nothing attached, a wake-up asks the server instead of returning
+    // early on `!state.runId` — which is how a task started on the laptop stayed
+    // invisible on the phone.
+    assert.ok(
+      client.includes('if (!state.runId) {\n    void ensureLiveRun({ attempts: 1, announce: false });'),
+      'and asks even when it has no run of its own',
+    );
+  });
+});
+
 describe('the live stream stays in one card', () => {
   // The operator's question, answered in the code: when a task streams, its
   // events go into the card for *that run* — and a card is found by run id, so
