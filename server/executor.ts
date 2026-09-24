@@ -33,7 +33,8 @@ import { emitEvent, finishRun, getRun, setRunStatus, TERMINAL_STATUSES, buildHis
 import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile } from './memory.js';
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
-import { withDesignGuide } from './design.js';
+import { looksLikeUiMission, withDesignGuide } from './design.js';
+import { briefChoseDirection, describeDirection, pickDirection } from './design/directions.js';
 import { DecisionScanner, stripDecisions, wantsDecisions, withDecisions } from './decisions.js';
 import type { ThinkingKind } from './engine/types.js';
 import { MAX_SEEN_URLS, extractUrls, checkSources, searchQueryOf, urlsIn } from './sources.js';
@@ -641,11 +642,27 @@ export class RunExecutor {
         // connected — otherwise the contract would promise reads the server
         // cannot perform and burn a pass finding that out.
         const googleConnected = await this.googleConnected();
+        // A page is built in a direction, and the direction is decided here —
+        // before the engine writes one file — because it is the difference
+        // between a page that looks designed and the same careful grey layout
+        // every generated page has. It is announced, not asked about yet: the
+        // operator can see which one was chosen and why, in the same list as
+        // everything else the task did.
+        const direction = looksLikeUiMission(memory.prompt) ? pickDirection(memory.prompt) : null;
+        if (direction) {
+          const why = briefChoseDirection(memory.prompt)
+            ? 'the brief points here'
+            : 'nothing in the brief pointed anywhere, so this is the default';
+          ctx.log(`Direction: ${describeDirection(direction)} — ${why}.`);
+        }
         const mission =
           resumePreamble +
           planPreamble +
           withGoogle(
-            withDesignGuide(withLinkedIn(withPlanning(withDecisions(memory.prompt)))),
+            withDesignGuide(
+              withLinkedIn(withPlanning(withDecisions(memory.prompt))),
+              direction?.id,
+            ),
             googleConnected,
           );
         result =

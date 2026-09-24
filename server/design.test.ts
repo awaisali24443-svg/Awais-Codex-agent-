@@ -45,7 +45,8 @@ describe('withDesignGuide — wire-only injection', () => {
     const prompt = 'Design a landing page for my portfolio';
     const wired = withDesignGuide(prompt);
     assert.ok(wired.endsWith(prompt), 'operator prompt stays intact at the end');
-    assert.ok(wired.includes('UI Design Guide') || wired.includes('Design guide'));
+    assert.ok(wired.includes('UI Craft Guide'), 'the craft guide is the file that rides along');
+    assert.ok(wired.includes('Craft guide'), 'and it announces what it is');
     assert.ok(wired.includes('var(--paper)'), 'guide carries the arena token rule');
     assert.ok(wired.length > prompt.length);
   });
@@ -53,6 +54,60 @@ describe('withDesignGuide — wire-only injection', () => {
   it('returns the identical string for non-UI missions — zero extra tokens', () => {
     const prompt = 'Summarize this article about AI agents';
     assert.equal(withDesignGuide(prompt), prompt);
+  });
+});
+
+describe('withDesignGuide — the art direction rides on the wire too', () => {
+  it('injects the chosen direction, its recipe, and the craft guide', () => {
+    const prompt = 'Design a landing page for a jewellery atelier';
+    const wired = withDesignGuide(prompt, 'atelier');
+    assert.ok(wired.endsWith(prompt), 'the operator prompt is still the last thing the model reads');
+    assert.ok(wired.includes('ART DIRECTION — Atelier'), 'the direction is named');
+    assert.ok(wired.includes('PALETTE'), 'and specified, not described');
+    assert.ok(wired.includes('PREFS') === false, 'no stray placeholders');
+    // The recipe and the craft guide are separate jobs: one decides how the
+    // page looks, the other whether it is any good.
+    assert.ok(wired.includes('Craft guide'), 'the craft floor still rides along');
+    assert.ok(wired.indexOf('ART DIRECTION') < wired.indexOf('Craft guide'), 'direction first, craft second');
+  });
+
+  it('a task that is not building a UI gets the identical string back, direction or not', () => {
+    const prompt = 'Summarize this article about AI agents';
+    assert.equal(withDesignGuide(prompt, 'kinetic'), prompt);
+  });
+
+  it('a direction nobody defined is ignored rather than guessed at', () => {
+    // A page built in an undefined direction would disagree with the plan that
+    // named it, so the recipe is dropped and the craft guide still applies.
+    const prompt = 'Design a landing page for my portfolio';
+    const wired = withDesignGuide(prompt, 'brutalist-vaporwave');
+    assert.ok(!wired.includes('ART DIRECTION'), 'no recipe for an unknown direction');
+    assert.ok(wired.includes('Craft guide'), 'but the craft floor is not lost');
+  });
+
+  it('the direction survives into the wire prompt without the operator prompt being rewritten', () => {
+    const prompt = 'Build a docs website for our developer API';
+    const wired = withDesignGuide(prompt, 'blueprint');
+    assert.ok(wired.includes('mono microtype'), 'the direction the brief points at is the one injected');
+    assert.equal(wired.slice(-prompt.length), prompt);
+  });
+});
+
+describe('designGuideText — the guide stopped prescribing one house style', () => {
+  it('no longer tells every task to be warm, minimal and quiet', () => {
+    // The whole diagnosis: one house style applied to every brief is why all
+    // the output looked the same, and "quiet" is why none of it had a moment.
+    const text = designGuideText().toLowerCase();
+    assert.ok(!text.includes('warm, minimal, quiet'), 'the single house style is gone');
+    assert.ok(!text.includes('house style'), 'and so is the idea of one');
+    assert.ok(text.includes('direction'), 'a direction is what decides the look now');
+  });
+
+  it('still carries the bans that made a page look generated, as defects', () => {
+    const text = designGuideText();
+    assert.ok(text.includes('centred hero, three equal cards, one gradient'), 'the shape is named');
+    assert.ok(/headings? barely larger than body text/i.test(text), 'so is the type tell');
+    assert.ok(text.includes('tokens.css'), 'tokens come first');
   });
 });
 

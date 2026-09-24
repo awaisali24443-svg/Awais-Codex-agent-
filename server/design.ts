@@ -1,19 +1,32 @@
 /**
- * UI design guide injection.
+ * Art-direction and craft injection.
  *
  * The executor follows the same wire-only pattern as the planning protocol,
  * the LinkedIn contract, and the Google read contract:
  *
- *   OUT  `withDesignGuide(prompt)` — when the mission is about designing or
- *        building a UI, prepend the design guide so the engine's taste
- *        matches the house style (warm, minimal, quiet — the interface
- *        disappears so the content can speak). The operator's stored prompt is never rewritten; only the
- *        text sent to the model carries the guide.
+ *   OUT  `withDesignGuide(prompt, directionId)` — when the task is about
+ *        designing or building a UI, prepend two things: the chosen art
+ *        direction's recipe (canvas, type, space, motion, hero, skeleton, and
+ *        the shapes it forbids) and the craft guide that applies in every
+ *        direction. The operator's stored prompt is never rewritten; only the
+ *        text sent to the model carries them.
  *
- *   COST  Non-UI missions are returned untouched — the exact same string —
- *        so they pay zero extra tokens. The guide is read from disk once at
- *        boot and cached; a missing file degrades to "no guide" and never
- *        fails a mission.
+ *        The direction is what stopped every page looking the same. "Warm,
+ *        minimal, quiet" was the entire house style, so a jewellery launch and
+ *        a developer console both came out as the same careful grey page with
+ *        the same small type — and a page where nothing is allowed to be loud
+ *        cannot have a moment, which is exactly what people recognise as
+ *        generated.
+ *
+ *   COST  Non-UI tasks are returned untouched — the exact same string — so
+ *        they pay zero extra tokens, and a UI task with no direction still
+ *        gets the guide alone. The guide is read from disk once at boot and
+ *        cached; a missing file degrades to "direction only".
+ *
+ *        A direction id that is not in the registry is ignored rather than
+ *        guessed at: a page built in a direction nobody defined is worse than
+ *        one built in the default, because the recipe and the plan would then
+ *        disagree about what was being made.
  *
  * The detection is a two-factor intent check (a UI build verb AND a UI
  * noun), deliberately tighter than a single keyword list: "check the PIA
@@ -23,6 +36,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findDir } from './paths.js';
+import { directionById, recipeFor } from './design/directions.js';
+import type { DirectionId } from './design/types.js';
 
 /** Verbs that signal the operator wants something built or shaped. */
 const UI_VERB_RE = /\b(design|redesign|restyle|build|create|make|code|prototype|mock\s?up)\b/i;
@@ -63,20 +78,31 @@ export function designGuideText(): string {
   return guideCache ?? '';
 }
 
-const GUIDE_PREAMBLE = `[Design guide — this task involves designing or building a user
-interface. Follow the house style below: warm, minimal, quiet. Let the
-interface disappear so the content can speak.]
+const GUIDE_PREAMBLE = `[Craft guide — this task involves designing or building a user
+interface. It applies on top of the art direction below, whichever direction
+that is: the direction decides how the page looks, and this decides whether it
+is any good.]
+
+`;
+
+const DIRECTION_PREAMBLE = `[Art direction — chosen before any file is written. Build the
+whole page in it: it is not a theme, and it does not blend with another.]
 
 `;
 
 /**
- * Prepend the design guide on the wire only, when the mission is
- * UI-building. Non-UI missions get the identical string back — zero added
- * tokens.
+ * Prepend the direction's recipe and the craft guide, on the wire only, when
+ * the task is UI-building. Non-UI tasks get the identical string back — zero
+ * added tokens.
  */
-export function withDesignGuide(prompt: string): string {
+export function withDesignGuide(prompt: string, directionId?: DirectionId | string | null): string {
   if (!looksLikeUiMission(prompt)) return prompt;
+  const direction = directionById(typeof directionId === 'string' ? directionId : undefined);
   const guide = designGuideText();
-  if (!guide) return prompt;
-  return GUIDE_PREAMBLE + guide + '\n\n' + prompt;
+  if (!direction && !guide) return prompt;
+  return (
+    (direction ? DIRECTION_PREAMBLE + recipeFor(direction) + '\n\n' : '') +
+    (guide ? GUIDE_PREAMBLE + guide + '\n\n' : '') +
+    prompt
+  );
 }

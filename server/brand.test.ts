@@ -347,7 +347,10 @@ describe('the product says task, never mission', () => {
     assert.ok(read('server/design.ts').includes('this task involves designing'));
     // The guide the model reads before it builds a page, and the two places the
     // operator meets the same word: Settings and the WhatsApp plan replies.
-    assert.ok(read('server/ui-design-guide.md').includes('when a task asks you to design'));
+    // Rewritten when the guide stopped prescribing one house style, so the
+    // pinned sentence is the new opening — the guarantee it carries is the same
+    // one: the model is addressed with a task, never with a mission.
+    assert.ok(read('server/ui-design-guide.md').includes('A direction has been chosen for this task'));
     assert.ok(read('server/settings.ts').includes('Takes effect on the next task'));
     assert.ok(read('server/whatsapp/approvals.ts').includes('the task is running now'));
     assert.ok(read('server/mission_steps.ts').includes('RESUMING an interrupted task'));
