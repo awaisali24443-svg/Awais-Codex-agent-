@@ -710,6 +710,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .file:hover { background: var(--surface-2); }
 .file svg { width: 15px; height: 15px; fill: none; stroke: var(--ink-soft); stroke-width: 1.9; }
 .file.busy { opacity: .55; pointer-events: none; }
+/* A file the operator asked us to keep. A quiet mark, not a badge: the point is
+   that it is still there next month, not that it is special today. */
+.file.kept { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.file.kept svg { stroke: var(--ok); }
 
 /* ---- live website preview overlay ---- */
 .preview-overlay {

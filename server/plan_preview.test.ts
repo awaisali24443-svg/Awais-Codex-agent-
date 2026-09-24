@@ -205,7 +205,7 @@ describe('planning gate', () => {
 
   test('planOnlyPrompt asks for the plan and nothing else', () => {
     const wire = planOnlyPrompt('do the thing');
-    assert.ok(wire.includes('do NOT start the mission'));
+    assert.ok(wire.includes('do NOT start the task'));
     assert.ok(wire.includes('Step 1/N'));
     assert.ok(wire.endsWith('do the thing'));
   });

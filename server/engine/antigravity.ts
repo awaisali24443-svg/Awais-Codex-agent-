@@ -217,7 +217,7 @@ export class AntigravityEngine implements Engine {
       if (idleTimedOut && err instanceof EngineAbortedError) {
         throw new EngineError(
           `The agent stopped responding for ${Math.round(this.idleTimeoutMs / 1000)}s. ` +
-            'The mission was closed so the slot stays free.',
+            'The task was closed so the slot stays free.',
           'idle_timeout',
         );
       }
@@ -451,8 +451,8 @@ export class AntigravityEngine implements Engine {
     const delay = Math.min(this.rateLimitBaseDelayMs * 2 ** Math.min(waits, 2), MAX_RATE_LIMIT_DELAY_MS);
     if (waitedMs + delay > this.rateLimitMaxWaitMs) {
       throw new EngineError(
-        `Google rate-limited the mission for ${Math.round(waitedMs / 60000)}m and the wait budget is spent. ` +
-          'Nothing was lost — run the mission again in a few minutes when the TPM window clears.',
+        `Google rate-limited the task for ${Math.round(waitedMs / 60000)}m and the wait budget is spent. ` +
+          'Nothing was lost — run the task again in a few minutes when the TPM window clears.',
         'rate_limited',
         false,
         429,
@@ -676,7 +676,7 @@ export class AntigravityEngine implements Engine {
 
     if (!sawTerminal && !streamed && !authoritative) {
       throw new EngineError(
-        'The agent finished without producing an answer. It may have refused the mission or hit a limit.',
+        'The agent finished without producing an answer. It may have refused the task or hit a limit.',
         'truncated',
         false,
       );

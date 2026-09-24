@@ -52,7 +52,7 @@ export function looksComplex(prompt: string): boolean {
   return false;
 }
 
-const CONTRACT = `[Planning protocol — this mission is complex, so work in visible steps.
+const CONTRACT = `[Planning protocol — this task is complex, so work in visible steps.
 First, write your plan as numbered progress lines, one step per line, in the exact form:
 Step 1/N: <what this step does>
 Step 2/N: <what this step does>
@@ -62,7 +62,7 @@ Keep each line short — the operator follows your progress live on a phone.]
 
 `;
 
-/** Prepend the planning contract on the wire only, when the mission is complex. */
+/** Prepend the planning contract on the wire only, when the task is complex. */
 export function withPlanning(prompt: string): string {
   return looksComplex(prompt) ? CONTRACT + prompt : prompt;
 }
@@ -75,7 +75,7 @@ export function withPlanning(prompt: string): string {
  * the work has misunderstood the contract, and the parse below simply finds
  * no usable plan in it.
  */
-const PLAN_ONLY_CONTRACT = `[Planning pass — do NOT start the mission yet.
+const PLAN_ONLY_CONTRACT = `[Planning pass — do NOT start the task yet.
 First, output ONLY your step-by-step plan as numbered lines, one step per line, in the exact form:
 Step 1/N: <what this step does>
 Step 2/N: <what this step does>
@@ -127,7 +127,7 @@ export function withLinkedIn(prompt: string): string {
 }
 
 const GOOGLE_RE = /gmail|e-?mail|inbox|calendar|meeting|schedule|appointment/i;
-const GOOGLE_CONTRACT = `[You can read the operator's Google account during this mission — Gmail and Calendar, read-only.
+const GOOGLE_CONTRACT = `[You can read the operator's Google account during this task — Gmail and Calendar, read-only.
 To read, put a fenced block anywhere in your answer:
 \`\`\`gmail-search
 {"query": "from:boss subject:invoice", "max": 5}

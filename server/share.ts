@@ -178,7 +178,7 @@ ul{list-style:none;padding:0}li{margin:6px 0}.st-done{color:#1a7f37}.st-failed{c
 </head>
 <body>
 <span class="badge">${escapeHtml(data.status)}</span>
-<h1>Mission replay</h1>
+<h1>Task replay</h1>
 <div class="meta">WAIS · Started ${escapeHtml(data.startedAt)}${data.finishedAt ? ` · finished ${escapeHtml(data.finishedAt)}` : ''}</div>
 <h2>Task</h2>
 <p>${escapeHtml(data.prompt)}</p>

@@ -51,7 +51,7 @@ export function designGuideText(): string {
   try {
     const dir = findDir(['server'], 'ui-design-guide.md');
     if (!dir) {
-      console.warn('[design] ui-design-guide.md not found — UI missions run without the guide');
+      console.warn('[design] ui-design-guide.md not found — UI tasks run without the guide');
       guideCache = '';
       return '';
     }
@@ -63,7 +63,7 @@ export function designGuideText(): string {
   return guideCache ?? '';
 }
 
-const GUIDE_PREAMBLE = `[Design guide — this mission involves designing or building a user
+const GUIDE_PREAMBLE = `[Design guide — this task involves designing or building a user
 interface. Follow the house style below: warm, minimal, quiet. Let the
 interface disappear so the content can speak.]
 

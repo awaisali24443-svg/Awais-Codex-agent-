@@ -81,22 +81,22 @@ function deepResearchFirstPrompt(mission: string, budgetMinutes: number): string
   return (
     `[Deep-research mode — up to ${budgetMinutes} minutes of wall-clock time. ` +
     `I will send follow-up passes until the budget is spent, then ask for the final report.]\n\n` +
-    `Work this mission exhaustively, in depth:\n` +
+    `Work this task exhaustively, in depth:\n` +
     `- explore broadly first, then drill into the most promising leads\n` +
     `- verify key claims against independent sources before asserting them\n` +
     `- prefer primary sources over summaries; mark where evidence is thin\n` +
     `- keep a running record of findings, sources and open questions — each follow-up pass ` +
-    `continues this same mission and builds on your notes\n\n` +
+    `continues this same task and builds on your notes\n\n` +
     `Do NOT write the final report yet. End this pass with: (1) what you found, ` +
     `(2) what is still unverified, (3) where you would dig next.\n\n` +
-    `Mission:\n${mission}`
+    `Task:\n${mission}`
   );
 }
 
 function researchContinuationPrompt(pass: number, remainingMinutes: number): string {
   return (
     `[Deep-research, pass ${pass} — about ${remainingMinutes} minute(s) left. ` +
-    `This is the SAME mission: you still have your notes, findings and sandbox from the earlier passes.]\n\n` +
+    `This is the SAME task: you still have your notes, findings and sandbox from the earlier passes.]\n\n` +
     `Build on your prior findings — do NOT repeat research you already did or re-verify settled claims.\n` +
     `Go deeper and wider: verify the uncertain claims with independent sources, ` +
     `chase the most promising open leads, expand thin sections, close contradictions.\n\n` +
@@ -594,6 +594,10 @@ export class RunExecutor {
       await writer.write('run.environment', {
         interactionId: result.interactionId ?? null,
         environmentId: result.environmentId ?? null,
+        // Whether this run inherited the workspace or was handed a new one. The
+        // client renders that sentence; the id itself is a 32-character hex
+        // string that means nothing to the operator and reads like a bug.
+        continued: run.previousInteractionId !== null,
       });
       // Prove-it's-done: re-check the output against the durable record
       // before the run is marked done. Deterministic only — no engine calls,
@@ -793,7 +797,7 @@ export class RunExecutor {
     }
 
     if (!result) {
-      throw new EngineError('The research mission produced no output.', 'truncated');
+      throw new EngineError('The research task produced no output.', 'truncated');
     }
     return result;
   }
@@ -921,7 +925,7 @@ export class RunExecutor {
       const followUp = await pass(
         `[Google reads — the results of your requests. Report only what is here; never invent email or calendar content.]\n` +
           lines.join('\n') +
-          `\n\nContinue the mission with these results. Request more reads only if you need different data.`,
+          `\n\nContinue the task with these results. Request more reads only if you need different data.`,
       );
       result = followUp.result;
       passText = followUp.passText;

@@ -134,6 +134,45 @@ beforeEach(async () => {
   await db.query('DELETE FROM conversations');
 });
 
+describe('the workspace step says something a person can read', () => {
+  test('the run.environment event carries `continued`, not just a hex id', async () => {
+    // The timeline used to render the raw environment id under "Sandbox ready" —
+    // a 32-character hex string that means nothing to the operator and reads
+    // like a rendering bug. The client now writes a sentence, which it can only
+    // do if the event says whether the workspace was inherited.
+    const created = await post('/api/runs', { prompt: 'first task in a fresh conversation' });
+    assert.equal(created.status, 201);
+    await settle(created.body.run.id);
+
+    const detail = await get(`/api/runs/${created.body.run.id}`);
+    const env = detail.body.events.find((e: { type: string }) => e.type === 'run.environment');
+    assert.ok(env, 'expected a run.environment event');
+    assert.equal(env.payload.continued, false, 'a fresh conversation starts a fresh workspace');
+
+    // A follow-up in the same conversation inherits the workspace, and the event
+    // has to say so — that is the whole point of the flag.
+    const followUp = await post('/api/runs', {
+      prompt: 'now continue in the same workspace',
+      conversationId: created.body.run.conversationId,
+    });
+    assert.equal(followUp.status, 201);
+    await settle(followUp.body.run.id);
+
+    const second = await get(`/api/runs/${followUp.body.run.id}`);
+    const secondEnv = second.body.events.find((e: { type: string }) => e.type === 'run.environment');
+    assert.ok(secondEnv, 'expected a run.environment event on the follow-up too');
+    assert.equal(secondEnv.payload.continued, true, 'and it says the workspace carried over');
+  });
+
+  test('the client never renders the raw environment id', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const client = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf-8');
+    assert.ok(!client.includes('detail: String(data.environmentId)'), 'the hex handle is gone from the step');
+    assert.ok(client.includes("data.continued ? 'continuing the earlier workspace'"), 'and a sentence is there');
+  });
+});
+
 describe('memory reaches the agent', () => {
   test('a recalled memory is prepended to the prompt the engine receives', async () => {
     await updateProfile(db, { name: 'Awais' });

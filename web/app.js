@@ -199,6 +199,12 @@ el.loginForm.addEventListener('submit', async (event) => {
   }
 });
 
+/* The statuses that mean a run is over. One list, because two copies drifted:
+   the stream-end check learned about 'paused' and the foreground-return check
+   did not, so a run that paused while the phone was backgrounded left the app
+   saying "Working…" with a live stream that could never speak again. */
+const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'paused'];
+
 /* ----------------------------------------------------------------- boot -- */
 
 async function enter() {
@@ -345,6 +351,7 @@ function renderBranchBar(branches) {
 
 function renderThread(nodes) {
   el.thread.innerHTML = '';
+  artifactChips.clear(); // the chips just left the DOM with the old thread
   for (const node of nodes) el.thread.append(node);
 }
 
@@ -805,9 +812,13 @@ function handleEvent(card, event, data) {
 
     case 'run.environment':
       if (data.environmentId) {
+        // What the operator needs to know is whether the agent kept its
+        // workspace. The 32-character id it used to print here meant nothing to
+        // anyone and looked like a rendering bug; it is still in the run record
+        // for the times it is needed.
         addStep(card, 'env', {
           name: 'Sandbox ready',
-          detail: String(data.environmentId),
+          detail: data.continued ? 'continuing the earlier workspace' : 'a fresh workspace',
           icon: 'package',
           done: true,
         });
@@ -1302,17 +1313,90 @@ async function downloadArtifact(artifact, chip) {
   }
 }
 
+/* Live chips, by artifact id: the answer's file row and the outputs panel show
+   the same record, and pinning in one place has to be visible in the other. */
+const artifactChips = new Map();
+
+/** Repaint every chip for this artifact from the record that was just updated. */
+function refreshArtifactChips(artifact) {
+  for (const chip of artifactChips.get(artifact.id) ?? []) {
+    const label = chip.querySelector('span');
+    if (!label) continue;
+    chip.classList.toggle('kept', !!artifact.pinned);
+    label.textContent = artifact.name
+      + (artifact.size ? ` · ${formatBytes(artifact.size)}` : '')
+      + (artifact.pinned ? ' · kept' : '');
+  }
+}
+
 function artifactChip(artifact) {
   const chip = document.createElement('button');
-  chip.className = 'file';
+  chip.className = 'file' + (artifact.pinned ? ' kept' : '');
   chip.type = 'button';
   chip.innerHTML = `${iconFor('package')}<span></span>`;
-  const label = artifact.name + (artifact.size ? ` · ${formatBytes(artifact.size)}` : '');
+  const label = artifact.name
+    + (artifact.size ? ` · ${formatBytes(artifact.size)}` : '')
+    + (artifact.pinned ? ' · kept' : '');
   chip.querySelector('span').textContent = label;
 
   chip.addEventListener('click', () => downloadArtifact(artifact, chip));
 
+  const known = artifactChips.get(artifact.id) ?? [];
+  known.push(chip);
+  artifactChips.set(artifact.id, known);
+
   return chip;
+}
+
+/**
+ * Keep a file.
+ *
+ * A sandbox expires, the disk is wiped by the next deploy, and unpinned rows are
+ * deleted after the retention window — so "I downloaded it once" and "it will
+ * still be here next month" are different promises, and only the operator can
+ * say which one is wanted. This is the button that makes the promise: the bytes
+ * are copied into the database, and retention stops touching the row.
+ *
+ * Pinning happens on demand (the bytes have to be readable *now*), so a failure
+ * is explained rather than silent: an expired sandbox cannot be pinned, and the
+ * server says so with the reason.
+ */
+function keepButton(artifact) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'msg-btn' + (artifact.pinned ? ' primary' : '');
+  btn.textContent = artifact.pinned ? '✓ Kept' : 'Keep';
+  btn.title = artifact.pinned
+    ? 'Stored in the database — tap to stop keeping it'
+    : 'Keep this file: stored in the database, safe from the retention sweep';
+
+  btn.addEventListener('click', async () => {
+    const pinning = !artifact.pinned;
+    btn.disabled = true;
+    btn.textContent = pinning ? 'Keeping…' : 'Removing…';
+    try {
+      const path = `/api/artifacts/${artifact.id}/${pinning ? 'pin' : 'unpin'}`;
+      const result = await api(path, { method: 'POST' });
+      artifact.pinned = pinning;
+      if (pinning && result.artifact?.size) artifact.size = result.artifact.size;
+      btn.textContent = pinning ? '✓ Kept' : 'Keep';
+      btn.className = 'msg-btn' + (pinning ? ' primary' : '');
+      btn.title = pinning
+        ? 'Stored in the database — tap to stop keeping it'
+        : 'Keep this file: stored in the database, safe from the retention sweep';
+      toast(pinning ? `Keeping ${artifact.name} — it will not be deleted.` : `${artifact.name} is no longer kept.`);
+      // The same file appears as a chip under the answer and as a row in the
+      // outputs panel; both read this record, so both are refreshed from it.
+      refreshArtifactChips(artifact);
+      if (panelData) renderPanelBody();
+    } catch (err) {
+      btn.textContent = artifact.pinned ? '✓ Kept' : 'Keep';
+      toast(err.body?.message || err.message || 'Could not keep that file.', 7_000);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  return btn;
 }
 
 /* A website the mission built gets a live preview, not just a download. The
@@ -1505,6 +1589,7 @@ function renderPanelFiles(body, artifacts) {
     dl.textContent = 'Download';
     dl.addEventListener('click', () => downloadArtifact(artifact, dl));
     row.append(name, size, dl);
+    row.append(keepButton(artifact));
     if (artifact.previewable) {
       const pv = document.createElement('button');
       pv.type = 'button';
@@ -1661,6 +1746,11 @@ function attach(runId, after = 0) {
     'artifact', 'memory.recall', 'plan.milestone',
     'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
     'research.started', 'research.pass', 'verification.checked',
+    // The server has always sent this — it fetches every link in a research
+    // answer and reports how many are dead — but it was never in this list, so
+    // the work happened and the operator saw nothing. The `case` for it was
+    // right there in handleEvent(), dead code waiting for a listener.
+    'sources.checked',
     'google.read',
     'run.completed', 'run.failed', 'run.cancelled',
   ];
@@ -1689,7 +1779,7 @@ function attach(runId, after = 0) {
     if (!state.running || state.runId !== runId) return;
     try {
       const { run } = await api(`/api/runs/${runId}`);
-      if (run && ['completed', 'failed', 'cancelled', 'paused'].includes(run.status)) {
+      if (run && TERMINAL_STATUSES.includes(run.status)) {
         handleEvent(card, `run.${run.status}`, {
           errorType: run.errorType,
           errorMessage: run.errorMessage,
@@ -1719,7 +1809,10 @@ document.addEventListener('visibilitychange', async () => {
   try {
     ({ run } = await api(`/api/runs/${state.runId}`));
   } catch { return; } // keep the stream; a later event will reconcile
-  if (run && ['completed', 'failed', 'cancelled'].includes(run.status)) {
+  if (run && TERMINAL_STATUSES.includes(run.status)) {
+    // 'paused' belongs here: the run is waiting for the operator, not working,
+    // and no further event is coming. Leaving the stream open and the composer
+    // locked is how a paused task came to look exactly like a hung one.
     closeStream();
     setRunning(false);
     state.runId = null;

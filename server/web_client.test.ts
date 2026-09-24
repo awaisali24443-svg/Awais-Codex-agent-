@@ -109,6 +109,62 @@ describe('settings is a page, not a drawer section', () => {
   });
 });
 
+describe('every event the server writes is listened to', () => {
+  test('no event is emitted into the void', () => {
+    // `sources.checked` was written on every research run — the server fetches
+    // each link in the answer and reports how many are dead — and the client
+    // never subscribed to it, so the work happened and the operator saw
+    // nothing. The `case` was sitting in handleEvent() the whole time.
+    const fsmod = read('web/app.js');
+    const durable = fsmod.slice(fsmod.indexOf('const durable = ['), fsmod.indexOf('for (const name of durable)'));
+    const listened = new Set([...durable.matchAll(/'([\w.]+)'/g)].map((m) => m[1]));
+    const handled = new Set([...fsmod.matchAll(/case '([\w.]+)':/g)].map((m) => m[1]));
+
+    const serverDir = path.join(ROOT, 'server');
+    const emitted = new Set<string>();
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
+          for (const m of fs.readFileSync(full, 'utf-8').matchAll(/writer\.write\(\s*'([\w.]+)'/g)) {
+            emitted.add(m[1]);
+          }
+        }
+      }
+    };
+    walk(serverDir);
+
+    assert.ok(emitted.size >= 10, 'the scan found the server\u2019s events');
+    for (const name of emitted) {
+      assert.ok(listened.has(name), `the client never listens for ${name}`);
+      assert.ok(handled.has(name), `the client listens for ${name} but has no case for it`);
+    }
+  });
+});
+
+describe('a kept file can actually be kept', () => {
+  test('the panel and the answer both offer a Keep button', () => {
+    const client = app();
+    assert.ok(client.includes('function keepButton'), 'the button exists');
+    assert.ok(client.includes('keepButton(artifact)'), 'and is used');
+    assert.ok(client.includes('/api/artifacts/${artifact.id}/'), 'it calls the artifact routes');
+    assert.ok(client.includes("pinning ? 'pin' : 'unpin'"), 'pin to keep, unpin to stop keeping');
+  });
+
+  test('a pinned row is shown as kept, and the chips follow the record', () => {
+    const client = app();
+    assert.ok(client.includes("artifact.pinned ? ' · kept' : ''"), 'the chip says so');
+    assert.ok(client.includes('refreshArtifactChips'), 'and both views are repainted from the record');
+    assert.ok(css().includes('.file.kept'), 'with a style of its own');
+  });
+
+  test('a failed pin explains itself instead of failing silently', () => {
+    const client = app();
+    assert.ok(client.includes("err.body?.message || err.message || 'Could not keep that file.'"), 'the reason is surfaced');
+  });
+});
+
 describe('actions belong to the operator, not to the answer', () => {
   test('the finished-task row has no Edit prompt button', () => {
     const client = app();
@@ -121,6 +177,33 @@ describe('actions belong to the operator, not to the answer', () => {
     // place for it; removing the button must not have removed that.
     assert.ok(app().includes("editBtn.textContent = '✎ Edit'"));
     assert.ok(app().includes('openInlineEditor('));
+  });
+});
+
+describe('a run that is over stops looking like a run in progress', () => {
+  test('there is exactly one terminal-status list, and it includes paused', () => {
+    // Two copies drifted: the stream-end check knew about 'paused' and the
+    // foreground-return check did not, so a task that paused while the phone was
+    // in the operator's pocket came back as "Working…" with a stream that would
+    // never speak again.
+    const client = app();
+    const definitions = client.match(/const TERMINAL_STATUSES = \[[^\]]*\]/g) ?? [];
+    assert.equal(definitions.length, 1, 'one definition, not a copy per call site');
+    assert.match(definitions[0] ?? '', /'paused'/, 'and paused is in it');
+    assert.ok(
+      !/\['completed', 'failed', 'cancelled'\]\.includes/.test(client),
+      'no call site still has its own shorter list',
+    );
+  });
+
+  test('both the stream-end and the foreground-return checks use it', () => {
+    const client = app();
+    // stream end
+    const end = client.slice(client.indexOf("source.addEventListener('end'"), client.indexOf("source.addEventListener('error'"));
+    assert.ok(end.includes('TERMINAL_STATUSES.includes(run.status)'), 'the stream-end check uses the list');
+    // return to foreground
+    const vis = client.slice(client.indexOf("addEventListener('visibilitychange'"));
+    assert.ok(vis.slice(0, 900).includes('TERMINAL_STATUSES.includes(run.status)'), 'and so does the visibility check');
   });
 });
 

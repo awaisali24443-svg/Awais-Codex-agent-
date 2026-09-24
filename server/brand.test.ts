@@ -236,6 +236,80 @@ describe('logo', () => {
   });
 });
 
+/**
+ * One word, everywhere.
+ *
+ * "Mission" is the word this product used before it was called WAIS: the model
+ * is *told* to plan "this mission", names its notes "Mission:", and then echoes
+ * every one of those words back in the answer the operator reads. Renaming the
+ * interface while leaving the wire prompts alone produced exactly that — an
+ * answer that talked about missions while the button underneath said task.
+ *
+ * So the assertions here are on the prompts the model receives and on the copy
+ * the operator reads. Internal identifiers (`mission_steps.ts`, `getMissionSteps`)
+ * are deliberately left alone: renaming files is churn nobody sees.
+ */
+describe('the product says task, never mission', () => {
+  const WIRE_PROMPTS = [
+    'server/planning.ts',
+    'server/executor.ts',
+    'server/design.ts',
+    'server/engine/antigravity.ts',
+  ];
+  const CLIENT_FILES = ['web/index.html', 'web/app.js', 'web/welcome.js', 'web/panel.js', 'web/timeline.js'];
+
+  /**
+   * Every string literal in a file, comments already gone and `${…}`
+   * interpolations removed — the *value* of an interpolation is a variable,
+   * and a variable called `mission` is code, not copy.
+   */
+  function literals(file: string): string[] {
+    const code = stripComments(read(file));
+    return [...code.matchAll(STRING_RE)].map((m) => m[0].slice(1, -1).replace(/\$\{[^}]*\}/g, ''));
+  }
+
+  test('no prompt the model receives says mission', () => {
+    for (const file of WIRE_PROMPTS) {
+      for (const literal of literals(file)) {
+        // Identifiers and module paths are code, not copy: `recordMissionStep`,
+        // `verifyMission`, `./mission_steps.js`. Neither reaches a model.
+        if (/^[A-Za-z_$][\w$.]*$/.test(literal.trim())) continue;
+        if (/^\.{1,2}\/[\w./-]+$/.test(literal.trim())) continue;
+        assert.ok(
+          !/mission/i.test(literal),
+          `${file} sends the model the word "mission": ${literal.slice(0, 90)}`,
+        );
+      }
+    }
+  });
+
+  test('the exact sentences that used to say mission now say task', () => {
+    assert.ok(read('server/planning.ts').includes('this task is complex'));
+    assert.ok(read('server/planning.ts').includes('do NOT start the task yet'));
+    assert.ok(read('server/planning.ts').includes('during this task — Gmail'));
+    assert.ok(read('server/executor.ts').includes('Work this task exhaustively'));
+    assert.ok(read('server/executor.ts').includes('This is the SAME task'));
+    assert.ok(read('server/executor.ts').includes('Continue the task with these results'));
+    assert.ok(read('server/executor.ts').includes('Task:\\n${mission}'));
+    assert.ok(read('server/design.ts').includes('this task involves designing'));
+  });
+
+  test('what the operator reads after a failure says task too', () => {
+    const engine = read('server/engine/antigravity.ts');
+    assert.ok(engine.includes('The task was closed so the slot stays free'));
+    assert.ok(engine.includes('rate-limited the task'));
+    assert.ok(engine.includes('refused the task or hit a limit'));
+  });
+
+  test('the client carries no mission wording at all', () => {
+    for (const file of CLIENT_FILES) {
+      for (const literal of literals(file)) {
+        assert.ok(!/mission/i.test(literal), `${file} shows the operator "mission": ${literal.slice(0, 80)}`);
+      }
+    }
+  });
+});
+
 describe('third-party scrub', () => {
   for (const file of SCAN_FILES) {
     test(`no product words in user-visible text of ${file}`, () => {

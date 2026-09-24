@@ -118,6 +118,17 @@ describe('share data redaction', () => {
     assert.ok(html.includes('the answer'), 'final answer missing from page');
     assert.ok(html.includes('do it'), 'plan step missing from page');
   });
+
+  test('the page calls it a task, never a mission', async () => {
+    // Shared links are read by people who did not build this. "Mission" is the
+    // old product's word for a task; it survived in the page's own heading long
+    // after every other surface was renamed.
+    const run = await createRun(db, { prompt: 'rename the heading', engine: 'scripted' });
+    await finishRun(db, run.id, { status: 'completed', text: 'done' });
+    const html = renderSharePage(await buildShareData(db, (await getRun(db, run.id)) as Run));
+    assert.ok(!/mission/i.test(html), 'the replay page must say task');
+    assert.ok(html.includes('<h1>Task replay</h1>'), 'and say it where it counts');
+  });
 });
 
 const ACCESS_KEY = 'share-replay-access-key-for-tests';
