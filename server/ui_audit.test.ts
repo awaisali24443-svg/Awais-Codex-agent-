@@ -156,6 +156,74 @@ describe('the keyboard can see where it is', () => {
   });
 });
 
+/**
+ * What a browser would actually apply to one element.
+ *
+ * A mini cascade, because the bug this guards against was a *specificity*
+ * problem: `.composer .icon-btn.sm { width: 32px }` silently beat the touch
+ * block's `.icon-btn.sm { width: 40px }`, and a test that only read the touch
+ * block could not have seen it. So this resolves the winner the way the browser
+ * does — specificity first, source order second — for an element described by
+ * its classes and the classes of its ancestors.
+ */
+function winningValue(
+  classes: string[],
+  ancestors: string[],
+  property: string,
+  { coarse = false, tag = 'button' }: { coarse?: boolean; tag?: string } = {},
+): { value: string; from: string } | null {
+  const element = new Set(classes);
+  const specificityOf = (selector: string): number => {
+    const ids = (selector.match(/#[\w-]+/g) ?? []).length;
+    const classish = (selector.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+/g) ?? []).length;
+    const types = (selector.replace(/[.#:\[][^\s>+~]*/g, ' ').match(/\b[a-z][\w-]*\b/g) ?? []).length;
+    return ids * 100 + classish * 10 + types;
+  };
+  const matchesCompound = (compound: string): boolean => {
+    const parts = compound.match(/\.[\w-]+/g) ?? [];
+    if (!parts.every((part) => element.has(part.slice(1)))) return false;
+    const types = (compound.replace(/[.#:\[][^\s>+~]*/g, ' ').match(/\b[a-z][\w-]*\b/g) ?? []).filter(
+      (t) => t !== 'button' || tag === 'button',
+    );
+    // `button` in a selector has to match the element's own tag; anything else
+    // (a stray word from a comment, say) disqualifies the compound.
+    return types.every((t) => t === tag || t === '*');
+  };
+  const matchesSelector = (selector: string): boolean => {
+    if (/[:\[>+~]/.test(selector)) return false; // state/child selectors: not the resting style
+    const parts = selector.trim().split(/\s+/);
+    const right = parts.pop() ?? '';
+    if (!matchesCompound(right)) return false;
+    return parts.every((part) => {
+      const classesIn = part.match(/\.[\w-]+/g) ?? [];
+      return classesIn.every((c) => ancestors.includes(c.slice(1)));
+    });
+  };
+
+  let best: { value: string; from: string; weight: number; order: number } | null = null;
+  let order = 0;
+  for (const block of blocks()) {
+    const inTouch = block.media !== null && /pointer:\s*coarse/.test(block.media);
+    // A coarse-pointer device gets the base rules *and* the touch block: the
+    // base rules are what the touch block overrides, and a more specific base
+    // rule is exactly how the 32px button survived the first audit.
+    const applies = block.media === null || (coarse && inTouch);
+    if (!applies) {
+      order += 1;
+      continue;
+    }
+    const decl = block.decls.find(([prop]) => prop === property);
+    order += 1;
+    if (!decl) continue;
+    for (const selector of block.selector.split(',').map((t) => t.trim())) {
+      if (!matchesSelector(selector)) continue;
+      const weight = specificityOf(selector) * 1000 + (inTouch ? 500 : 0) + order;
+      if (!best || weight >= best.weight) best = { value: decl[1], from: selector, weight, order };
+    }
+  }
+  return best ? { value: best.value, from: best.from } : null;
+}
+
 describe('a finger is not a cursor', () => {
   test('touch targets are at least 44px where a thumb does the pointing', () => {
     const touch = blocks().filter((b) => b.media !== null && /pointer:\s*coarse/.test(b.media));
@@ -176,6 +244,31 @@ describe('a finger is not a cursor', () => {
     assert.equal(sizes.get('.send|width'), '44px', 'send is 44px');
     assert.ok(sizes.has('.msg-btn.icon|min-width'), 'the answer actions get a real target too');
     assert.ok(sizes.has('.drawer-row|min-height'), 'and so do the drawer rows');
+  });
+
+  test('no more specific rule shrinks a target back down on touch', () => {
+    // The cascade the flat check above cannot see. Each case is a real element
+    // and its real ancestors.
+    const cases: Array<{ what: string; classes: string[]; ancestors: string[]; min: number }> = [
+      { what: 'the attach button', classes: ['icon-btn', 'sm'], ancestors: ['composer'], min: 40 },
+      { what: 'the drawer close button', classes: ['icon-btn', 'sm'], ancestors: ['drawer'], min: 40 },
+      { what: 'send', classes: ['send'], ancestors: ['composer'], min: 44 },
+      { what: 'remove an attached file', classes: [], ancestors: ['attach-chip'], min: 32 },
+      { what: 'move a plan step', classes: ['plan-move'], ancestors: ['plan-edit-row'], min: 36 },
+      { what: 'drop a plan step', classes: ['plan-remove'], ancestors: ['plan-edit-row'], min: 36 },
+    ];
+    for (const entry of cases) {
+      // Width or min-width: whichever the winning rule actually sets.
+      const target =
+        winningValue(entry.classes, entry.ancestors, 'width', { coarse: true }) ??
+        winningValue(entry.classes, entry.ancestors, 'min-width', { coarse: true });
+      assert.ok(target, `${entry.what} has a width`);
+      const px = Number.parseInt(String(target?.value), 10);
+      assert.ok(
+        Number.isFinite(px) && px >= entry.min,
+        `${entry.what} is ${target?.value} on a phone (from ${target?.from}), needs ${entry.min}px`,
+      );
+    }
   });
 
   test('the bigger targets cannot start a sideways scroll', () => {

@@ -1543,7 +1543,21 @@ kbd {
 
 @media (hover: none) and (pointer: coarse) {
   .icon-btn { width: 44px; height: 44px; }
-  .icon-btn.sm { width: 40px; height: 40px; }
+  /* The composer names its button more precisely than this block names its own,
+     so the size has to be said again at the same weight. This is exactly the
+     override the audit missed the first time: a 32px attach button on a phone,
+     because `.composer .icon-btn.sm` outranked `.icon-btn.sm` and nothing
+     compared the two. */
+  .icon-btn.sm,
+  .composer .icon-btn.sm { width: 40px; height: 40px; }
+  /* The remove-file cross was 20px: a destructive control, next to text, at
+     half the size a thumb needs. */
+  .attach-chip button { width: 32px; height: 32px; }
+  .attach-chip { padding: 4px 4px 4px 12px; }
+  /* The plan editor's move/drop controls were shrunk to 28px by the phone
+     breakpoint — a 719px layout rule making a touch decision. 36px is a thumb
+     target that still leaves the step's own text box most of the row. */
+  .plan-move, .plan-remove { min-width: 36px; min-height: 36px; }
   .msg-btn { min-height: 36px; padding: 7px 10px; }
   .msg-btn.icon { min-width: 40px; min-height: 40px; }
   .send { width: 44px; height: 44px; }
