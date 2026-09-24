@@ -269,6 +269,10 @@ const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'paused'];
    a plan to be approved. Anything else is over, and its answer is on the
    thread already — so opening the chat it belongs to must not replay it. */
 const LIVE_RUN_STATUSES = ['running', 'awaiting_plan'];
+
+/* The server caps an edited plan at 20 steps; the editor shows the same number
+   rather than discovering the cap on Save. */
+const MAX_PLAN_STEPS = 20;
 function liveRun() {
   return !!state.runId && LIVE_RUN_STATUSES.includes(state.runStatus);
 }
@@ -998,70 +1002,184 @@ async function approvePlan(card, button) {
 }
 
 /**
- * Inline plan editing: labels become inputs, Save sends the new labels to the
- * server (reindexed 1..N), and the broadcast 'run.plan_updated' re-renders
- * the checklist. Cancel restores the untouched labels.
+ * Editing a plan that has not started yet.
+ *
+ * The first version of this let the operator rename steps, which is a real
+ * thing to want and also the smallest possible edit: a plan you can only
+ * rename is still the model's plan. So the editor works on the whole list —
+ * a step moves up, moves down, or goes away, and a missing one can be added —
+ * and sends the finished list to the server, which reindexes it 1..N and tells
+ * every open view. Nothing here decides what a plan may contain; it collects
+ * step labels and hands them over.
  */
 function editPlan(card) {
   const actions = card.plan.querySelector('.plan-actions');
   if (!actions || actions.hidden) return;
-  const originals = [];
-  for (const row of card.plan.querySelectorAll('.plan-row')) {
-    const label = row.querySelector('.plan-label');
-    originals.push(label.textContent);
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'plan-edit';
-    input.value = label.textContent;
-    input.maxLength = 140;
-    label.replaceWith(input);
-  }
+  const rows = [...card.plan.querySelectorAll('.plan-row')];
+  if (rows.length === 0) return;
+
+  /** The editor's own copy: the checklist is left alone until Save. */
+  let draft = rows.map((row) => row.querySelector('.plan-label')?.textContent ?? '');
   actions.hidden = true;
+
   const editor = document.createElement('div');
-  editor.className = 'plan-actions';
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.className = 'msg-btn primary';
-  save.textContent = 'Save plan';
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.className = 'msg-btn';
-  cancel.textContent = 'Cancel';
-  editor.append(save, cancel);
+  editor.className = 'plan-editor';
+  const list = document.createElement('div');
+  list.className = 'plan-edit-list';
+  const hint = document.createElement('p');
+  hint.className = 'plan-hint';
+  hint.textContent = 'Move, rewrite, drop or add steps — then start, and it follows this list.';
+  const addRow = document.createElement('div');
+  addRow.className = 'plan-add-row';
+  const addInput = document.createElement('input');
+  addInput.type = 'text';
+  addInput.className = 'plan-edit';
+  addInput.maxLength = 140;
+  addInput.placeholder = 'Add a step…';
+  addInput.setAttribute('aria-label', 'New step');
+  const addBtn = msgButton({ icon: 'plus', label: 'Add', title: 'Add this step as the last one' });
+  addRow.append(addInput, addBtn);
+  const footer = document.createElement('div');
+  footer.className = 'plan-actions';
+  const start = msgButton({ icon: 'play', label: 'Start the task', title: 'Save this plan and start running it' });
+  start.classList.add('primary', 'plan-approve');
+  const save = msgButton({ icon: 'check', label: 'Save plan', title: 'Keep this plan for review' });
+  const cancel = msgButton({ icon: 'cross', label: 'Cancel', title: 'Leave the plan as it was' });
+  footer.append(start, save, cancel);
+  editor.append(hint, list, addRow, footer);
   card.plan.append(editor);
 
-  const restore = (labels) => {
-    card.plan.querySelectorAll('.plan-row').forEach((row, i) => {
-      const span = document.createElement('span');
-      span.className = 'plan-label';
-      span.textContent = labels[i] ?? '';
-      row.querySelector('.plan-edit')?.replaceWith(span);
+  /** Rebuild the rows: adding, dropping and moving all need a fresh list. */
+  const redraw = (focus = -1) => {
+    list.innerHTML = '';
+    draft.forEach((label, i) => {
+      const row = document.createElement('div');
+      row.className = 'plan-edit-row';
+
+      const up = msgButton({ icon: 'arrowUp', title: 'Move this step up', aria: `Move step ${i + 1} up` });
+      up.className = 'plan-move';
+      up.disabled = i === 0;
+      const down = msgButton({ icon: 'arrowDown', title: 'Move this step down', aria: `Move step ${i + 1} down` });
+      down.className = 'plan-move';
+      down.disabled = i === draft.length - 1;
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'plan-edit';
+      input.maxLength = 140;
+      input.value = label;
+      input.setAttribute('aria-label', `Step ${i + 1}`);
+      // Typing must not rebuild the list, or the caret jumps to the end of
+      // the row on every letter.
+      input.addEventListener('input', () => {
+        draft[i] = input.value;
+      });
+
+      const remove = msgButton({ icon: 'trash', title: 'Drop this step', aria: `Drop step ${i + 1}` });
+      remove.className = 'plan-remove';
+
+      up.addEventListener('click', () => {
+        if (i === 0) return;
+        [draft[i - 1], draft[i]] = [draft[i], draft[i - 1]];
+        redraw(i - 1);
+      });
+      down.addEventListener('click', () => {
+        if (i === draft.length - 1) return;
+        [draft[i + 1], draft[i]] = [draft[i], draft[i + 1]];
+        redraw(i + 1);
+      });
+      remove.addEventListener('click', () => {
+        // The server refuses an empty plan, and so does the editor: the last
+        // step is not removable, which is friendlier than a 400 on Save.
+        if (draft.length === 1) {
+          toast('A plan needs at least one step.');
+          return;
+        }
+        draft.splice(i, 1);
+        redraw(Math.min(i, draft.length - 1));
+      });
+
+      row.append(up, down, input, remove);
+      list.append(row);
+    });
+    addRow.hidden = draft.length >= MAX_PLAN_STEPS;
+    if (focus >= 0) {
+      const field = /** @type {HTMLInputElement | undefined} */ (list.querySelectorAll('.plan-edit')[focus]);
+      field?.focus();
+    }
+  };
+
+  const commit = async (thenStart) => {
+    const labels = draft.map((label, i) => label.trim() || `Step ${i + 1}`).filter(Boolean);
+    if (labels.length === 0) {
+      toast('A plan needs at least one step.');
+      return;
+    }
+    start.disabled = true;
+    save.disabled = true;
+    const ok = await savePlan(card, labels);
+    if (!ok) {
+      start.disabled = false;
+      save.disabled = false;
+      return;
+    }
+    if (thenStart) await approvePlan(card, start);
+  };
+
+  const add = () => {
+    const label = addInput.value.trim();
+    if (!label) {
+      addInput.focus();
+      return;
+    }
+    if (draft.length >= MAX_PLAN_STEPS) return;
+    draft.push(label);
+    addInput.value = '';
+    redraw(draft.length - 1);
+    addInput.focus();
+  };
+
+  addBtn.addEventListener('click', add);
+  addInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      add();
+    }
+  });
+  start.addEventListener('click', () => void commit(true));
+  save.addEventListener('click', () => void commit(false));
+  cancel.addEventListener('click', () => {
+    // The stream owns the checklist: asking for the plan again re-renders it
+    // exactly as the server has it, which is the truth Cancel is promising.
+    const plan = [...card.plan.querySelectorAll('.plan-row')].map((row, i) => {
+      const label = row.querySelector('.plan-label')?.textContent ?? '';
+      return { index: i + 1, total: rows.length, label };
     });
     editor.remove();
     actions.hidden = false;
-  };
-  cancel.addEventListener('click', () => restore(originals));
-  save.addEventListener('click', async () => {
-    const labels = [...card.plan.querySelectorAll('.plan-edit')]
-      .map((el) => el.value.trim())
-      .filter(Boolean);
-    if (!labels.length) {
-      toast('The plan needs at least one step.');
-      return;
-    }
-    save.disabled = true;
-    try {
-      await api(`/api/runs/${card.runId}/plan`, {
-        method: 'POST',
-        body: JSON.stringify({ steps: labels }),
-      });
-      // The server reindexes and broadcasts 'run.plan_updated', which
-      // re-renders the checklist — nothing left to do here.
-    } catch (err) {
-      save.disabled = false;
-      toast(err.body?.message || err.message || 'Could not save the plan.');
-    }
+    renderPlanPreview(card, plan.map((s, i) => ({ index: i + 1, total: plan.length, label: s.label })));
   });
+  redraw();
+  /** @type {HTMLInputElement | null} */ (list.querySelector('.plan-edit'))?.focus();
+  scrollToEnd();
+}
+
+/**
+ * Send a plan and (optionally) start it. The server reindexes and broadcasts
+ * 'run.plan_updated', which re-renders the checklist — so a successful Save
+ * has nothing left to do here.
+ */
+async function savePlan(card, labels) {
+  try {
+    await api(`/api/runs/${card.runId}/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ steps: labels }),
+    });
+    return true;
+  } catch (err) {
+    toast(err.body?.message || err.message || 'Could not save the plan.');
+    return false;
+  }
 }
 
 /* A mission step drawn as one node on the timeline. The node on the rail
@@ -1131,6 +1249,10 @@ const ICONS = {
   thumbUp: '<path d="M7 21V10l4.5-7a2 2 0 0 1 3.5 1.4V9h3.6a2 2 0 0 1 2 2.4l-1.3 7A2 2 0 0 1 17.3 20H7Z"/><path d="M7 10H4v11h3"/>',
   thumbDown: '<path d="M17 3v11l-4.5 7A2 2 0 0 1 9 19.6V15H5.4a2 2 0 0 1-2-2.4l1.3-7A2 2 0 0 1 6.7 4H17Z"/><path d="M17 14h3V3h-3"/>',
   pencil: '<path d="M4 20h4l10-10-4-4L4 16Z"/><path d="m14 6 4 4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  trash: '<path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/>',
+  arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  arrowDown: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/>',
   play: '<path d="M7 4.5 19 12 7 19.5Z"/>',
   share: '<path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14"/>',

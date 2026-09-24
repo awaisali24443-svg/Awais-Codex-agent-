@@ -535,6 +535,46 @@ describe('reading while it works', () => {
   });
 });
 
+describe('a plan is a list, and it is edited like one', () => {
+  test('a step moves, rewrites, drops, and can be added', () => {
+    // Borrowed from the research plan that Deep Research shows before it runs,
+    // and taken one step further: renaming is the smallest possible edit, and
+    // a plan you can only rename is still the model's plan.
+    const client = app();
+    assert.ok(client.includes('function editPlan('), 'the checklist can be opened for editing');
+    assert.ok(client.includes('function savePlan('), 'and sent back');
+    assert.ok(client.includes("msgButton({ icon: 'arrowUp'"), 'rows move up');
+    assert.ok(client.includes("msgButton({ icon: 'arrowDown'"), 'and down');
+    assert.ok(client.includes("msgButton({ icon: 'trash'"), 'a step can be dropped');
+    assert.ok(client.includes("addInput.placeholder = 'Add a step…'"), 'and one can be typed in');
+    assert.ok(client.includes('draft.splice(i, 1)'), 'dropping removes it from the draft');
+    assert.ok(client.includes('[draft[i - 1], draft[i]] = [draft[i], draft[i - 1]]'), 'moving swaps in the draft');
+    for (const icon of ['plus', 'trash', 'arrowUp', 'arrowDown']) {
+      assert.ok(client.includes(`${icon}:`), `the ${icon} icon exists`);
+    }
+  });
+
+  test('the editor cannot produce a plan the server would refuse', () => {
+    const client = app();
+    const server = read('server/routes/runs.ts');
+    // Same cap on both sides, and the last step is not removable — a 400 in
+    // the face of the operator is a worse teacher than a button that does nothing.
+    assert.ok(client.includes('const MAX_PLAN_STEPS = 20;'), 'the editor knows the cap');
+    assert.ok(server.includes('.slice(0, 20)'), 'the server enforces the same cap');
+    assert.ok(client.includes("toast('A plan needs at least one step.')"), 'and the empty plan is refused before it is sent');
+    assert.ok(client.includes('if (draft.length === 1)'), 'the last step refuses to leave');
+  });
+
+  test('starting the task saves the plan first, so what runs is what was approved', () => {
+    const client = app();
+    assert.ok(client.includes('const ok = await savePlan(card, labels);'), 'the editor saves');
+    assert.ok(client.includes('if (thenStart) await approvePlan(card, start);'), 'and only then approves');
+    assert.ok(client.includes("msgButton({ icon: 'play', label: 'Start the task'"), 'one button does both');
+    assert.ok(css().includes('.plan-edit-row'), 'the rows are styled as a list');
+    assert.ok(css().includes('.plan-remove:hover'), 'and dropping a step reads as destructive');
+  });
+});
+
 describe('everything is a keystroke away', () => {
   test('one box, opened from the keyboard and from a visible button', () => {
     // ⌘K for the operator at his desk; the button because a phone has no ⌘

@@ -167,6 +167,21 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
   const { db, bus, executor, config, secrets } = deps;
   const router = Router();
 
+  /**
+   * Persist an event, then publish it.
+   *
+   * The database is the truth and the bus is the latency in front of it, so
+   * the order is not negotiable — but both halves have to happen. A route that
+   * only writes leaves the streams that are *already open* looking at a stale
+   * view of a run they are watching, which is worse than not announcing it:
+   * the plan the operator edited would be the plan in the database and not the
+   * one on the other phone.
+   */
+  async function announce(runId: string, type: string, payload: Record<string, unknown> = {}): Promise<void> {
+    const seq = await emitEvent(db, runId, type, payload);
+    bus.publish(runId, { seq, type, payload });
+  }
+
   // ---- create a run -------------------------------------------------------
 
   router.post('/runs', async (req: Request, res: Response) => {
@@ -456,7 +471,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       });
       return;
     }
-    await emitEvent(db, run.id, 'run.plan_approved', {});
+    await announce(run.id, 'run.plan_approved', {});
     const approved = await getRun(db, run.id);
     if (approved) executor.start(approved);
     res.json({ run: approved ?? run });
@@ -498,7 +513,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       });
       return;
     }
-    await emitEvent(db, run.id, 'run.plan_updated', { plan: steps });
+    await announce(run.id, 'run.plan_updated', { plan: steps });
     const updated = await getRun(db, run.id);
     res.json({ run: updated ?? run, plan: steps });
   });

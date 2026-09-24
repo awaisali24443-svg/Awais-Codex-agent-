@@ -240,14 +240,16 @@ async function post(pathname: string, body: unknown): Promise<{ status: number; 
 
 describe('plan routes', () => {
   let executor: RunExecutor;
+  let bus: EventBus;
 
   before(async () => {
     const config = makeConfig();
     executor = makeExecutor();
+    bus = new EventBus();
     const app = createApp({
       config,
       db,
-      bus: new EventBus(),
+      bus,
       executor,
       ...createStores(db, config),
       status: { startedAt: Date.now(), migrationsApplied: 10, orphanedRuns: 0 },
@@ -281,6 +283,51 @@ describe('plan routes', () => {
     const reloaded = await getRun(db, id);
     assert.equal(reloaded?.status, 'awaiting_plan');
     assert.equal(reloaded?.plan?.[1].index, 2);
+  });
+
+  test('a step can be dropped, added or moved, and the plan is reindexed', async () => {
+    // The plan editor sends the whole list back: what the operator left is the
+    // plan, in the order they left it, numbered 1..N. The numbering is the
+    // server's job precisely so the client never has to be trusted with it.
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    const res = await post(`/api/runs/${id}/plan`, {
+      steps: ['the step I moved to the top', 'the first step, now second', 'a step I added'],
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(
+      res.body.plan.map((s: { index: number; total: number; label: string }) => [s.index, s.total, s.label]),
+      [
+        [1, 3, 'the step I moved to the top'],
+        [2, 3, 'the first step, now second'],
+        [3, 3, 'a step I added'],
+      ],
+    );
+    // And the stored run is what was returned, not a copy that drifted.
+    const run = await getRun(db, id);
+    assert.deepEqual(run?.plan?.map((s) => s.label), res.body.plan.map((s: { label: string }) => s.label));
+  });
+
+  test('blank rows are dropped rather than becoming empty steps', async () => {
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const res = await post(`/api/runs/${created.body.run.id}/plan`, {
+      steps: ['  keep me  ', '   ', '', 'keep me too'],
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.plan.map((s: { label: string }) => s.label), ['keep me', 'keep me too']);
+    assert.deepEqual(res.body.plan.map((s: { total: number }) => s.total), [2, 2]);
+  });
+
+  test('the edited plan is broadcast, so every open view shows the same list', async () => {
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    const seen: Array<{ type: string; payload: any }> = [];
+    const unsubscribe = bus.subscribe(id, (event) => seen.push(event));
+    await post(`/api/runs/${id}/plan`, { steps: ['one', 'two'] });
+    unsubscribe();
+    const updated = seen.find((e) => e.type === 'run.plan_updated');
+    assert.ok(updated, 'the edit is announced on the run stream');
+    assert.deepEqual((updated.payload.plan as Array<{ label: string }>).map((s) => s.label), ['one', 'two']);
   });
 
   test('POST /runs/:id/plan rejects an empty plan', async () => {
@@ -317,6 +364,49 @@ describe('plan routes', () => {
     const edit = await post(`/api/runs/${id}/plan`, { steps: ['x'] });
     assert.equal(edit.status, 400);
     assert.equal(edit.body.error, 'not_awaiting_plan');
+  });
+
+  test('a plan edited while the run is open reaches the stream that is watching it', async () => {
+    // The bug this pins: the edit was written to the database and never
+    // published, so the phone that made the edit saw the new plan (it
+    // re-rendered the response) and a second phone saw the old one until it
+    // reconnected. Persisting is half the job.
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    const controller = new AbortController();
+    const stream = await fetch(`${base}/api/runs/${id}/stream`, { headers: auth, signal: controller.signal });
+    assert.equal(stream.status, 200);
+    const reader = stream.body!.getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    const reading = (async () => {
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return seen;
+          seen += decoder.decode(value, { stream: true });
+          if (seen.includes('event: run.plan_updated')) return seen;
+        }
+      } catch {
+        return seen; // aborted once the frame is in
+      }
+    })();
+    // Let the stream subscribe before the edit, or the thing under test would
+    // not be exercised at all.
+    await new Promise((r) => setTimeout(r, 200));
+    await post(`/api/runs/${id}/plan`, { steps: ['live one', 'live two'] });
+    const text = await Promise.race([
+      reading,
+      new Promise<string>((resolve) => setTimeout(() => resolve(seen), 4_000)),
+    ]);
+    controller.abort();
+    assert.ok(text.includes('event: run.plan_updated'), 'the edit arrives on the open stream');
+    assert.ok(text.includes('live two'), 'carrying the steps that were saved');
+    // `id:` rides above the event line; that is the cursor a reconnect resumes from.
+    assert.ok(
+      /id: \d+\nevent: run\.plan_updated/.test(text),
+      'and the frame is durable, so a reconnect can resume from it',
+    );
   });
 
   test('approve on a missing run is a 404', async () => {

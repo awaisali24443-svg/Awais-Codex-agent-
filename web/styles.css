@@ -1399,7 +1399,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   width: min(640px, 94vw); max-height: 70vh;
   display: flex; flex-direction: column;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius-lg, 18px); box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
   opacity: 0; transition: opacity .18s var(--ease-out), transform .18s var(--ease-out);
   overflow: hidden;
 }
@@ -1461,4 +1461,35 @@ kbd {
   }
   .palette.open { transform: none; }
   .palette-row { padding: 13px 10px; }
+}
+
+/* ------------------------------------------------------- the plan editor ---
+   A plan that has not started is the operator's list, so it is edited like a
+   list: each row moves, rewrites or goes away, and a missing step is typed at
+   the bottom. The row is an input plus three small controls, and the controls
+   stay out of the way of the words. */
+
+.plan-editor { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.plan-hint { margin: 0; font-size: var(--text-xs); color: var(--muted); }
+.plan-edit-list { display: flex; flex-direction: column; gap: 6px; }
+.plan-edit-row { display: flex; align-items: center; gap: 4px; }
+.plan-edit {
+  flex: 1; min-width: 0;
+  padding: 8px 10px; font: inherit; font-size: var(--text-sm); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+}
+.plan-edit::placeholder { color: var(--muted); }
+.plan-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.plan-move, .plan-remove { flex: none; padding: 5px; min-width: 30px; }
+.plan-move:disabled { opacity: .3; cursor: default; }
+.plan-remove:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.plan-add-row { display: flex; align-items: center; gap: 4px; }
+.plan-add-row .plan-edit { border-style: dashed; }
+
+/* A phone gets a slightly shorter row rather than a horizontally scrolling
+   one: the arrows keep their 30px targets, the input keeps the rest. */
+@media (max-width: 719px) {
+  .plan-edit-row, .plan-add-row { gap: 2px; }
+  .plan-move, .plan-remove { min-width: 28px; padding: 4px; }
+  .plan-edit { padding: 8px; }
 }
