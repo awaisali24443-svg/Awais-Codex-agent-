@@ -2,6 +2,11 @@
  * Crash-resume on boot. A run left 'running' (or 'queued') by a restart used
  * to be failed outright and its partial work lost. Now:
  *
+ * - A run left in 'planning' is failed as 'interrupted': the planning pass was
+ *   an in-flight engine call that died with the process, and there is no plan
+ *   to approve yet. Retrying re-drafts it; leaving it would hold the single
+ *   active slot until the hour-long staleness sweep noticed.
+ *
  * - 'paused' runs are left alone. Nothing pauses a run automatically any more
  *   — the per-task token cap that used to is gone — so a 'paused' row is either
  *   an operator pause or a leftover from before that change, and resuming it
@@ -24,6 +29,7 @@ export interface RecoveryResult {
 
 interface OrphanRow {
   id: string;
+  status: string;
   started_at: Date | string;
   done_steps: string;
 }
@@ -34,15 +40,32 @@ export async function recoverOrphanedRuns(
 ): Promise<RecoveryResult> {
   const result: RecoveryResult = { resumed: 0, failed: 0, resumedRunId: null };
   const orphans = await db.query<OrphanRow>(
-    `SELECT r.id, r.started_at,
+    `SELECT r.id, r.status, r.started_at,
             (SELECT COUNT(*)::text FROM mission_steps s
               WHERE s.run_id = r.id AND s.status = 'done') AS done_steps
        FROM runs r
-      WHERE r.status IN ('queued', 'running')
+      WHERE r.status IN ('queued', 'running', 'planning')
       ORDER BY r.started_at DESC`,
   );
   let autoResumed = false;
   for (const orphan of orphans) {
+    // A planning orphan has nothing to resume: it never started executing.
+    // Failing it frees the slot immediately and the operator's Retry re-drafts
+    // the plan — which is exactly what was happening when the process died.
+    if (orphan.status === 'planning') {
+      await db.query(
+        `UPDATE runs
+            SET status = 'failed',
+                error_type = 'interrupted',
+                error_message = 'The server restarted while the plan was being drafted. Run it again.',
+                finished_at = now()
+          WHERE id = $1`,
+        [orphan.id],
+      );
+      result.failed += 1;
+      console.log(`[boot] ${orphan.id} was still planning — failed as interrupted`);
+      continue;
+    }
     const doneSteps = Number(orphan.done_steps ?? 0);
     const verdict = !autoResumed ? triageOrphan(doneSteps, orphan.started_at) : 'fail';
     if (verdict === 'resume') {

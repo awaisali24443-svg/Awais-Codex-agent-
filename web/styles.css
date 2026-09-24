@@ -1257,6 +1257,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .setting-note { margin: var(--space-3) 2px 0; }
 
 /* ------------------------------------------------------------ the plan ---
+   A plan being drafted and a plan waiting to be approved are the same card in
+   two states, so the drafting state only adds the clock and the softer head. */
    The one card that is a decision rather than a report. */
 
 .plan-card {
@@ -1632,3 +1634,15 @@ kbd {
 }
 .step[data-status="note"] .step-name { color: var(--muted); }
 .step[data-status="note"] .step-rail::before { opacity: .5; }
+
+/* ------------------------------------------------- the plan being drafted ---
+   The first minute of a complex task used to be a blank page: the plan was
+   drafted inside the request, before the browser had anything to watch. Now the
+   card is up from the first second and fills itself in. */
+
+.plan-drafting .plan-note { color: var(--muted); }
+.plan-clock {
+  font-variant-numeric: tabular-nums; color: var(--muted);
+}
+.plan-drafting .plan-head svg { color: var(--muted); animation: spin 1.6s linear infinite; }
+.plan-drafting .plan-row { opacity: .85; }

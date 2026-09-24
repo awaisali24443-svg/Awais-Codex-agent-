@@ -226,6 +226,24 @@ async function runTask(body: Record<string, unknown>): Promise<{ runId: string; 
   return { runId, conversationId, events };
 }
 
+/**
+ * Wait until the run is out of its background planning pass.
+ *
+ * Returns the status it settled in: 'awaiting_plan' (needs approval),
+ * 'running'/'queued' (a plan came back empty, so it executes directly), or
+ * whatever it became if it never left 'planning'.
+ */
+async function settleToPlan(base: string, id: string, timeoutMs = 5_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await fetch(`${base}/api/runs/${id}`, { headers: { cookie } });
+    const { run } = (await res.json()) as { run: { status: string } };
+    if (run.status !== 'planning') return run.status;
+    if (Date.now() > deadline) return run.status;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 describe('a heavy user walks the app', () => {
   test('the saved link signs in, and the app assets are served', async () => {
     // A browser navigation with the saved link. `redirect: 'manual'` matters:
@@ -629,7 +647,9 @@ describe('a heavy user walks the app', () => {
         body: JSON.stringify({ prompt: COMPLEX_PROMPT }),
       });
       const { run } = (await accepted.json()) as { run: { id: string; status: string } };
-      if (run.status === 'awaiting_plan') {
+      // The acceptance answers while the plan is still being drafted
+      // ('planning'), so wait for the plan before deciding whether to approve.
+      if ((await settleToPlan(sloppy.base, run.id)) === 'awaiting_plan') {
         await fetch(`${sloppy.base}/api/runs/${run.id}/approve`, { method: 'POST', headers: { cookie } });
       }
       const stream = await fetch(`${sloppy.base}/api/runs/${run.id}/stream`, { headers: { cookie, accept: 'text/event-stream' } });

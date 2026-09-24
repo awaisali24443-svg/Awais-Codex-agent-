@@ -160,6 +160,15 @@ export interface ExecutorDeps {
   secrets?: SecretsStore;
 }
 
+/** Longest a planning pass may take before it is aborted. */
+const PLAN_TIMEOUT_MS = 60_000;
+
+/** One thing the planning pass wants the world to know, as it happens. */
+export interface PlanPassEvent {
+  type: 'plan.milestone' | 'log';
+  payload: Record<string, unknown>;
+}
+
 /**
  * Serialises durable writes so that the order events were *raised* is the order
  * they receive sequence numbers.
@@ -271,6 +280,8 @@ class FieldBuffer {
 
 export class RunExecutor {
   private readonly active = new Map<string, AbortController>();
+  /** One durable writer per run, so announcements are numbered in order. */
+  private readonly writers = new Map<string, DurableWriter>();
   private readonly snapshotIntervalMs: number;
 
   constructor(private readonly deps: ExecutorDeps) {
@@ -337,12 +348,15 @@ export class RunExecutor {
    * empty list, and the caller falls back to normal execution rather than
    * stranding the mission in a waiting state with nothing to show.
    */
-  async planMission(run: Run): Promise<PlanStep[]> {
+  async planMission(run: Run, onEvent?: (event: PlanPassEvent) => void): Promise<PlanStep[]> {
     const steps: PlanStep[] = [];
     const controller = new AbortController();
+    // Cancellable like any other run: the stop button has to stop the planning
+    // pass too, or a task the operator cancelled keeps thinking.
+    this.active.set(run.id, controller);
     // A plan is a short answer. If the engine is still talking after a
     // minute it has misunderstood "plan only" — stop paying for it.
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const timeout = setTimeout(() => controller.abort(), PLAN_TIMEOUT_MS);
     try {
       const ctx: EngineContext = {
         runId: run.id,
@@ -353,11 +367,20 @@ export class RunExecutor {
         thinking: () => {},
         tool: () => {},
         toolResult: () => {},
-        log: (message) => {
+        log: (message, level) => {
           const milestone = parseMilestone(message);
           if (milestone) {
             steps.push({ index: milestone.index, total: milestone.total, label: milestone.label });
+            // Announced the moment the model says it, not after the plan is
+            // finished: the operator watches the plan being written instead of
+            // watching a spinner.
+            onEvent?.({ type: 'plan.milestone', payload: { ...milestone } });
+            return;
           }
+          // Everything else the engine says — a rate-limit wait, a retry, the
+          // silence heartbeat — is forwarded: a minute of silence with no
+          // explanation is precisely what this pass used to be.
+          if (message) onEvent?.({ type: 'log', payload: { message, level: level ?? 'info' } });
         },
       };
       await this.deps.engine.run(planOnlyPrompt(run.prompt), ctx);
@@ -365,6 +388,7 @@ export class RunExecutor {
       console.warn(`[run] ${run.id} planning pass failed:`, (err as Error).message);
     } finally {
       clearTimeout(timeout);
+      this.active.delete(run.id);
     }
     // Normalise: first label announced wins per index, ordered 1..N, with a
     // single total so the checklist renders as one plan.
@@ -375,6 +399,36 @@ export class RunExecutor {
     return [...seen.values()]
       .sort((a, b) => a.index - b.index)
       .map((s) => ({ index: s.index, total: total || seen.size, label: s.label }));
+  }
+
+  /**
+   * Say something on a run's stream from outside `execute()`.
+   *
+   * The planning pass happens before the run starts and before there is an
+   * executor-owned writer, so it publishes through here: durable (a reconnect
+   * replays it) and live (the stream shows it now). Writers are kept per run so
+   * two events can never be numbered out of order.
+   */
+  async announce(runId: string, type: string, payload: Record<string, unknown> = {}): Promise<void> {
+    let writer = this.writers.get(runId);
+    if (!writer) {
+      writer = new DurableWriter(this.deps.db, this.deps.bus, runId, (err) => {
+        console.error(`[executor] event write failed for ${runId}:`, err.message);
+      });
+      this.writers.set(runId, writer);
+    }
+    await writer.write(type, payload);
+  }
+
+  /**
+   * Resolve once everything announced for this run has been written.
+   *
+   * Announcements are chained (they must keep their order), so a caller that is
+   * about to write the *conclusion* — the plan itself — has to let the chain
+   * drain first, or the plan can be numbered before the milestone it follows.
+   */
+  async flushAnnouncements(runId: string): Promise<void> {
+    await this.writers.get(runId)?.idle();
   }
 
   /** Abort everything in flight (shutdown). Resolves when the map is clear. */

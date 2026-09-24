@@ -26,7 +26,7 @@ import { BudgetExceededError, consumeRunBudget, peekDayTotal, refundRunBudget, t
 import { looksComplex } from './planning.js';
 import { attachmentSummary, withAttachments, type Attachment } from './attachments.js';
 import { maybeAskPlanApproval } from './whatsapp/approvals.js';
-import { RunConflictError, createRun, emitEvent, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
+import { RunConflictError, createRun, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
 
 export const BUCKET_FOR_KIND: Record<RunKind, BudgetBucket> = {
   chat: 'web',
@@ -73,7 +73,19 @@ export interface AcceptInput {
 }
 
 export type AcceptResult =
-  | { ok: true; run: Run; remaining: number; bucket: BudgetBucket }
+  | {
+      ok: true;
+      run: Run;
+      remaining: number;
+      bucket: BudgetBucket;
+      /**
+       * Resolves when the background planning pass has settled (plan saved, or
+       * the run handed to the executor, or failed). Callers do not await this —
+       * that is the point: the request returns the moment the run exists. Tests
+       * await it so an assertion can be made about the outcome.
+       */
+      planning?: Promise<void>;
+    }
   | { ok: false; reason: 'in_progress'; active: Run }
   | {
       ok: false;
@@ -83,6 +95,63 @@ export type AcceptResult =
       limit: number;
       resetsAt: string;
     };
+
+/**
+ * Draft the plan without holding the request, the run slot or the operator.
+ *
+ * Every event it produces goes on the run's own stream, so the card the
+ * operator is already watching fills itself in: the model's steps as it names
+ * them, the engine's waiting and retrying lines, and finally the plan to
+ * approve. A cancelled run is respected between every step — the pass stops,
+ * nothing starts, and the run is left as the cancellation made it.
+ */
+async function draftPlan(deps: AcceptDeps, run: Run): Promise<void> {
+  const { db, executor } = deps;
+  const current = async (): Promise<Run | null> => getRun(db, run.id);
+
+  try {
+    const steps = await executor.planMission(run, (event) => {
+      // Fire-and-forget: a slow database must not stall the planning pass.
+      void executor.announce(run.id, event.type, event.payload);
+    });
+    // The milestones are on the stream before the plan that supersedes them.
+    await executor.flushAnnouncements(run.id);
+
+    const fresh = await current();
+    // Cancelled, failed, or otherwise closed while planning: say nothing and
+    // start nothing. The operator's stop is the last word.
+    if (!fresh || fresh.status !== 'planning') return;
+
+    if (steps.length > 0) {
+      await saveRunPlan(db, run.id, steps);
+      await setRunStatus(db, run.id, 'awaiting_plan');
+      await executor.announce(run.id, 'run.plan_ready', { plan: steps });
+      const held = await current();
+      console.log(`[run] ${run.id} awaiting plan approval (${steps.length} steps)`);
+      // The owner may be on the phone, not the web app: one WhatsApp ask,
+      // answered with YES / NO / CHANGE. Fire-and-forget — it never throws.
+      if (deps.secrets) {
+        void maybeAskPlanApproval({ db, secrets: deps.secrets }, held ?? run, steps);
+      }
+      return;
+    }
+
+    // A plan that never arrived must not strand the task: execute, loudly.
+    console.log(`[run] ${run.id} planning pass came back empty — executing directly`);
+    executor.start(fresh);
+  } catch (err) {
+    // The acceptance promise has already been kept, so this is the only place
+    // left that can free the single-active slot. A run left in 'planning' would
+    // refuse every future task, which is exactly what a broken queue looks
+    // like from the outside.
+    await setRunStatus(db, run.id, 'failed', {
+      errorType: 'accept_failed',
+      errorMessage: (err as Error).message,
+    });
+    await refundRunBudget(db, BUCKET_FOR_KIND[run.kind]);
+    console.error(`[run] ${run.id} planning pass failed:`, (err as Error).message);
+  }
+}
 
 /**
  * The budget window is UTC midnight, which is not when the engine's own quota
@@ -164,23 +233,19 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
     // approval UI, so they keep the direct path; simple questions never pay
     // for a planning call.
     if (input.kind === 'chat' && looksComplex(prompt)) {
-      const steps = await executor.planMission(run);
-      if (steps.length > 0) {
-        await saveRunPlan(db, run.id, steps);
-        await setRunStatus(db, run.id, 'awaiting_plan');
-        await emitEvent(db, run.id, 'run.plan_ready', { plan: steps });
-        const held = await getRun(db, run.id);
-        console.log(`[run] ${run.id} awaiting plan approval (${steps.length} steps)`);
-        // The owner may be on the phone, not the web app: one WhatsApp ask,
-        // answered with YES / NO / CHANGE. Fire-and-forget — it never throws.
-        if (deps.secrets) {
-          void maybeAskPlanApproval({ db, secrets: deps.secrets }, held ?? run, steps);
-        }
-        return { ok: true, run: held ?? run, remaining, bucket };
-      }
-      // A plan that never arrived must not strand the mission: fall through
-      // to normal execution, loudly.
-      console.log(`[run] ${run.id} planning pass came back empty — executing directly`);
+      // The root of "it takes minutes and shows nothing": this used to be an
+      // awaited, non-streamed engine call *inside* the request. The operator
+      // waited up to a minute for an HTTP response, had nothing to attach to,
+      // and therefore saw nothing. The pass runs in the background instead, its
+      // own progress and the model's own milestones streaming as they happen.
+      await setRunStatus(db, run.id, 'planning');
+      // Through the executor, so this event and every later milestone share one
+      // serialised writer: the stream can never show the plan before it.
+      await executor.announce(run.id, 'run.plan_started', {});
+      const held = await getRun(db, run.id);
+      const planning = draftPlan(deps, held ?? run);
+      console.log(`[run] ${run.id} planning pass started in the background`);
+      return { ok: true, run: held ?? run, remaining, bucket, planning };
     }
 
     executor.start(run);

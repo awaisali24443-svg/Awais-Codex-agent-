@@ -76,6 +76,21 @@ function makeConfig(): AppConfig {
   } as NodeJS.ProcessEnv);
 }
 
+/**
+ * Wait for a run to reach a status. The planning pass is background work now,
+ * so anything asserting what it *left behind* has to wait for it — and the
+ * wait is short, because the pass no longer holds the request.
+ */
+async function waitForStatus(id: string, status: string, timeoutMs = 3_000): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const current = (await getRun(db, id))?.status ?? null;
+    if (current === status) return current;
+    if (Date.now() > deadline) return current;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 function makeExecutor(steps = PLAN_SCRIPT): RunExecutor {
   return new RunExecutor({
     db,
@@ -148,9 +163,14 @@ describe('planning gate', () => {
     assert.equal(result.ok, true);
     if (!result.ok) return;
     const run = result.run;
-    assert.equal(run.status, 'awaiting_plan');
-    assert.equal(run.plan?.length, 3);
-    assert.equal(run.plan?.[0].label, 'design the data model');
+    // The acceptance answers immediately, in the state the task is really in:
+    // planning. Waiting here is what made a complex task look like a hang.
+    assert.equal(run.status, 'planning');
+    await result.planning;
+    const planned = await getRun(db, run.id);
+    assert.equal(planned?.status, 'awaiting_plan');
+    assert.equal(planned?.plan?.length, 3);
+    assert.equal(planned?.plan?.[0].label, 'design the data model');
     // The mission did not start: no executor attached, no run.started event.
     assert.equal(executor.isRunning(run.id), false);
     const events = await db.query<{ type: string }>(
@@ -185,8 +205,11 @@ describe('planning gate', () => {
     );
     assert.equal(result.ok, true);
     if (!result.ok) return;
-    assert.notEqual(result.run.status, 'awaiting_plan');
-    assert.equal(result.run.plan, null);
+    assert.equal(result.run.status, 'planning');
+    await result.planning;
+    const after = await getRun(db, result.run.id);
+    assert.notEqual(after?.status, 'awaiting_plan');
+    assert.equal(after?.plan, null);
     await executor.shutdown();
   });
 
@@ -201,6 +224,56 @@ describe('planning gate', () => {
     if (!result.ok) return;
     assert.notEqual(result.run.status, 'awaiting_plan');
     await executor.shutdown();
+  });
+
+  test('accepting a complex task does not wait for its plan', async () => {
+    // The root of the complaint: this used to be `await executor.planMission()`
+    // inside the request, up to a minute of a non-streamed engine call with no
+    // run to attach to. The response must come back before the plan does, in
+    // 'planning' — a state the client can show and stream into.
+    const config = makeConfig();
+    const seen: string[] = [];
+    const slowExecutor = {
+      planMission: async (_run: unknown, onEvent?: (e: { type: string; payload: Record<string, unknown> }) => void) => {
+        onEvent?.({ type: 'plan.milestone', payload: { index: 1, total: 2, label: 'first' } });
+        onEvent?.({ type: 'log', payload: { message: 'No words from the model yet — 30s in.', level: 'info' } });
+        await new Promise((r) => setTimeout(r, 150));
+        onEvent?.({ type: 'plan.milestone', payload: { index: 2, total: 2, label: 'second' } });
+        seen.push('finished');
+        return [
+          { index: 1, total: 2, label: 'first' },
+          { index: 2, total: 2, label: 'second' },
+        ];
+      },
+      start: () => {},
+      isRunning: () => false,
+      announce: async (_id: string, type: string) => {
+        seen.push(type);
+      },
+      flushAnnouncements: async () => {},
+    } as unknown as RunExecutor;
+
+    const started = Date.now();
+    const result = await acceptRun({ db, executor: slowExecutor, config }, { prompt: COMPLEX_PROMPT, kind: 'chat' });
+    const waited = Date.now() - started;
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.run.status, 'planning', 'the task is planning, and says so');
+    assert.ok(waited < 100, `the response waited ${waited}ms for a plan that takes 150ms`);
+    // The pass may already have said things (that is the point — they stream),
+    // but it has not finished: the response did not wait for it.
+    assert.ok(!seen.includes('finished'), 'the planning pass finished before the response did');
+
+    await result.planning;
+    assert.equal((await getRun(db, result.run.id))?.status, 'awaiting_plan');
+    // The milestones and the engine's own line went on the run's stream while
+    // it was being written, not after — every one of them before the plan.
+    assert.deepEqual(
+      seen.filter((t) => t !== 'finished'),
+      ['run.plan_started', 'plan.milestone', 'log', 'plan.milestone', 'run.plan_ready'],
+    );
+    assert.equal(seen.at(-1), 'run.plan_ready', 'the plan is the last thing on the stream');
+    assert.equal(seen.at(-2), 'finished', 'and it comes after the pass actually finished');
   });
 
   test('planOnlyPrompt asks for the plan and nothing else', () => {
@@ -264,16 +337,31 @@ describe('plan routes', () => {
     await executor.shutdown();
   });
 
-  test('POST /runs with a complex prompt waits for approval', async () => {
+  test('POST /runs with a complex prompt answers while the plan is still being drafted', async () => {
     const res = await post('/api/runs', { prompt: COMPLEX_PROMPT });
     assert.equal(res.status, 201);
-    assert.equal(res.body.run.status, 'awaiting_plan');
-    assert.equal(res.body.run.plan.length, 3);
+    assert.equal(res.body.run.status, 'planning');
+    assert.equal(res.body.run.plan, null, 'no plan yet — and no waiting for one');
+    assert.equal(await waitForStatus(res.body.run.id, 'awaiting_plan'), 'awaiting_plan');
+    assert.equal((await getRun(db, res.body.run.id))?.plan?.length, 3);
+    // And the run's own stream carried the pass while it happened: the client
+    // that attached on this response had something to show from the first
+    // second, instead of a minute of nothing.
+    const events = await db.query<{ type: string }>('SELECT type FROM run_events WHERE run_id = $1', [
+      res.body.run.id,
+    ]);
+    const types = events.map((e) => e.type);
+    assert.ok(types.includes('run.plan_started'), 'the pass announced itself');
+    assert.ok(types.includes('plan.milestone'), 'the steps streamed as they were written');
+    assert.ok(types.includes('run.plan_ready'), 'and the plan arrived to approve');
+    assert.ok(types.indexOf('run.plan_started') < types.indexOf('run.plan_ready'), 'in that order');
   });
 
   test('POST /runs/:id/plan edits the waiting plan', async () => {
     const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
     const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
+    assert.equal(await waitForStatus(id, 'awaiting_plan'), 'awaiting_plan');
     const res = await post(`/api/runs/${id}/plan`, { steps: ['edited one', 'edited two'] });
     assert.equal(res.status, 200);
     assert.deepEqual(
@@ -291,6 +379,8 @@ describe('plan routes', () => {
     // server's job precisely so the client never has to be trusted with it.
     const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
     const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
+    assert.equal(await waitForStatus(id, 'awaiting_plan'), 'awaiting_plan');
     const res = await post(`/api/runs/${id}/plan`, {
       steps: ['the step I moved to the top', 'the first step, now second', 'a step I added'],
     });
@@ -321,6 +411,7 @@ describe('plan routes', () => {
   test('the edited plan is broadcast, so every open view shows the same list', async () => {
     const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
     const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
     const seen: Array<{ type: string; payload: any }> = [];
     const unsubscribe = bus.subscribe(id, (event) => seen.push(event));
     await post(`/api/runs/${id}/plan`, { steps: ['one', 'two'] });
@@ -340,6 +431,7 @@ describe('plan routes', () => {
   test('POST /runs/:id/approve starts the mission; a second approve is refused', async () => {
     const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
     const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
     const res = await post(`/api/runs/${id}/approve`, {});
     assert.equal(res.status, 200);
     assert.ok(['queued', 'running', 'completed'].includes(res.body.run.status));
@@ -373,6 +465,7 @@ describe('plan routes', () => {
     // reconnected. Persisting is half the job.
     const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
     const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
     const controller = new AbortController();
     const stream = await fetch(`${base}/api/runs/${id}/stream`, { headers: auth, signal: controller.signal });
     assert.equal(stream.status, 200);

@@ -271,7 +271,10 @@ const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'paused'];
 /* A run the operator can still watch or act on: either working, or waiting for
    a plan to be approved. Anything else is over, and its answer is on the
    thread already — so opening the chat it belongs to must not replay it. */
-const LIVE_RUN_STATUSES = ['running', 'awaiting_plan'];
+/* 'planning' is a live status too: the task exists, a card can show it, and the
+   plan is being written. Leaving it out is how a task being planned looked
+   exactly like no task at all after a reload. */
+const LIVE_RUN_STATUSES = ['planning', 'running', 'awaiting_plan'];
 
 /* The server caps an edited plan at 20 steps; the editor shows the same number
    rather than discovering the cap on Save. */
@@ -1177,6 +1180,43 @@ function addSeenSource(card, data) {
 /* ------------------------------------------------------- plan preview -- */
 
 /**
+ * The card while the plan is being written.
+ *
+ * This is the answer to "three minutes with nothing on screen": a complex task
+ * spends its first minute drafting a plan, and that minute used to happen before
+ * the browser had anything to attach to. The card now appears with the run and
+ * says what is going on, the steps land in it as the model names them, and the
+ * engine's own heartbeat shows up inside the same panel.
+ */
+function renderPlanDrafting(card) {
+  card.plan.hidden = false;
+  card.planIndex.clear();
+  card.plan.innerHTML = '';
+  card.plan.classList.add('plan-card', 'plan-drafting');
+
+  const head = document.createElement('div');
+  head.className = 'plan-head';
+  head.innerHTML = iconFor('list') +
+    '<span class="plan-title"></span><span class="plan-note"></span>';
+  head.querySelector('.plan-title').textContent = 'Working out the plan';
+  head.querySelector('.plan-note').textContent =
+    'Nothing runs until you approve it — the steps appear here as they are written.';
+  card.plan.append(head);
+}
+
+/** The plan card beat: a clock, so a minute of drafting is visibly a minute. */
+function draftingClock(card) {
+  if (card.planClock) clearInterval(card.planClock);
+  const tick = () => {
+    const node = card.plan.querySelector('.plan-clock');
+    if (!node) return;
+    const seconds = Math.round((Date.now() - card.startedAt) / 1000);
+    node.textContent = ` · ${seconds}s`;
+  };
+  card.planClock = setInterval(tick, 1_000);
+}
+
+/**
  * The plan checklist in its waiting state: the proposed steps plus Approve
  * and Edit. Rebuilding from scratch keeps an edited plan, a re-render, and a
  * replayed stream from ever duplicating rows or buttons.
@@ -1578,12 +1618,23 @@ function handleEvent(card, event, data) {
       updatePlan(card, data);
       break;
 
+    case 'run.plan_started':
+      // The task is accepted and the plan is being drafted. Say so in the card
+      // rather than letting the first minute of a complex task be a blank page.
+      state.runStatus = 'planning';
+      setRunning(true);
+      renderPlanDrafting(card);
+      draftingClock(card);
+      break;
+
     case 'run.plan_ready':
     case 'run.plan_updated':
       // The planning pass proposed steps (or the operator edited them): the
       // run waits in 'awaiting_plan' and the card shows Approve / Edit. The
       // mission does not start until the operator taps Approve.
       state.runStatus = 'awaiting_plan'; // waiting for a human, not working
+      if (card.planClock) clearInterval(card.planClock);
+      card.planClock = null;
       renderPlanPreview(card, data.plan);
       break;
 
@@ -2898,7 +2949,7 @@ function attach(runId, after = 0) {
     'run.started', 'log', 'tool.call', 'tool.result',
     'thinking.snapshot', 'text.snapshot', 'run.environment',
     'artifact', 'memory.recall', 'plan.milestone',
-    'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
+    'run.plan_started', 'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
     'research.started', 'research.pass', 'verification.checked',
     // The server has always sent this — it fetches every link in a research
     // answer and reports how many are dead — but it was never in this list, so
@@ -3013,7 +3064,9 @@ function setRunning(on) {
   el.statusDot.hidden = !on;
   el.stop.hidden = !on;
   el.stop.disabled = false;
-  el.topbarTitle.textContent = on ? 'Working…' : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'WAIS');
+  el.topbarTitle.textContent = on
+    ? (state.runStatus === 'planning' ? 'Planning…' : 'Working…')
+    : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'WAIS');
   el.send.disabled = on || !el.prompt.value.trim();
   // While a task runs the trailing control is Stop — in the composer's own
   // corner, where the thumb already is, rather than only in the top bar.
@@ -3452,9 +3505,15 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
     state.conversationId = run.conversationId;
     if (budget) note(`${budget.remaining} of ${budget.limit} runs left today`);
     if (run.status === 'awaiting_plan') {
-      // The mission waits for plan approval — nothing is running yet. The
-      // stream replays 'run.plan_ready' and the card renders Approve / Edit.
+      // The task waits for plan approval — nothing is running yet. The stream
+      // replays 'run.plan_ready' and the card renders Approve / Edit.
       note('Plan ready — review it below, then approve to start.');
+      attach(run.id, 0);
+    } else if (run.status === 'planning') {
+      // The plan is being drafted now, and the drafting streams into the card.
+      state.runStatus = 'planning';
+      note('Drafting the plan — the steps will appear as they are written.');
+      setRunning(true);
       attach(run.id, 0);
     } else {
       setRunning(true);

@@ -247,7 +247,10 @@ describe('a task still working survives a look at another chat', () => {
     // A plan waiting for a tap is not "running", but it is not over either: its
     // card is the only place to approve it.
     const client = app();
-    assert.ok(client.includes("const LIVE_RUN_STATUSES = ['running', 'awaiting_plan'];"), 'both states are live');
+    assert.ok(
+      client.includes("const LIVE_RUN_STATUSES = ['planning', 'running', 'awaiting_plan'];"),
+      'all three states are live — including a plan still being drafted',
+    );
     assert.ok(/state\.runStatus = 'awaiting_plan';/.test(client), 'a waiting plan is recorded');
     assert.ok(/state\.runStatus = 'finished';/.test(client), 'and finishing clears it');
   });
@@ -782,6 +785,33 @@ describe('the card tells the truth while the model is silent', () => {
     assert.ok(engine.includes('heartbeatMs?: number;'), 'the interval is configurable for tests');
     assert.ok(engine.includes('Nothing from the model yet — ${silent}s in.'), 'the line is emitted from the read loop');
     assert.ok(engine.includes('clearInterval(beat);'), 'and the timer dies with the socket');
+  });
+});
+
+describe('the plan is drafted in the open', () => {
+  test('the drafting is a live card, not a blank page', () => {
+    const client = app();
+    // "A couple of minutes with no live stream" had a root cause: the planning
+    // pass ran inside the accepting request, so the browser had nothing to
+    // attach to and nothing to show while the model thought.
+    assert.ok(client.includes("case 'run.plan_started':"), 'the card is told the pass began');
+    assert.ok(client.includes('function renderPlanDrafting(card)'), 'and has a state for it');
+    assert.ok(client.includes('function draftingClock(card)'), 'with a clock, so a minute looks like a minute');
+    assert.ok(client.includes("'Working out the plan'"), 'and it says what it is doing');
+    assert.ok(client.includes('Nothing runs until you approve it'), 'and that nothing runs yet');
+    assert.ok(client.includes("state.runStatus = 'planning';"), 'the status is tracked, not guessed');
+  });
+
+  test('planning is a live run, so a reload finds it', () => {
+    const client = app();
+    assert.ok(
+      client.includes("const LIVE_RUN_STATUSES = ['planning', 'running', 'awaiting_plan'];"),
+      'a task being planned is a task that is running',
+    );
+    assert.ok(client.includes("state.runStatus === 'planning' ? 'Planning…'"), 'and the header says planning, not working');
+    // The POST no longer comes back with a plan: it comes back with a task.
+    assert.ok(client.includes("} else if (run.status === 'planning') {"), 'the composer handles that answer');
+    assert.ok(client.includes('const micHasSlot'), 'and the send button is unaffected by any of it');
   });
 });
 

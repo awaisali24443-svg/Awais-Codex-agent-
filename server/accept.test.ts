@@ -61,7 +61,13 @@ function makeConfig(): AppConfig {
   } as NodeJS.ProcessEnv);
 }
 
-/** Executor stub: the planning pass finds steps; start() is a no-op. */
+/**
+ * Executor stub: the planning pass finds steps; start() is a no-op.
+ *
+ * The pass runs in the background now, so the stub also has to provide the two
+ * methods the background path uses to publish — and `announce` is what makes
+ * the plan-save failure reachable from a test that already has its response.
+ */
 function stubExecutor(): RunExecutor {
   const steps: PlanStep[] = [
     { index: 1, total: 2, label: 'design' },
@@ -70,6 +76,8 @@ function stubExecutor(): RunExecutor {
   return {
     planMission: async () => steps,
     start: () => {},
+    announce: async () => {},
+    flushAnnouncements: async () => {},
   } as unknown as RunExecutor;
 }
 
@@ -96,15 +104,17 @@ describe('accept failure never wedges the queue', () => {
     const config = makeConfig();
     // saveRunPlan is UPDATE runs SET plan_json = ... — fail exactly that.
     const boomDb = failingDb(db, /SET plan_json/);
-    await assert.rejects(
-      () =>
-        acceptRun(
-          { db: boomDb, executor: stubExecutor(), config },
-          { prompt: COMPLEX_PROMPT, kind: 'chat' },
-        ),
-      /simulated storage failure/,
+    // The acceptance itself now succeeds: the plan is drafted behind it. What
+    // must not change is the guarantee — a run whose plan cannot be saved must
+    // not keep the single-active slot.
+    const result = await acceptRun(
+      { db: boomDb, executor: stubExecutor(), config },
+      { prompt: COMPLEX_PROMPT, kind: 'chat' },
     );
-    // The run must not sit in 'queued' holding the single-active slot.
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.run.status, 'planning');
+    await result.planning;
     assert.equal(await getActiveRun(db), null);
     const rows = await db.query<{ status: string; error_type: string | null }>(
       'SELECT status, error_type FROM runs',
@@ -117,36 +127,35 @@ describe('accept failure never wedges the queue', () => {
   test('the budget claim is refunded when the run never started', async () => {
     const config = makeConfig();
     const boomDb = failingDb(db, /SET plan_json/);
-    await assert.rejects(
-      () =>
-        acceptRun(
-          { db: boomDb, executor: stubExecutor(), config },
-          { prompt: COMPLEX_PROMPT, kind: 'chat' },
-        ),
-      /simulated storage failure/,
+    const result = await acceptRun(
+      { db: boomDb, executor: stubExecutor(), config },
+      { prompt: COMPLEX_PROMPT, kind: 'chat' },
     );
-    // The claim happened (consumeRunBudget ran before the failure) but the
-    // mission never executed, so the day must not be charged.
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    await result.planning;
+    // The claim happened (consumeRunBudget ran before the failure) but the task
+    // never executed, so the day must not be charged.
     assert.equal(await peekDayTotal(db), 0);
   });
 
   test('a later mission can start after an accept failure', async () => {
     const config = makeConfig();
     const boomDb = failingDb(db, /SET plan_json/);
-    await assert.rejects(
-      () =>
-        acceptRun(
-          { db: boomDb, executor: stubExecutor(), config },
-          { prompt: COMPLEX_PROMPT, kind: 'chat' },
-        ),
-      /simulated storage failure/,
+    const failed = await acceptRun(
+      { db: boomDb, executor: stubExecutor(), config },
+      { prompt: COMPLEX_PROMPT, kind: 'chat' },
     );
-    // Healthy storage again: the next mission must be accepted, not refused
-    // with "another mission is already running".
+    if (failed.ok) await failed.planning;
+    // Healthy storage again: the next task must be accepted, not refused with
+    // "another task is already running".
     const result = await acceptRun(
       { db, executor: stubExecutor(), config },
       { prompt: COMPLEX_PROMPT, kind: 'chat' },
     );
     assert.equal(result.ok, true);
+    // The background pass still has the database: let it finish before the
+    // suite closes it, or the last write lands on a closed connection.
+    if (result.ok) await result.planning;
   });
 });

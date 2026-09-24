@@ -20,7 +20,16 @@ import { CHAIN_VISIBLE, chainCte, ensureMainBranch } from './branches.js';
 import { parseVerification, type VerificationCheck } from './mission_verify.js';
 
 export type RunKind = 'chat' | 'whatsapp' | 'api';
-export type RunStatus = 'queued' | 'running' | 'paused' | 'awaiting_plan' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus =
+  | 'queued'
+  /** The planning pass is drafting the plan; nothing runs until it lands. */
+  | 'planning'
+  | 'running'
+  | 'paused'
+  | 'awaiting_plan'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 export type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
 export const TERMINAL_STATUSES: readonly RunStatus[] = ['completed', 'failed', 'cancelled'];
@@ -192,7 +201,7 @@ function isActiveConflict(err: unknown): boolean {
 export async function getActiveRun(db: Db): Promise<Run | null> {
   const rows = await db.query<RunRow>(
     `SELECT ${RUN_COLUMNS} FROM runs
-      WHERE status IN ('queued', 'running', 'paused', 'awaiting_plan')
+      WHERE status IN ('queued', 'planning', 'running', 'paused', 'awaiting_plan')
       ORDER BY started_at DESC LIMIT 1`,
   );
   return rows[0] ? mapRun(rows[0]) : null;

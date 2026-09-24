@@ -196,7 +196,7 @@ export async function collectDigestData(db: Db, now: Date = new Date()): Promise
   const activeRows = await db.query<RunRow>(
     `SELECT id, status, kind, prompt, error_type, error_message
        FROM runs
-      WHERE status IN ('queued', 'running', 'paused', 'awaiting_plan')
+      WHERE status IN ('queued', 'planning', 'running', 'paused', 'awaiting_plan')
       ORDER BY started_at DESC
       LIMIT 10`,
     [],

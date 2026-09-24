@@ -228,7 +228,7 @@ export async function markOrphanedRuns(db: Db, maxAgeMinutes = 60): Promise<numb
               error_type = 'orphaned',
               error_message = 'Server restarted while this run was in flight',
               finished_at = now()
-        WHERE status IN ('queued', 'running', 'paused')
+        WHERE status IN ('queued', 'planning', 'running', 'paused')
           AND started_at < now() - ($1 || ' minutes')::interval
         RETURNING id`,
       [String(maxAgeMinutes)],
