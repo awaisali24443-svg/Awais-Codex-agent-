@@ -463,3 +463,33 @@ Inside the Thinking panel, while it runs:
 - **Untouched:** routes, storage, auth, budgets, the run stream protocol — the new
   rows reuse the event types that already exist and are already tested for
   reconnect.
+
+## F. What shipped in this round
+
+Five commits, each with the tests that prove it, all green together (981 tests,
+239 suites, 0 failures):
+
+| Commit | What it did |
+| --- | --- |
+| `358f5a9` | The trace: `WHY:` reasons become durable `decision` rows, the thinking stream is cut into rows, the panel head names the channel honestly (Reasoning vs what it is doing). |
+| `0d146cd` | Silence said out loud (the quiet chip on the head, a wait line with phase and elapsed) and the Raw switch — every frame the browser received, bounded, with the dropped count stated. |
+| `e111df2` | Eight art directions replacing the single house style, chosen before any file is written and announced with the reason; the craft guide rewritten; the static quality gate. |
+| `5a35c53` | The gate's rules travel to the only thing that can run them (the builder), as a checklist keyed by rule id; `DecisionScanner.finish()` stops holding the last reason forever. |
+| `c709faf` | The direction as a durable event carrying its alternates; refinement chips on a finished build (Bolder / Calmer / More motion / Refine the copy / each alternate direction). |
+
+Deviations from §B3/§E3, and why:
+
+- **Recipes live in the registry, not in `server/design/recipes/*.md`.** The
+  recipe is now *generated* from each direction's own fields, so a direction
+  cannot ship with a documented palette and an undocumented motion rule. One
+  source, three readers: the wire prompt, the plan line, the chips.
+- **The gate has no server-side file reader.** Built files live in the engine's
+  own sandbox and the server only sees them when someone downloads one, so the
+  checks were written twice on purpose: as a checker (`checkBuild`, for any path
+  that does have bytes — the preview and the artifacts) and as a checklist
+  (`gateChecklist`, forced complete by `Record<RuleId, …>`) that reaches the
+  model. The visual/screenshot pass is still phase 3.
+- **The direction gate still asks nothing.** This round *decides* and announces;
+  §C3's promise — three chips and "Let WAIS choose" before the first file, and a
+  gate that auto-approval cannot answer — is the next piece, and it now has the
+  payload it needs (`design.direction` already carries the three alternates).
