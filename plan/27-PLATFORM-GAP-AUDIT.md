@@ -307,16 +307,70 @@ and Tier 2 wait on a decision or on Google.
 
 ---
 
+## 4b. What remains, reconciled (second pass, same day)
+
+A second read, this time of the platforms the first pass did not cover —
+**Cursor 3**, **Devin 3**, **Google AI Studio's own Build mode** (the reference
+product), and the open/agent-platform layer — checked against what has shipped
+since. Same rules: every WAIS claim carries a file, every platform claim carries
+a source in section 6.
+
+**Shipped since the first pass:** the run timer and its spinner (`fcf9a2c`), the
+same clock in the top bar and the tab (`6720649`), and pictures in the composer
+(`9b1a89c`).
+
+| # | What remains | Who has it | Blocked by the engine? | Size |
+|---|---|---|---|---|
+| 1 | **The queue** — the second ask waits its turn instead of being refused | Cursor 3's Agents Window, Codex/ChatGPT task list, Manus multi-task | No. The engine is still one at a time; this is ordering plus the done-ping | M |
+| 2 | **Steering a live task** — "no, the other folder" without killing it | Manus ("intervene and redirect at any point"), Cursor background agents ("take over at any time") | No. Cancel and resume already exist | M |
+| 3 | **Annotate the preview** — draw on the built page and say "this bit" | AI Studio Build's edit tool (draw on the app, tweak components) | No, but it needs a real preview surface first | M |
+| 4 | **Checkpoints and rewind** — go back to the version before it broke | AI Studio ("jump back to previous checkpoints", compare code versions), Claude `/rewind`, Replit per-step checkpoints | Yes, for a true snapshot: the API documents resume, not rollback | M–L |
+| 5 | **Design-to-code from a picture** — now partly possible | Cursor Design Mode (Figma, screenshots, sketches) | No longer blocked: images ship, so a screenshot can drive a build | S |
+| 6 | **One-click deploy / a live URL for a built page** | AI Studio → Cloud Run; Replit custom domains; Manus `manus.space` | No. This is the biggest missing *ending* for a site-builder | M–L |
+| 7 | **Event-triggered tasks** — run when mail/PR/message lands | ChatGPT scheduled tasks with webhooks (Gmail, Slack, GitHub) | No. Poller, fences and scheduler all exist | M |
+| 8 | **Deep links + the phone share sheet** | ChatGPT task links, `claude-cli://` deep links | No | S |
+| 9 | **Cost at a glance** — today, this month, per task | every platform's usage panel; Manus reviews lead with cost surprise | No. `/api/budget` exists | S–M |
+| 10 | **Artifact history** — version list per output, restore one | AI Studio version compare, Replit file history, v0/Lovable versions | No | M |
+| 11 | **Projects** — conversations + files + standing rules in one place | ChatGPT Projects, Claude Projects (instructions/files), Manus knowledge, Codex multi-repo + rules files | No. Continuation gives the shared sandbox already | M–L |
+| 12 | **An eval loop over past runs** | OpenAI AgentKit evals and guardrails; the LangSmith pattern | No. Feedback, run records and `checkBuild` already exist | M–L |
+| 13 | **Connectors the operator can add (MCP)** | Cursor, Claude connectors, ChatGPT plugins, AI Studio's MCP support | Partly. The agent accepts tools; the operator-facing registry is ours | L |
+| 14 | **Parallel sub-agents** | Cursor (up to 8 subagents), Manus Wide Research, Antigravity itself (multi-agent orchestration, async task management) | Yes: one interaction is one agent. WAIS chains passes instead | L |
+| 15 | **A live view of the sandbox** | Manus's Computer window, Devin's IDE | Yes: the managed agent returns text, steps and artifacts, no screen | L |
+| 16 | **Model / reasoning picker** | every platform; Devin and Cursor pick models per task | Yes: agent id and model are configuration here | M (when the API allows) |
+
+**Two findings from this pass worth acting on:**
+
+* **Images are now doubly justified.** AI Studio's Build agent generates its own
+  imagery on the fly and takes drawings on the preview; Cursor's Design Mode
+  reads Figma files, screenshots and sketches. The picture path shipped
+  yesterday is the same primitive those two build on. Item 5 is now a small
+  follow-up, not a project.
+* **The ending is the real gap.** Of the sixteen, only item 6 changes what the
+  operator *gets* at the end of a build: a page with an address they can open
+  and send to someone. Everything else improves the middle. That is the item I
+  would argue hardest for after the queue.
+
+**Next three, in order:** the queue (1) → steering (2) → deploy a built page to a
+live URL (6).
+
+**Still deliberately out:** teams, seats, SSO, org analytics, audit exports, a
+public API, a marketplace (section 3, tier 3), and — new to this pass — computer
+use, which Devin and Cursor justify only with a local desktop WAIS does not have.
+
+---
+
 ## 5. Shipped while this audit was being written
 
 Two things on this list are no longer gaps:
 
-* **The run timer and the spinner beside it** (`fcf9a2c`) — the clock is a
-  stopwatch seeded from the run's own start time, so a task that reconnects
-  three minutes in shows three minutes rather than restarting at zero, and the
-  phase sits on the panel head where the body cannot scroll it away. This was
-  the other half of the same request, and it is the AI-Studio pattern: the
-  spinner says the task is alive, the clock says how long it has been.
+* **The run timer and the spinner beside it** (`fcf9a2c`, extended `6720649`) —
+  the clock is a stopwatch seeded from the run's own start time, so a task that
+  reconnects three minutes in shows three minutes rather than restarting at
+  zero; the phase sits on the panel head where the body cannot scroll it away;
+  and the same number now runs in the top bar and in the tab title, because the
+  panel scrolls and the operator leaves. This is the AI-Studio pattern: the
+  spinner says the task is alive, the clock says how long it has been. Checked
+  on the wire — `run.started` carries `startedAt`.
 * **Pictures as attachments** (gap 1) — the composer takes screenshots now,
   read in the browser, carried in the request, shown as thumbnails, capped and
   refused in sentences. The pixels are never written to a row.
@@ -355,6 +409,19 @@ Platform claims above, and where they were read (all fetched 2026-09-24):
   <https://releasebot.io/updates/replit>,
   <https://www.rapidevelopers.com/replit-tutorial/how-to-leverage-replit-s-auto-save-and-version-history-for-continuous-development>,
   <https://www.shipai.dev/blog/replit-deployment-guide-custom-domains-secrets-databases-monitoring>
+* **Cursor 3 / Devin 3** — Agents Window with parallel worktrees and cloud
+  agents, Design Mode (Figma, screenshots, sketches → components), Bugbot PR
+  review, background agents you can take over; Devin's interactive planning and
+  dynamic re-planning, Slack/Teams/Jira/Linear:
+  <https://baeseokjae.github.io/posts/cursor-3-guide-2026/>,
+  <https://www.morphllm.com/comparisons/devin-vs-cursor>,
+  <https://aitoolanalysis.com/cursor-ai-review/>
+* **AI Studio Build mode** — the reference product: checkpoints and code-version
+  compare, drawing on the preview to iterate, one-click deploy to Cloud Run,
+  export to Antigravity, generated imagery, Workspace data, MCP, structured
+  outputs: <https://developers.googleblog.com/google-ai-studio-native-code-generation-agentic-tools-upgrade/>,
+  <https://blog.google/innovation-and-ai/technology/ai/google-io-2026-all-our-announcements/>,
+  <https://www.datacamp.com/tutorial/google-ai-studio-tutorial>
 * **The agent under WAIS** — multimodal input (text and image, inline base64;
   audio, video and documents not supported yet) and `environment.sources`
   inline file mounts: <https://ai.google.dev/gemini-api/docs/antigravity-agent>
