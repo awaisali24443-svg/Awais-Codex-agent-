@@ -694,22 +694,39 @@ export async function listMessages(
   conversationId: string,
   limit = 200,
   branchId?: string | null,
-): Promise<Array<{ id: string; role: string; content: string; runId: string | null; runStatus: string | null; runErrorType: string | null; createdAt: string }>> {
+): Promise<Array<{
+  id: string;
+  role: string;
+  content: string;
+  runId: string | null;
+  runStatus: string | null;
+  runErrorType: string | null;
+  /** What the operator said about this answer, if he said anything. */
+  feedback: { rating: string; reason: string | null; note: string | null } | null;
+  createdAt: string;
+}>> {
   const capped = Math.min(Math.max(limit, 1), 500);
   // A branch view is computed, never copied: the branch's own messages plus
   // each ancestor's messages up to its fork point, in conversation order.
   const branchFilter = branchId
     ? `WITH RECURSIVE ${chainCte('$3')}
-       SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type, m.created_at
+       SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type,
+              f.rating AS feedback_rating, f.reason AS feedback_reason, f.note AS feedback_note,
+              m.created_at
          FROM messages m
          JOIN chain c ON m.branch_id = c.id
          LEFT JOIN runs r ON r.id = m.run_id
+         LEFT JOIN message_feedback f ON f.message_id = m.id
         WHERE m.conversation_id = $1
           AND ${CHAIN_VISIBLE}
         ORDER BY m.created_at ASC, m.id ASC
         LIMIT $2`
-    : `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type, m.created_at
-         FROM messages m LEFT JOIN runs r ON r.id = m.run_id
+    : `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type,
+              f.rating AS feedback_rating, f.reason AS feedback_reason, f.note AS feedback_note,
+              m.created_at
+         FROM messages m
+         LEFT JOIN runs r ON r.id = m.run_id
+         LEFT JOIN message_feedback f ON f.message_id = m.id
         WHERE m.conversation_id = $1
         ORDER BY m.created_at ASC, m.id ASC
         LIMIT $2`;
@@ -720,6 +737,9 @@ export async function listMessages(
     run_id: string | null;
     run_status: string | null;
     run_error_type: string | null;
+    feedback_rating: string | null;
+    feedback_reason: string | null;
+    feedback_note: string | null;
     created_at: Date | string;
   }>(branchFilter, branchId ? [conversationId, capped, branchId] : [conversationId, capped]);
   return rows.map((r) => ({
@@ -729,6 +749,11 @@ export async function listMessages(
     runId: r.run_id,
     runStatus: r.run_status,
     runErrorType: r.run_error_type,
+    // Null, not an empty object: "he has not rated this" and "he rated it and
+    // said nothing" are different states, and only the first should ask.
+    feedback: r.feedback_rating
+      ? { rating: r.feedback_rating, reason: r.feedback_reason, note: r.feedback_note }
+      : null,
     createdAt: toIso(r.created_at) as string,
   }));
 }

@@ -68,6 +68,7 @@ describe('migrations', () => {
       'linkedin_tokens',
       'memories',
       'memory_profile',
+      'message_feedback',
       'messages',
       'mission_steps',
       'morning_digest_log',

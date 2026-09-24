@@ -19,6 +19,7 @@ import { createScheduledTaskRoutes } from './routes/scheduled-tasks.js';
 import { createBriefingRoutes } from './routes/briefing.js';
 import { createMemoryRoutes } from './routes/memory.js';
 import { createArtifactRoutes, createPublicArtifactRoutes } from './routes/artifacts.js';
+import { createFeedbackRoutes } from './routes/feedback.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createGitHubRoutes } from './routes/github.js';
 import { createLinkedInRoutes } from './routes/linkedin.js';
@@ -309,6 +310,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api', createBriefingRoutes({ db }));
   app.use('/api', createMemoryRoutes({ db }));
   app.use('/api', createArtifactRoutes({ db, config, secrets: deps.secrets }));
+  app.use('/api', createFeedbackRoutes({ db }));
   // GitHub export, rebuilt for v2 on the secrets store. Mounted behind
   // requireSession like the rest of /api — v1 left these routes
   // unauthenticated, which let anyone push to the operator's GitHub.
