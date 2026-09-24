@@ -57,6 +57,7 @@ describe('migrations', () => {
 
   test('create every table the plan specifies', async () => {
     const expected = [
+      'artifact_blobs',
       'artifacts',
       'branches',
       'breakage_alert_log',

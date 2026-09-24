@@ -79,10 +79,16 @@ export async function migrate(db: Db, dir?: string): Promise<MigrationResult> {
     const sql = fs.readFileSync(migration.file, 'utf-8');
     await db.transaction(async (tx) => {
       await tx.exec(sql);
-      await tx.query('INSERT INTO schema_migrations (version, name) VALUES ($1, $2)', [
-        migration.version,
-        migration.name,
-      ]);
+      // ON CONFLICT because Render starts the new instance before stopping the
+      // old one: two boots can overlap for a few seconds, and the moment a
+      // migration is pending is exactly the moment both of them run it. Without
+      // this the second INSERT hits the primary key, the transaction aborts and
+      // the deploy fails to boot. The SQL above is idempotent; so is this.
+      await tx.query(
+        `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)
+         ON CONFLICT (version) DO NOTHING`,
+        [migration.version, migration.name],
+      );
     });
     applied.push(migration.version);
     console.log(`[migrate] applied ${String(migration.version).padStart(3, '0')}_${migration.name}`);

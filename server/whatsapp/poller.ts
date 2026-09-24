@@ -517,7 +517,7 @@ export class WhatsAppPoller {
 
   private async status(message: InboundMessage): Promise<void> {
     const active = await getActiveRun(this.deps.db);
-    const left = await remainingRuns({ db: this.deps.db, executor: this.deps.executor, config: this.deps.config }, 'whatsapp');
+    const left = await remainingRuns({ db: this.deps.db, executor: this.deps.executor, config: this.deps.config });
 
     if (!active) {
       await this.reply(message, `Nothing is running.\n\nTasks left today: ${left}/${this.deps.config.dailyRunBudget}`);
@@ -652,7 +652,12 @@ export class WhatsAppPoller {
     void relayRun({ db: this.deps.db, bus: this.deps.bus, send: this.deps.sender, to }, run)
       .then(async (result) => {
         if (result.outcome === 'detached') {
-          // Still running; the next boot's reconcile picks it up if it dies.
+          // Still running. The service's periodic reconcile delivers the answer
+          // once the run ends, so a task that outlives the relay's window is not
+          // lost to silence.
+          this.log(
+            `[wa] stopped watching ${run.id} (longer than the relay window); the periodic reconcile will deliver its answer`,
+          );
           return;
         }
         await markProcessed(this.deps.db, wamid, result.outcome === 'failed' ? result.outcome : null);

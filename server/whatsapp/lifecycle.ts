@@ -51,14 +51,24 @@ export interface WhatsAppServiceDeps {
   log?: (message: string, level?: 'info' | 'warn' | 'error') => void;
   /** Test seam: replaces the poller factory. */
   createPoller?: (deps: ConstructorParameters<typeof WhatsAppPoller>[0]) => WhatsAppPoller;
+  /** Test seam: shortens the rescue sweep so a test need not wait five minutes. */
+  reconcileIntervalMs?: number;
 }
 
 export type SyncOutcome = 'started' | 'stopped' | 'unchanged' | 'deferred';
+
+/**
+ * How often the service rescues work no live watcher owns: a relay that gave up
+ * on a long task, or a message recorded but never answered by the last process.
+ */
+export const RECONCILE_INTERVAL_MS = 5 * 60_000;
 
 export class WhatsAppService {
   private poller: WhatsAppPoller | null = null;
   private syncing: Promise<SyncOutcome> | null = null;
   private detail: string | null = null;
+  /** Delivers the answers of runs the relay gave up watching (see start()). */
+  private reconcileTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly deps: WhatsAppServiceDeps) {}
 
@@ -94,6 +104,11 @@ export class WhatsAppService {
 
   get running(): boolean {
     return this.poller !== null;
+  }
+
+  /** Whether the periodic rescue sweep is armed (see start()). */
+  get reconciling(): boolean {
+    return this.reconcileTimer !== null;
   }
 
   get isPolling(): boolean {
@@ -174,11 +189,26 @@ export class WhatsAppService {
     }
 
     poller.start();
+
+    // A relay stops watching any task slower than its window and relies on
+    // reconcile() to deliver the answer. That used to happen only at boot, which
+    // was fine while the free tier slept constantly — but the keep-awake ping
+    // means boots can be weeks apart, so a 45-minute research task would never
+    // be answered in the chat it was asked in. Five minutes is one indexed query
+    // over `wa_updates WHERE processed_at IS NULL`.
+    this.reconcileTimer = setInterval(() => {
+      void this.poller?.reconcile().catch((err: Error) =>
+        this.log(`[wa] periodic reconcile failed: ${err.message}`, 'error'),
+      );
+    }, this.deps.reconcileIntervalMs ?? RECONCILE_INTERVAL_MS);
+    this.reconcileTimer.unref?.();
+
     this.log(`[wa] poller started (${reason})`);
     return 'started';
   }
 
   private async stop(reason: string, detail: string | null): Promise<SyncOutcome> {
+    this.clearReconcileTimer();
     const poller = this.poller;
     this.poller = null;
     if (poller) await poller.stop();
@@ -188,9 +218,16 @@ export class WhatsAppService {
 
   /** Shutdown path: one place, so a half-stopped loop cannot outlive the process. */
   async shutdown(): Promise<void> {
+    this.clearReconcileTimer();
     if (!this.poller) return;
     const poller = this.poller;
     this.poller = null;
     await poller.stop();
+  }
+
+  private clearReconcileTimer(): void {
+    if (!this.reconcileTimer) return;
+    clearInterval(this.reconcileTimer);
+    this.reconcileTimer = null;
   }
 }

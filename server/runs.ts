@@ -289,6 +289,11 @@ export interface CreateRunInput {
   researchBudgetMinutes?: number | null;
   /** Optional per-mission token cap. The executor pauses the run when spent. */
   tokenBudget?: number | null;
+  /**
+   * Names the conversation when this run has to create one. Scheduled tasks use
+   * it so the list reads "⏰ Morning digest" instead of the prompt text.
+   */
+  conversationTitle?: string | null;
 }
 
 /**
@@ -303,7 +308,10 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
 
   let conversationId = input.conversationId ?? null;
   if (!conversationId) {
-    conversationId = await createConversation(db, prompt, kind);
+    // An explicit title (a scheduled task's name) beats the prompt text: it is
+    // what the operator will look for in the conversation list later.
+    const title = input.conversationTitle?.trim();
+    conversationId = await createConversation(db, title || prompt, kind);
   }
 
   // Branches are per-conversation. A missing branch id means "main"; a wrong

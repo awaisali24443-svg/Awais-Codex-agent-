@@ -192,15 +192,31 @@ export async function appendEvent(
  * Neon's free tier is 0.5 GB, so prune on a schedule (or at boot).
  * Run rows survive — only the replayable event tail is trimmed.
  */
-export async function pruneRunEvents(db: Db, keepDays = 14): Promise<number> {
-  const rows = await db.query<{ count: string }>(
-    `WITH deleted AS (
-       DELETE FROM run_events WHERE at < now() - ($1 || ' days')::interval RETURNING 1
-     )
-     SELECT count(*)::text AS count FROM deleted`,
-    [String(keepDays)],
-  );
-  return Number(rows[0]?.count ?? 0);
+export async function pruneRunEvents(db: Db, keepDays = 14, batch = 5000): Promise<number> {
+  // Batched on purpose. Retention used to run once per boot, on a small table;
+  // now it runs on a timer against a table that may have grown for weeks, and
+  // the pooled connection has a 30s statement_timeout. A bounded slice per
+  // statement keeps every delete short enough to finish, and the loop keeps
+  // going until the backlog is gone.
+  let total = 0;
+  for (;;) {
+    const rows = await db.query<{ count: string }>(
+      `WITH doomed AS (
+         SELECT run_id, seq FROM run_events
+          WHERE at < now() - ($1 || ' days')::interval
+          LIMIT $2
+       ), deleted AS (
+         DELETE FROM run_events e USING doomed d
+          WHERE e.run_id = d.run_id AND e.seq = d.seq
+          RETURNING 1
+       )
+       SELECT count(*)::text AS count FROM deleted`,
+      [String(keepDays), String(batch)],
+    );
+    const n = Number(rows[0]?.count ?? 0);
+    total += n;
+    if (n < batch) return total;
+  }
 }
 
 /** Orphan recovery on boot: a run left 'running' by a crash can never finish. */

@@ -105,6 +105,48 @@ export async function noteError(db: Db, wamid: string, error: string): Promise<v
 }
 
 /** We are done with this message: it will never be handled again. */
+/**
+ * How long a handled inbound message is kept.
+ *
+ * `wa_updates` holds the full payload of every message the platform delivered,
+ * and nothing used to delete any of it — on a 0.5 GB free database that is a
+ * slow leak with no ceiling. Thirty days is long enough that "what did I send
+ * last week" is answerable, and short enough that the table stays small.
+ */
+export const WA_UPDATE_RETENTION_DAYS = 30;
+
+/**
+ * Retention for the message log, batched like the run-event sweep.
+ *
+ * Only rows that were handled are eligible: an unprocessed row is pending work
+ * (boot recovery reads it, reconcile() delivers it), so deleting one would
+ * silently drop a message the operator sent.
+ */
+export async function pruneWaUpdates(
+  db: Db,
+  keepDays = WA_UPDATE_RETENTION_DAYS,
+  batch = 5000,
+): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const rows = await db.query<{ count: string }>(
+      `WITH doomed AS (
+         SELECT wamid FROM wa_updates
+          WHERE processed_at IS NOT NULL
+            AND received_at < now() - ($1 || ' days')::interval
+          LIMIT $2
+       ), deleted AS (
+         DELETE FROM wa_updates w USING doomed d WHERE w.wamid = d.wamid RETURNING 1
+       )
+       SELECT count(*)::text AS count FROM deleted`,
+      [String(keepDays), String(batch)],
+    );
+    const n = Number(rows[0]?.count ?? 0);
+    total += n;
+    if (n < batch) return total;
+  }
+}
+
 export async function markProcessed(db: Db, wamid: string, error: string | null = null): Promise<void> {
   await db.query(
     `UPDATE wa_updates SET processed_at = now(), error = $2 WHERE wamid = $1`,

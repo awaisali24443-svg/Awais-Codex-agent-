@@ -21,6 +21,7 @@ import { WhatsAppService } from './whatsapp/lifecycle.js';
 import { sendDonePing } from './whatsapp/doneping.js';
 import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
 import { fireDueScheduledTasks, nextDaily } from './scheduler.js';
+import { pruneWaUpdates } from './whatsapp/store.js';
 import { recoverOrphanedRuns } from './recovery.js';
 import {
   DIGEST_TIME,
@@ -78,14 +79,20 @@ async function boot(): Promise<void> {
   const migration = await migrate(db);
   console.log(`[boot] migrations: ${migration.applied.length} applied, ${migration.skipped.length} present`);
 
-  const pruned = await pruneRunEvents(db, config.eventRetentionDays);
-  if (pruned > 0) console.log(`[boot] pruned ${pruned} run event(s) older than ${config.eventRetentionDays}d`);
+  // Housekeeping, never correctness: a slow sweep must not be a failed deploy,
+  // and the hourly maintenance tick below covers anything this misses.
+  try {
+    const pruned = await pruneRunEvents(db, config.eventRetentionDays);
+    if (pruned > 0) console.log(`[boot] pruned ${pruned} run event(s) older than ${config.eventRetentionDays}d`);
 
-  // Artifact files live on the ephemeral disk, so this is hygiene rather than
-  // storage management — but a disk that fills up takes the service with it.
-  const prunedArtifacts = await pruneArtifacts(db, config.artifactRetentionDays);
-  if (prunedArtifacts > 0) {
-    console.log(`[boot] pruned ${prunedArtifacts} artifact(s) older than ${config.artifactRetentionDays}d`);
+    // Artifact files live on the ephemeral disk, so this is hygiene rather than
+    // storage management — but a disk that fills up takes the service with it.
+    const prunedArtifacts = await pruneArtifacts(db, config.artifactRetentionDays);
+    if (prunedArtifacts > 0) {
+      console.log(`[boot] pruned ${prunedArtifacts} artifact(s) older than ${config.artifactRetentionDays}d`);
+    }
+  } catch (err) {
+    console.warn(`[boot] retention sweep failed (the hourly tick will retry): ${(err as Error).message}`);
   }
 
   // Crash-resume happens after the executor exists, because the newest
@@ -287,6 +294,30 @@ async function boot(): Promise<void> {
   } else {
     console.log('[boot] breakage alerts: off — set BREAKAGE_ALERTS=true to get WhatsApp breakage alerts');
   }
+
+  // ---- maintenance ----------------------------------------------------------
+  // Retention used to be a boot-only chore, which was fine while the free tier
+  // slept and restarted constantly. The keep-awake ping means a single process
+  // can run for weeks, so the sweep moves onto a timer and the boot call becomes
+  // only a warm-up. Batched deletes keep each statement inside the pool's 30s
+  // timeout; one catch means a failure is a log line, never a crash.
+  const runMaintenance = async (): Promise<void> => {
+    try {
+      const events = await pruneRunEvents(db, config.eventRetentionDays);
+      const artifacts = await pruneArtifacts(db, config.artifactRetentionDays);
+      const messages = await pruneWaUpdates(db);
+      if (events || artifacts || messages) {
+        console.log(
+          `[maintenance] pruned events=${events} artifacts=${artifacts} wa_updates=${messages}`,
+        );
+      }
+    } catch (err) {
+      console.error('[maintenance] tick failed (retrying next hour):', (err as Error).message);
+    }
+  };
+  const maintenanceTimer = setInterval(() => void runMaintenance(), 60 * 60_000);
+  maintenanceTimer.unref?.();
+  console.log('[boot] maintenance: on (hourly retention sweep)');
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[boot] listening on http://0.0.0.0:${config.port}`);

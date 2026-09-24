@@ -5,6 +5,8 @@
  *   GET /api/artifacts/:id/download  the bytes, fetched from the sandbox on demand
  *   GET /api/artifacts/:id/preview   a website artifact, rendered live (the
  *                                    HTML entry page plus its relative assets)
+ *   POST /api/artifacts/:id/pin      keep the bytes in the database, forever
+ *   POST /api/artifacts/:id/unpin    let it age out again
  *   POST /api/artifacts/:id/share    mint a public download link for the file
  *   GET /a/:token                    the public download itself — no session.
  *                                    Texted to the phone, WhatsApp auto-links
@@ -27,6 +29,7 @@ import { Router, type Request, type Response } from 'express';
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { SecretsStore } from '../settings.js';
+import type { Artifact } from '../artifacts.js';
 import {
   artifactsRoot,
   getArtifact,
@@ -35,7 +38,10 @@ import {
   listArtifacts,
   materializeArtifact,
   mimeFor,
+  pinArtifact,
+  pinnedBytes,
   setArtifactShareToken,
+  unpinArtifact,
 } from '../artifacts.js';
 import { getRun } from '../runs.js';
 import { artifactShareUrl, canShareRun, newShareToken } from '../share.js';
@@ -59,6 +65,19 @@ export interface ArtifactRouteDeps {
 function safeFilename(name: string): string {
   const cleaned = name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
   return cleaned || 'artifact';
+}
+
+/**
+ * Send bytes this process already holds (a pinned copy).
+ *
+ * Same headers the disk path sets, so a client — including the Android
+ * download manager — cannot tell the two apart.
+ */
+function sendBytes(res: Response, artifact: Artifact, bytes: Buffer, mime: string | null): void {
+  res.setHeader('Content-Type', artifact.mime ?? mime ?? 'application/octet-stream');
+  res.setHeader('Content-Length', String(bytes.length));
+  res.setHeader('Content-Disposition', `attachment; filename="${safeFilename(artifact.name)}"`);
+  res.send(bytes);
 }
 
 export function createArtifactRoutes({ db, config, secrets, fetchImpl }: ArtifactRouteDeps): Router {
@@ -104,6 +123,8 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
           : null,
         /** False until someone has downloaded it once. */
         stored: artifact.storageKey !== null,
+        /** Kept in the database: survives a wipe of the disk *and* the sandbox. */
+        pinned: artifact.pinned,
         // The sandbox is the only source of the bytes, so this is what makes a
         // download possible at all.
         environmentId: run.environmentId,
@@ -115,6 +136,14 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
     const artifact = await getArtifact(db, req.params.id);
     if (!artifact) {
       res.status(404).json({ error: 'artifact_not_found' });
+      return;
+    }
+
+    // A pinned copy outranks every other source: it is the one the operator
+    // asked to keep, and the only one that survives a redeploy.
+    const pinned = await pinnedBytes(db, artifact.id);
+    if (pinned) {
+      sendBytes(res, artifact, pinned.bytes, pinned.mime);
       return;
     }
 
@@ -256,6 +285,62 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
    * mission replays: only a finished run's files get a link, and minting is
    * idempotent — the token survives, so an existing link never breaks.
    */
+  /**
+   * Keep a file. The bytes move into the database, and retention stops touching
+   * the row — this is the difference between "I downloaded it once" and "it is
+   * still there next month".
+   */
+  router.post('/artifacts/:id/pin', async (req: Request, res: Response) => {
+    const artifact = await getArtifact(db, req.params.id);
+    if (!artifact) {
+      res.status(404).json({ error: 'artifact_not_found' });
+      return;
+    }
+    const run = await getRun(db, artifact.runId);
+    const result = await pinArtifact(db, artifact.id, {
+      db,
+      apiKey: resolveApiKey(),
+      environmentId: run?.environmentId ?? '',
+      fetchImpl,
+    });
+
+    if (!result.ok) {
+      res.status(result.reason === 'not_found' ? 404 : 409).json({
+        error: result.reason,
+        message: result.message,
+        ...(result.size === undefined ? {} : { size: result.size }),
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      artifact: {
+        id: result.artifact.id,
+        name: result.artifact.name,
+        size: result.size,
+        pinned: result.artifact.pinned,
+        downloadUrl: `/api/artifacts/${result.artifact.id}/download`,
+      },
+    });
+  });
+
+  /** Stop keeping it: the pinned copy goes, and normal retention resumes. */
+  router.post('/artifacts/:id/unpin', async (req: Request, res: Response) => {
+    const artifact = await getArtifact(db, req.params.id);
+    if (!artifact) {
+      res.status(404).json({ error: 'artifact_not_found' });
+      return;
+    }
+    const updated = await unpinArtifact(db, artifact.id);
+    res.json({
+      ok: true,
+      artifact: updated
+        ? { id: updated.id, name: updated.name, pinned: updated.pinned }
+        : { id: artifact.id, name: artifact.name, pinned: false },
+    });
+  });
+
   router.post('/artifacts/:id/share', async (req: Request, res: Response) => {
     const artifact = await getArtifact(db, req.params.id);
     if (!artifact) {
@@ -272,7 +357,22 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
     }
     const token = artifact.shareToken ?? newShareToken();
     if (!artifact.shareToken) await setArtifactShareToken(db, artifact.id, token);
-    res.json({ url: artifactShareUrl(config, token), token });
+
+    // A public link is a promise to a phone that may open it next week, and the
+    // sandbox behind it expires on its own schedule. So sharing keeps the file:
+    // best effort, because a link that works today beats a 500 about storage.
+    let durable = artifact.pinned;
+    if (!durable) {
+      const result = await pinArtifact(db, artifact.id, {
+        db,
+        apiKey: resolveApiKey(),
+        environmentId: run.environmentId ?? '',
+        fetchImpl,
+      });
+      durable = result.ok;
+    }
+
+    res.json({ url: artifactShareUrl(config, token), token, durable });
   });
 
   return router;
@@ -310,6 +410,14 @@ export function createPublicArtifactRoutes({
     const run = await getRun(db, artifact.runId);
     if (!run || !canShareRun(run)) {
       res.status(404).type('text/plain').send('Not found');
+      return;
+    }
+
+    // The public link is a promise made to a phone; a pinned copy is what keeps
+    // it after the sandbox has expired and the disk has been wiped.
+    const pinned = await pinnedBytes(db, artifact.id);
+    if (pinned) {
+      sendBytes(res, artifact, pinned.bytes, pinned.mime);
       return;
     }
 

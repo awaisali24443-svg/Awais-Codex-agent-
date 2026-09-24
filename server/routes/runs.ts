@@ -51,6 +51,7 @@ import {
   listConversations,
   listMessages,
   listRuns,
+  latestEventSeq,
   readEvents,
   updateRunPlan,
   setShareToken,
@@ -547,7 +548,13 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       return;
     }
 
-    const from = resumeFrom(req);
+    let from = resumeFrom(req);
+    // finishRun compacts intermediate snapshots and renumbers `seq` from 1, so a
+    // cursor taken before the finish can point past the end of the log — a
+    // backgrounded phone reconnecting is the common case. Repairing it to 0
+    // replays the whole run (always correct, just heavier) instead of replaying
+    // nothing, which is what an empty timeline looks like to the operator.
+    if (from > 0 && from > (await latestEventSeq(db, run.id))) from = 0;
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',

@@ -86,7 +86,13 @@ export async function consumeRunBudget(
   return peekDayTotal(db);
 }
 
-/** Read one channel's usage without spending anything (display only). */
+/**
+ * Read one channel's usage without spending anything.
+ *
+ * Display only, and no longer used for quota reporting: `remainingRuns` reports
+ * the day total, because that is the counter the spending gate enforces. Kept
+ * because per-channel usage is still the interesting breakdown to show.
+ */
 export async function peekBudget(db: Db, bucket: BudgetBucket): Promise<number> {
   const rows = await db.query<{ count: number }>(
     'SELECT count FROM budgets WHERE day = CURRENT_DATE AND bucket = $1',

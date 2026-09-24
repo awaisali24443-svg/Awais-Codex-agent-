@@ -308,6 +308,8 @@ export function createApp(deps: AppDeps): Express {
       pollerHealth,
       onCredentialChanged: deps.onCredentialChanged,
       agent: config.antigravityAgent,
+      db,
+      dailyRunBudget: config.dailyRunBudget,
     }),
   );
 

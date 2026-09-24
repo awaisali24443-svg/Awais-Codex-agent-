@@ -18,6 +18,9 @@
  */
 import { Router, type Request, type Response } from 'express';
 
+import { consumeRunBudget, refundRunBudget } from '../budget.js';
+import type { Db } from '../db.js';
+
 import type { PollerHealth } from '../whatsapp/poller.js';
 import {
   SECRET_NAMES,
@@ -41,6 +44,13 @@ export interface SettingsRouteDeps {
   onCredentialChanged?: (name: string) => Promise<void> | void;
   /** The configured Antigravity agent id, so the test hits the real target. */
   agent?: string;
+  /**
+   * The agent leg of a key test is a real interaction, so it is claimed from the
+   * same daily gate every run uses — otherwise `/api/budget` would be a lie and
+   * the button could quietly spend the whole day.
+   */
+  db?: Db;
+  dailyRunBudget?: number;
 }
 
 /** Wrap an async handler so a rejection becomes a 500 instead of a hung socket. */
@@ -63,6 +73,8 @@ export function createSettingsRoutes({
   pollerHealth,
   onCredentialChanged,
   agent,
+  db,
+  dailyRunBudget,
 }: SettingsRouteDeps): Router {
   const router = Router();
 
@@ -274,16 +286,48 @@ export function createSettingsRoutes({
     '/settings/verify/gemini-key',
     handle(async (_req, res) => {
       const key = secrets.get('gemini_api_key');
+
+      // The agent leg is a real mission through the real engine, so the day is
+      // charged for it — and claimed *first*, so the button cannot quietly spend
+      // past the cap. Everything that fails before the agent leg hands the run
+      // back, which is why a bad key costs nothing and a spent day is refused
+      // before a single token is asked for.
+      let claimed = false;
+      if (db) {
+        try {
+          await consumeRunBudget(db, 'api', dailyRunBudget ?? 100);
+          claimed = true;
+        } catch (err) {
+          res.status(429).json({
+            ok: false,
+            error: 'budget_exceeded',
+            message: (err as Error).message,
+            key: null,
+            agent: null,
+          });
+          return;
+        }
+      }
+      const refund = async (): Promise<void> => {
+        if (!claimed || !db) return;
+        claimed = false;
+        await refundRunBudget(db, 'api').catch(() => {});
+      };
+
       const keyCheck = await checkGeminiKey({ apiKey: key });
       if (keyCheck.verdict !== 'ok') {
+        await refund();
         res.json({ ok: false, key: keyCheck, agent: null });
         return;
       }
-      const agentCheck = await checkAgent({
-        apiKey: key,
-        agent,
-        timeoutMs: 90_000,
-      });
+
+      let agentCheck;
+      try {
+        agentCheck = await checkAgent({ apiKey: key, agent, timeoutMs: 90_000 });
+      } catch (err) {
+        await refund();
+        throw err;
+      }
       res.json({ ok: agentCheck.verdict === 'ok', key: keyCheck, agent: agentCheck });
     }),
   );

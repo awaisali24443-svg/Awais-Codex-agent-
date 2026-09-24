@@ -127,6 +127,8 @@ async function harness(options: {
   platform: string;
   config?: Partial<AppConfig>;
   token?: string;
+  /** Shortened so the rescue sweep can be observed inside a test. */
+  reconcileIntervalMs?: number;
 }): Promise<Harness> {
   const config = makeConfig({
     whatsappApiBase: options.platform,
@@ -150,6 +152,9 @@ async function harness(options: {
     // platform's rate limit; here it would just make every assertion wait.
     createPoller: (deps) =>
       new WhatsAppPoller({ ...deps, pollTimeoutSeconds: 1, minPollIntervalMs: 5, minBackoffMs: 5 }),
+    ...(options.reconcileIntervalMs === undefined
+      ? {}
+      : { reconcileIntervalMs: options.reconcileIntervalMs }),
   });
 
   const app = createApp({
@@ -474,6 +479,45 @@ describe('storing the agent API key connects WhatsApp', () => {
       assert.equal(body.whatsapp.state, 'running', 'WHATSAPP_TOKEN is still set — polling continues');
       assert.equal(h.service.running, true);
     } finally {
+      await h.close();
+      await platform.close();
+    }
+  });
+
+  test('the rescue sweep runs on a timer, not only at boot', async () => {
+    // Problem 6: a relay stops watching any task slower than its window and
+    // relies on reconcile() to deliver the answer. Reconcile used to run only at
+    // boot — survivable while the free tier slept constantly, but the keep-awake
+    // ping means one process can run for weeks with no boot at all, so a
+    // 45-minute task was simply never answered.
+    const platform = await fakePlatform();
+    const h = await harness({
+      platform: platform.base,
+      token: TOKEN,
+      reconcileIntervalMs: 20,
+    });
+
+    let sweeps = 0;
+    const original = WhatsAppPoller.prototype.reconcile;
+    WhatsAppPoller.prototype.reconcile = async function (this: WhatsAppPoller) {
+      sweeps += 1;
+      return original.call(this);
+    };
+
+    try {
+      assert.equal(await h.service.sync('start'), 'started');
+      assert.equal(h.service.reconciling, true, 'the sweep is armed when the poller starts');
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      assert.ok(sweeps >= 2, `the sweep repeats (saw ${sweeps})`);
+
+      await h.service.shutdown();
+      assert.equal(h.service.reconciling, false, 'shutdown disarms it');
+      const settled = sweeps;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      assert.equal(sweeps, settled, 'nothing keeps sweeping after shutdown');
+    } finally {
+      WhatsAppPoller.prototype.reconcile = original;
       await h.close();
       await platform.close();
     }

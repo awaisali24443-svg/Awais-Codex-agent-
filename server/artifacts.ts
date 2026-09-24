@@ -117,6 +117,8 @@ export interface Artifact {
   size: number | null;
   sha256: string | null;
   storageKey: string | null;
+  /** Kept on purpose: bytes live in artifact_blobs, and retention spares it. */
+  pinned: boolean;
   /** Public download token; null means no public link. */
   shareToken: string | null;
   createdAt: string;
@@ -131,12 +133,13 @@ interface ArtifactRow {
   size: string | number | null;
   sha256: string | null;
   storage_key: string | null;
+  pinned: boolean;
   share_token: string | null;
   created_at: Date | string;
 }
 
 const ARTIFACT_COLUMNS =
-  'id, run_id, name, path, mime, size, sha256, storage_key, share_token, created_at';
+  'id, run_id, name, path, mime, size, sha256, storage_key, pinned, share_token, created_at';
 
 function mapArtifact(row: ArtifactRow): Artifact {
   return {
@@ -148,6 +151,7 @@ function mapArtifact(row: ArtifactRow): Artifact {
     size: row.size === null || row.size === undefined ? null : Number(row.size),
     sha256: row.sha256,
     storageKey: row.storage_key,
+    pinned: row.pinned === true,
     shareToken: row.share_token ?? null,
     createdAt:
       row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
@@ -299,10 +303,131 @@ async function markStored(
  * real storage. Rows older than the window go, and their cached bytes with
  * them — `ARTIFACT_RETENTION_DAYS` finally means something.
  */
+/**
+ * The largest file that can be pinned, in bytes.
+ *
+ * Pinned bytes live in Postgres (see 020_artifact_pin.sql) because that is the
+ * only durable storage this deployment has, and the free tier's database is
+ * 0.5 GB for *everything*. Eight megabytes covers documents, data tables, zips
+ * and build outputs; anything larger is a media library and needs object
+ * storage, not a database.
+ */
+export const PINNED_MAX_BYTES = 8 * 1024 * 1024;
+
+export type PinResult =
+  | { ok: true; artifact: Artifact; size: number }
+  | {
+      ok: false;
+      reason: 'not_found' | 'unavailable' | 'too_large';
+      message: string;
+      size?: number;
+    };
+
+/**
+ * Keep a file: copy its bytes into the database and exempt the row from
+ * retention.
+ *
+ * The bytes come from wherever they can still be found — the local cache, or
+ * the sandbox if it is alive — which is why pinning has to happen while the
+ * artifact is still reachable. Afterwards the download route reads the pinned
+ * copy first, so an expired sandbox and a redeploy are both survivable.
+ */
+export async function pinArtifact(
+  db: Db,
+  artifactId: string,
+  deps: MaterializeDeps,
+): Promise<PinResult> {
+  const artifact = await getArtifact(db, artifactId);
+  if (!artifact) {
+    return { ok: false, reason: 'not_found', message: 'That artifact does not exist.' };
+  }
+
+  const materialized = await materializeArtifact(deps, artifact);
+  if (!materialized) {
+    return {
+      ok: false,
+      reason: 'unavailable',
+      message:
+        `"${artifact.name}" could not be read, so there is nothing to keep yet. ` +
+        'A file that was never built cannot be pinned, and an expired sandbox cannot be re-read.',
+    };
+  }
+
+  if (materialized.size > PINNED_MAX_BYTES) {
+    return {
+      ok: false,
+      reason: 'too_large',
+      size: materialized.size,
+      message:
+        `"${artifact.name}" is ${materialized.size} bytes; the pin limit is ${PINNED_MAX_BYTES}. ` +
+        'Pinned files live in the database, which is shared with everything else.',
+    };
+  }
+
+  const bytes = fs.readFileSync(materialized.absolutePath);
+  const digest = sha256(materialized.absolutePath);
+
+  await db.query(
+    `INSERT INTO artifact_blobs (artifact_id, bytes, mime, size, sha256)
+          VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (artifact_id) DO UPDATE
+            SET bytes = EXCLUDED.bytes,
+                mime = EXCLUDED.mime,
+                size = EXCLUDED.size,
+                sha256 = EXCLUDED.sha256,
+                created_at = now()`,
+    [artifact.id, bytes, artifact.mime ?? null, bytes.length, digest],
+  );
+
+  const rows = await db.query<ArtifactRow>(
+    `UPDATE artifacts
+        SET pinned = true, pinned_at = now(), size = $2, sha256 = $3
+      WHERE id = $1
+      RETURNING ${ARTIFACT_COLUMNS}`,
+    [artifact.id, bytes.length, digest],
+  );
+
+  return { ok: true, artifact: mapArtifact(rows[0]), size: bytes.length };
+}
+
+/** Drop the pinned copy and the exemption. The row then ages out like any other. */
+export async function unpinArtifact(db: Db, artifactId: string): Promise<Artifact | null> {
+  await db.query('DELETE FROM artifact_blobs WHERE artifact_id = $1', [artifactId]);
+  const rows = await db.query<ArtifactRow>(
+    `UPDATE artifacts SET pinned = false, pinned_at = NULL WHERE id = $1 RETURNING ${ARTIFACT_COLUMNS}`,
+    [artifactId],
+  );
+  return rows[0] ? mapArtifact(rows[0]) : null;
+}
+
+/**
+ * The pinned bytes, if this artifact has any.
+ *
+ * `bytea` arrives as a Buffer from node-postgres and as a Uint8Array from
+ * PGlite, so the value is normalised here rather than at every call site.
+ */
+export async function pinnedBytes(
+  db: Db,
+  artifactId: string,
+): Promise<{ bytes: Buffer; size: number; mime: string | null } | null> {
+  const rows = await db.query<{
+    bytes: Buffer | Uint8Array;
+    size: string | number;
+    mime: string | null;
+  }>('SELECT bytes, size, mime FROM artifact_blobs WHERE artifact_id = $1', [artifactId]);
+  const row = rows[0];
+  if (!row) return null;
+  const bytes = Buffer.from(row.bytes);
+  return { bytes, size: bytes.length || Number(row.size ?? 0), mime: row.mime };
+}
+
 export async function pruneArtifacts(db: Db, keepDays = 7): Promise<number> {
+  // `pinned = false` is the promise of the Keep button: a file the operator
+  // asked for by name is not swept because time passed.
   const rows = await db.query<{ id: string; storage_key: string | null }>(
     `DELETE FROM artifacts
       WHERE created_at < now() - ($1 || ' days')::interval
+        AND pinned = false
       RETURNING id, storage_key`,
     [String(Math.max(0, keepDays))],
   );

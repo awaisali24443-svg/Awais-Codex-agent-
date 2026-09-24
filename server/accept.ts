@@ -22,7 +22,7 @@ import type { AppConfig } from './config.js';
 import type { Db } from './db.js';
 import type { RunExecutor } from './executor.js';
 import type { SecretsStore } from './settings.js';
-import { BudgetExceededError, consumeRunBudget, peekBudget, refundRunBudget, type BudgetBucket } from './budget.js';
+import { BudgetExceededError, consumeRunBudget, peekDayTotal, refundRunBudget, type BudgetBucket } from './budget.js';
 import { looksComplex } from './planning.js';
 import { maybeAskPlanApproval } from './whatsapp/approvals.js';
 import { RunConflictError, createRun, emitEvent, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
@@ -246,8 +246,15 @@ export async function estimateRunCost(
   return { estimatedTokens: estimated, basis, missionsSampled: n };
 }
 
-/** Today's remaining runs for a channel, without spending anything. */export async function remainingRuns(deps: AcceptDeps, kind: RunKind): Promise<number> {
-  const bucket = BUCKET_FOR_KIND[kind];
-  const used = await peekBudget(deps.db, bucket);
+/**
+ * Today's remaining runs, without spending anything.
+ *
+ * The day TOTAL, not one channel's count: `consumeRunBudget` refuses a run when
+ * the sum of today's rows reaches the cap, so a per-channel number would tell
+ * the operator "79 left" while the next message is refused. What the phone
+ * reports and what the gate enforces must be the same number.
+ */
+export async function remainingRuns(deps: AcceptDeps): Promise<number> {
+  const used = await peekDayTotal(deps.db);
   return Math.max(0, deps.config.dailyRunBudget - used);
 }
