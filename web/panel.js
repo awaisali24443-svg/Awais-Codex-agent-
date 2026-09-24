@@ -62,3 +62,24 @@ export function selectPanelSection(state, sectionId) {
   if (!SECTION_IDS.has(sectionId)) return state;
   return { ...(state || {}), section: sectionId };
 }
+
+/**
+ * Where the outputs panel belongs at a given window width.
+ *
+ * Above the threshold it is a real split — the panel takes its own column and
+ * the thread narrows beside it, with no scrim and nothing hidden underneath.
+ * That is what Claude's panel does, and it is the one layout complaint that
+ * several projects filed independently: an overlay that covers the conversation
+ * you are reading from. Below the threshold there is no room to split, so it
+ * stays the slide-over (a bottom sheet on a phone).
+ *
+ * @param {number} width the viewport width in CSS pixels
+ * @returns {'docked' | 'overlay'}
+ */
+export function panelPlacement(width) {
+  const px = Number(width);
+  return Number.isFinite(px) && px >= PANEL_DOCK_MIN_WIDTH ? 'docked' : 'overlay';
+}
+
+/** The width at which a split stops crowding the conversation. */
+export const PANEL_DOCK_MIN_WIDTH = 1100;

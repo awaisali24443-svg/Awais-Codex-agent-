@@ -1,12 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  PANEL_DOCK_MIN_WIDTH,
   PANEL_SECTIONS,
   visibleSections,
   defaultSection,
   createPanelState,
   openPanelState,
   closePanelState,
+  panelPlacement,
   selectPanelSection,
 } from '../web/panel.js';
 
@@ -102,5 +104,20 @@ describe('panel state', () => {
     for (const { id } of PANEL_SECTIONS) {
       assert.equal(selectPanelSection(opened, id).section, id);
     }
+  });
+});
+
+describe('where the panel goes', () => {
+  it('a wide window gets a column, a narrow one gets a drawer', () => {
+    assert.equal(panelPlacement(1440), 'docked');
+    assert.equal(panelPlacement(PANEL_DOCK_MIN_WIDTH), 'docked', 'the threshold itself counts as room');
+    assert.equal(panelPlacement(PANEL_DOCK_MIN_WIDTH - 1), 'overlay');
+    assert.equal(panelPlacement(390), 'overlay', 'a phone has no room for two columns');
+  });
+
+  it('a nonsense width is treated as no room rather than a reason to break', () => {
+    // @ts-expect-error the width is a number at the call site; a missing one must not throw at runtime
+    assert.equal(panelPlacement(undefined), 'overlay');
+    assert.equal(panelPlacement(Number.NaN), 'overlay');
   });
 });

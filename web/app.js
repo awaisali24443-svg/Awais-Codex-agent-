@@ -9,12 +9,14 @@ import {
   stripMilestones,
 } from './timeline.js';
 import {
+  PANEL_DOCK_MIN_WIDTH,
   PANEL_SECTIONS,
   visibleSections,
   defaultSection,
   createPanelState,
   openPanelState,
   closePanelState,
+  panelPlacement,
   selectPanelSection,
 } from './panel.js';
 
@@ -63,6 +65,7 @@ const el = {
   scrim: $('scrim'),
   convos: $('convos'),
   drawerSearch: $('drawer-search'),
+  screenApp: $('screen-app'),
   jump: $('jump-latest'),
   jumpLabel: $('jump-label'),
   budget: $('budget'),
@@ -2021,8 +2024,13 @@ async function openOutputs(runId) {
 
   el.panel.classList.add('open');
   el.panel.setAttribute('aria-hidden', 'false');
-  el.panelBackdrop.hidden = false;
-  requestAnimationFrame(() => el.panelBackdrop.classList.add('show'));
+  // A split does not need a scrim: nothing is hidden underneath, so dimming the
+  // thread would be dimming something the operator is meant to read beside it.
+  if (panelMode() === 'docked') applyPanelPlacement();
+  else {
+    el.panelBackdrop.hidden = false;
+    requestAnimationFrame(() => el.panelBackdrop.classList.add('show'));
+  }
   document.addEventListener('keydown', panelEscape);
   el.panelTabs.hidden = true;
   el.panelTabs.innerHTML = '';
@@ -2062,7 +2070,34 @@ function closeOutputs() {
   el.panelBackdrop.classList.remove('show');
   setTimeout(() => { el.panelBackdrop.hidden = true; }, 240);
   document.removeEventListener('keydown', panelEscape);
+  // Give the column back to the thread.
+  el.screenApp?.classList.remove('docked');
 }
+
+/** 'docked' when the window is wide enough for a real split, else 'overlay'. */
+function panelMode() {
+  return panelPlacement(window.innerWidth ?? PANEL_DOCK_MIN_WIDTH);
+}
+
+/**
+ * Put the panel where it belongs right now: its own column above the
+ * threshold, a slide-over below it. Called when the panel opens and on every
+ * resize, so dragging a window narrower turns the split back into an overlay
+ * instead of leaving a squeezed column.
+ */
+function applyPanelPlacement() {
+  const docked = panel.open && panelMode() === 'docked';
+  el.screenApp?.classList.toggle('docked', docked);
+  if (docked) {
+    el.panelBackdrop.classList.remove('show');
+    el.panelBackdrop.hidden = true;
+  } else if (panel.open) {
+    el.panelBackdrop.hidden = false;
+    requestAnimationFrame(() => el.panelBackdrop.classList.add('show'));
+  }
+}
+
+window.addEventListener('resize', applyPanelPlacement);
 
 function panelEscape(event) {
   if (event.key === 'Escape') closeOutputs();

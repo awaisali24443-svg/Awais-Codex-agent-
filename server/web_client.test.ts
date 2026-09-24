@@ -484,6 +484,36 @@ describe('a kept file can actually be kept', () => {
   });
 });
 
+describe('the panel is a column when there is room for one', () => {
+  test('above the threshold the thread narrows instead of being covered', () => {
+    const client = app();
+    assert.ok(client.includes('PANEL_DOCK_MIN_WIDTH,'), 'the threshold comes from the layout module');
+    assert.ok(client.includes('panelPlacement(window.innerWidth ?? PANEL_DOCK_MIN_WIDTH)'), 'and the width decides');
+    assert.ok(client.includes("el.screenApp?.classList.toggle('docked', docked)"), 'the app gets a docked mode');
+    assert.ok(client.includes('window.addEventListener(\'resize\', applyPanelPlacement)'), 'and follows a resize');
+    assert.ok(css().includes('.app.docked { padding-right: var(--panel-w); }'), 'the column is reserved, not overlaid');
+    assert.ok(css().includes('.app.docked .panel-backdrop { display: none !important; }'), 'with no scrim');
+  });
+
+  test('a split keeps no scrim to click through, and gives the column back', () => {
+    const client = app();
+    assert.ok(client.includes("if (panelMode() === 'docked') applyPanelPlacement();"), 'opening decides the mode');
+    assert.ok(client.includes("el.screenApp?.classList.remove('docked')"), 'closing hands the width back');
+    assert.ok(css().includes('@media (min-width: 1100px)'), 'the split is declared for wide windows only');
+  });
+
+  test('the jump pill sits above the composer at every width', () => {
+    // It is positioned against the composer wrapper; outside it, `bottom: 100%`
+    // resolves against the screen and puts it off the top of the viewport.
+    const page = html();
+    const wrap = page.indexOf('class="composer-wrap"');
+    const pill = page.indexOf('id="jump-latest"');
+    const form = page.indexOf('id="composer"');
+    assert.ok(wrap > -1 && pill > wrap && pill < form, 'the pill lives inside the composer wrapper');
+    assert.ok(css().includes('bottom: calc(100% + 8px);'), 'and clears the composer');
+  });
+});
+
 describe('reading while it works', () => {
   test('the stream stops following the bottom when the operator scrolls up', () => {
     // Auto-scrolling through a paragraph somebody is reading is the single most

@@ -1297,7 +1297,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 .jump {
   position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: calc(100% - 6px); z-index: 16;
+  bottom: calc(100% + 8px); z-index: 16;
   display: inline-flex; align-items: center; gap: 7px;
   padding: 7px 14px; border-radius: var(--radius-pill);
   border: 1px solid var(--line); background: var(--surface); color: var(--ink);
@@ -1314,3 +1314,26 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .jump.done .jump-spin { border: 0; background: var(--ok); animation: none; }
 .composer-wrap { position: sticky; }
+
+/* ------------------------------------------------- the panel as a column ---
+   Above 1100px the outputs panel stops being a drawer over the conversation and
+   becomes a column beside it: the reading area narrows, nothing is covered, and
+   there is no scrim to click through. Below that width there is no room for two
+   columns, so it stays the slide-over it has always been — which is also what a
+   phone gets. The narrow case is the default; this only ever adds. */
+
+@media (min-width: 1100px) {
+  /* The panel and the space reserved for it are the same number, so the split
+     cannot drift out of step. */
+  :root { --panel-w: min(430px, 42vw); }
+  .app { transition: padding-right var(--dur-3, .26s) var(--ease-out); }
+  .app.docked { padding-right: var(--panel-w); }
+  .app.docked .panel-backdrop { display: none !important; }
+  .app.docked .panel {
+    width: var(--panel-w);
+    border-left: 1px solid var(--line);
+    box-shadow: none;
+  }
+  /* Nothing is behind the panel when it is docked, so it never dims the page. */
+  .app.docked .stream { padding-right: 0; }
+}
