@@ -493,3 +493,26 @@ Deviations from §B3/§E3, and why:
   §C3's promise — three chips and "Let WAIS choose" before the first file, and a
   gate that auto-approval cannot answer — is the next piece, and it now has the
   payload it needs (`design.direction` already carries the three alternates).
+
+## G. The next round: what shipped after §F
+
+| Commit | What it did |
+| --- | --- |
+| `52c654c` | The direction ask, on the plan card above Approve: the proposal in full, the three alternates, "Let WAIS choose", and one nullable column (`runs.direction`) that the executor reads as `directionById(run.direction) ?? pickDirection(brief)`. The end-to-end test caught the bug this was written for — the announcement re-derived the pick from the brief, so a task pointed at Kinetic announced Nocturne. |
+| `9bb63f2` | The same ask over WhatsApp: the proposal, the numbered alternates, a line saying what a number means, and a parser that is read *before* the verdict — because `parseApprovalReply` maps anything that is not yes/no to CHANGE, so a bare "2" would have become "Operator change: 2" and the direction would never have been chosen. |
+| `0d93412` | A 1024 icon, rendered from the same `web/icon.svg` as the other four. The install prompt and the stores ask for it, and a manifest that stops at 512 is reported as missing one. |
+| `6f5fb5f` | The asset kit (`server/design/assets.ts`): nine complete, network-free snippets — mesh gradient, grain, hairline grid, aurora, duotone, drawn abstract frame, organic blob, media scrim, halftone — filtered by direction and injected after the recipe. This is §B4, and it is the piece that stops a page becoming text on a coloured rectangle. |
+
+Still open, in the order I would do them:
+
+1. **The five-row feed as one stream.** Thoughts and decisions are rows in the
+   trace; tools, results and milestones are rows in the steps list right below
+   it. Both are live on the same card, and §E2 wanted them in one feed. It is
+   polish, and it is the piece most likely to break the step machinery
+   (`addStep`/`setStepStatus` and the UI audit), so it goes last.
+2. **The screenshot pass (§B5, phase 3).** The gate is static; it cannot see a
+   layout break at 320px. That needs the engine's own sandbox to render and
+   measure, which is a different kind of work from everything here.
+3. **Direction-aware proof.** §B4 asks for five briefs built twice against a
+   12-item rubric. The rubric's mechanical half is now `checkBuild`; the
+   half that needs eyes still needs eyes.
