@@ -73,6 +73,8 @@ export interface Run {
   researchBudgetMinutes: number | null;
   /** When resuming an interrupted mission, the first step not yet done. */
   resumeFromStep: number | null;
+  /** The direction the operator chose for a build, or null for the automatic pick. */
+  direction: string | null;
   /** The operator-visible plan, set by the planning pass; null until then. */
   plan: PlanStep[] | null;
   /**
@@ -130,6 +132,7 @@ interface RunRow {
   research_budget_minutes: number | null;
   token_budget: number | null;
   resume_from_step: number | null;
+  direction: string | null;
   plan_json: unknown;
   verification_json: unknown;
   share_token: string | null;
@@ -174,6 +177,7 @@ function mapRun(row: RunRow): Run {
     deepResearch: row.deep_research ?? false,
     researchBudgetMinutes: row.research_budget_minutes ?? null,
     resumeFromStep: row.resume_from_step ?? null,
+    direction: row.direction ?? null,
     plan: parsePlan(row.plan_json),
     verification: parseVerification(row.verification_json),
     shareToken: row.share_token ?? null,
@@ -186,8 +190,8 @@ const RUN_COLUMNS = `id, conversation_id, kind, prompt, status, engine,
                      interaction_id, environment_id, previous_interaction_id,
                      error_type, error_message, notify_whatsapp,
                      deep_research, research_budget_minutes,
-                     token_budget, resume_from_step, plan_json, verification_json,
-                     share_token,
+                     token_budget, resume_from_step, direction, plan_json,
+                     verification_json, share_token,
                      started_at, finished_at`;
 
 /** A unique violation on `runs_single_active_idx`, as opposed to the primary key. */
@@ -406,6 +410,23 @@ export async function setRunStatus(
 /** Persist the planning pass's step list on the run. */
 export async function saveRunPlan(db: Db, runId: string, steps: PlanStep[]): Promise<void> {
   await db.query('UPDATE runs SET plan_json = $2 WHERE id = $1', [runId, JSON.stringify(steps)]);
+}
+
+/**
+ * Record the direction the operator chose for a waiting build.
+ *
+ * Only while the run is waiting for approval: the direction is chosen before
+ * any file exists, which is the whole point of choosing it. Returns false when
+ * the run is already building or finished, so a late request cannot change what
+ * was built. The value itself is validated against the registry by the route —
+ * this writes what it is given.
+ */
+export async function saveRunDirection(db: Db, runId: string, direction: string): Promise<boolean> {
+  const rows = await db.query<{ id: string }>(
+    `UPDATE runs SET direction = $2 WHERE id = $1 AND status = 'awaiting_plan' RETURNING id`,
+    [runId, direction],
+  );
+  return rows.length > 0;
 }
 
 /**

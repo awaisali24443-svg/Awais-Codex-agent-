@@ -20,6 +20,7 @@ import {
   createRun,
   getRun,
   saveRunPlan,
+  saveRunDirection,
   setRunStatus,
   updateRunPlan,
 } from './runs.js';
@@ -355,6 +356,120 @@ describe('plan routes', () => {
     assert.ok(types.includes('plan.milestone'), 'the steps streamed as they were written');
     assert.ok(types.includes('run.plan_ready'), 'and the plan arrived to approve');
     assert.ok(types.indexOf('run.plan_started') < types.indexOf('run.plan_ready'), 'in that order');
+  });
+
+  test('the plan carries the direction it proposes, with its alternates', async () => {
+    // The ask rides on the plan: the run is stopped for approval anyway, so the
+    // direction costs no extra interruption — and the plan the operator
+    // approves says what the page will look like instead of leaving it to be
+    // discovered afterwards.
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
+    const rows = await db.query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM run_events WHERE run_id = $1 AND type = 'run.plan_ready'`,
+      [id],
+    );
+    const payload = rows[0]?.payload as { direction?: { id: string; name: string; why: string; chips: unknown[] } };
+    assert.ok(payload?.direction, 'the plan proposed a direction');
+    assert.equal(typeof payload.direction?.id, 'string');
+    assert.equal(payload.direction?.chips.length, 3, 'three alternates, never the one already chosen');
+    assert.ok(!payload.direction?.why.includes('mission'), 'and the reason is said in plain words');
+  });
+
+  test('POST /runs/:id/direction records what the operator chose', async () => {
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
+    const res = await post(`/api/runs/${id}/direction`, { id: 'kinetic' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.direction, 'kinetic');
+    assert.equal((await getRun(db, id))?.direction, 'kinetic', 'and it outlives the request');
+    // It is announced, so every open view shows the same choice.
+    const rows = await db.query<{ payload: { chosenBy?: string; name?: string } }>(
+      `SELECT payload FROM run_events WHERE run_id = $1 AND type = 'design.direction'`,
+      [id],
+    );
+    assert.equal(rows[0]?.payload.chosenBy, 'operator');
+    assert.equal(rows[0]?.payload.name, 'Kinetic');
+  });
+
+  test('let WAIS choose records the proposal, and says it was not chosen by hand', async () => {
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
+    const res = await post(`/api/runs/${id}/direction`, { auto: true });
+    assert.equal(res.status, 200);
+    const stored = (await getRun(db, id))?.direction;
+    assert.ok(stored, 'the proposal is stored, not left null to be re-derived at start');
+    const rows = await db.query<{ payload: { chosenBy?: string } }>(
+      `SELECT payload FROM run_events WHERE run_id = $1 AND type = 'design.direction'`,
+      [id],
+    );
+    assert.equal(rows[0]?.payload.chosenBy, 'auto');
+  });
+
+  test('a direction that does not exist is refused, not stored', async () => {
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
+    const res = await post(`/api/runs/${id}/direction`, { id: 'brutalist-vaporwave' });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'unknown_direction');
+    assert.equal((await getRun(db, id))?.direction, null);
+  });
+
+  test('the direction is chosen before the build, and not after it', async () => {
+    // The whole reason it works: choosing a direction after files exist would
+    // mean rewriting them. Once the run is building, the answer is 400.
+    const created = await post('/api/runs', { prompt: COMPLEX_PROMPT });
+    const id = created.body.run.id as string;
+    await waitForStatus(id, 'awaiting_plan');
+    await post(`/api/runs/${id}/approve`, {});
+    const res = await post(`/api/runs/${id}/direction`, { id: 'kinetic' });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'not_awaiting_plan');
+  });
+
+  test('a task that is not building an interface is not offered a direction', async () => {
+    const run = await createRun(db, {
+      prompt: 'Summarize this article about AI agents and compare three sources with quotes',
+      engine: 'scripted',
+    });
+    await setRunStatus(db, run.id, 'awaiting_plan');
+    const res = await post(`/api/runs/${run.id}/direction`, { id: 'kinetic' });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'not_a_build');
+  });
+
+  test('the chosen direction is the one the build is handed', async () => {
+    // End to end: the brief points at one direction, the operator chose
+    // another, and the run announces the one the operator chose. If this ever
+    // regresses, the plan and the page disagree — which is the failure the
+    // whole gate exists to prevent.
+    const config = makeConfig();
+    const runExecutor = makeExecutor();
+    const result = await acceptRun({ db, executor: runExecutor, config }, { prompt: COMPLEX_PROMPT, kind: 'chat' });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    await result.planning;
+    await saveRunDirection(db, result.run.id, 'kinetic');
+    assert.equal(await approveRunPlan(db, result.run.id), true);
+    const approved = await getRun(db, result.run.id);
+    if (approved) runExecutor.start(approved);
+    const deadline = Date.now() + 5_000;
+    let announced: { id?: string } | undefined;
+    while (Date.now() < deadline) {
+      const rows = await db.query<{ payload: { id?: string } }>(
+        `SELECT payload FROM run_events WHERE run_id = $1 AND type = 'design.direction' ORDER BY seq DESC LIMIT 1`,
+        [result.run.id],
+      );
+      announced = rows[0]?.payload;
+      if (announced) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(announced?.id, 'kinetic', 'the operator outranks the brief');
+    await runExecutor.shutdown();
   });
 
   test('POST /runs/:id/plan edits the waiting plan', async () => {

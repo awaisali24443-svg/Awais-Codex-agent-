@@ -862,6 +862,38 @@ describe('the drawer is a front door, not a form', () => {
   });
 });
 
+describe('the direction is asked on the plan card, before anything is built', () => {
+  test('the plan carries the proposal and the alternates', () => {
+    const client = app();
+    assert.ok(client.includes('function directionAsk(card, direction)'), 'the ask is built in one place');
+    assert.ok(client.includes('function renderPlanPreview(card, plan, direction = null)'), 'the plan renderer takes the direction');
+    assert.ok(client.includes("if (data.direction) card.directionAskPayload = data.direction;"), 'kept on the card, so a repaint does not lose the ask');
+    assert.ok(client.includes('renderPlanPreview(card, data.plan, card.directionAskPayload ?? null);'), 'and handed to it');
+    assert.ok(client.includes('if (direction) card.plan.insertBefore(directionAsk(card, direction), actions);'), 'the ask sits above Approve');
+    // The proposal is stated in full, because "let WAIS choose" is only a real
+    // option if the operator can see what WAIS would choose.
+    assert.ok(client.includes('head.textContent = `Direction: ${direction.name} — ${direction.blurb} (${direction.why}).`;'), 'the proposal and the reason are named');
+    assert.ok(client.includes("directionChip(card, 'auto', 'Let WAIS choose'"), 'including the option to accept it');
+  });
+
+  test('choosing records it before approval, and shows it as chosen', () => {
+    const client = app();
+    assert.ok(client.includes('async function chooseDirection(card, body, wrap)'), 'a chip records the choice');
+    assert.ok(client.includes('`/runs/${card.runId}/direction`'), 'at the direction route, before the plan is approved');
+    assert.ok(client.includes("markDirectionChosen(wrap, body.auto ? 'auto' : body.id);"), 'by id');
+    assert.ok(client.includes("chip.setAttribute('aria-pressed', chosen ? 'true' : 'false');"), 'one chip pressed, the rest released');
+    assert.ok(css().includes('.direction-chip[aria-pressed="true"]'), 'and the chosen chip looks chosen');
+    assert.ok(client.includes('card.directionChosen'), 'a replay remembers the choice instead of asking again');
+  });
+
+  test('the ask is not a second gate: approving is still what starts the build', () => {
+    const client = app();
+    // The direction is recorded, not acted on. Nothing here may start a run.
+    const askBlock = client.slice(client.indexOf('async function chooseDirection'), client.indexOf('function markDirectionChosen'));
+    assert.ok(!/approvePlan|executor|\/approve/.test(askBlock), 'choosing a direction never approves the plan');
+  });
+});
+
 describe('a built page says its direction and offers its next moves', () => {
   test('the direction arrives as an event, not a log line', () => {
     const client = app();

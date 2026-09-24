@@ -487,22 +487,39 @@ export function chipDirections(brief: string, count = 3): readonly Direction[] {
  * from the same eight definitions — a "different direction" chip cannot offer a
  * direction whose recipe does not exist.
  */
-export function directionPayload(brief: string): {
+export function directionPayload(
+  brief: string,
+  chosenId?: DirectionId | string | null,
+): {
   id: DirectionId;
   name: string;
   blurb: string;
   why: string;
   chips: Array<{ id: DirectionId; name: string; blurb: string }>;
 } {
-  const chosen = pickDirection(brief);
+  // `chosenId` is what makes the payload tell the truth once somebody has
+  // answered: without it this re-derives the pick from the brief, so a task the
+  // operator pointed at Kinetic would announce Nocturne and build Kinetic —
+  // the plan and the page disagreeing, which is the failure the ask exists to
+  // prevent.
+  const answered = directionById(typeof chosenId === 'string' ? chosenId : undefined);
+  const chosen = answered ?? pickDirection(brief);
   return {
     id: chosen.id,
     name: chosen.name,
     blurb: chosen.blurb,
-    why: briefChoseDirection(brief)
-      ? 'the brief points here'
-      : 'nothing in the brief pointed anywhere, so this is the default',
-    chips: chipDirections(brief).map((d) => ({ id: d.id, name: d.name, blurb: d.blurb })),
+    why: answered
+      ? 'chosen before the build started'
+      : briefChoseDirection(brief)
+        ? 'the brief points here'
+        : 'nothing in the brief pointed anywhere, so this is the default',
+    // The alternates are still the ones this brief would offer, minus whatever
+    // is now being built: a finished page must not offer to become the
+    // direction it already is.
+    chips: rankDirections(brief)
+      .filter((d) => d.id !== chosen.id)
+      .slice(0, 3)
+      .map((d) => ({ id: d.id, name: d.name, blurb: d.blurb })),
   };
 }
 

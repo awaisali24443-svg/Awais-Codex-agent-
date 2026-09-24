@@ -34,7 +34,7 @@ import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
 import { looksLikeUiMission, withDesignGuide } from './design.js';
-import { directionPayload, pickDirection } from './design/directions.js';
+import { directionById, directionPayload, pickDirection } from './design/directions.js';
 import { DecisionScanner, stripDecisions, wantsDecisions, withDecisions } from './decisions.js';
 import type { ThinkingKind } from './engine/types.js';
 import { MAX_SEEN_URLS, extractUrls, checkSources, searchQueryOf, urlsIn } from './sources.js';
@@ -648,14 +648,22 @@ export class RunExecutor {
         // every generated page has. It is announced, not asked about yet: the
         // operator can see which one was chosen and why, in the same list as
         // everything else the task did.
-        const direction = looksLikeUiMission(memory.prompt) ? pickDirection(memory.prompt) : null;
+        // The operator's choice wins. `run.direction` is written when they
+        // answered the plan card; when it is null nobody chose, and the brief
+        // decides. That order matters: a plan that said "Nocturne" must not
+        // build something else because the brief's keywords read differently
+        // the second time.
+        const chosen = directionById(run.direction);
+        const direction = looksLikeUiMission(memory.prompt)
+          ? (chosen ?? pickDirection(memory.prompt))
+          : null;
         if (direction) {
           // Durable, and structured rather than a log line: the direction is
           // part of what the task did, so a reconnect replays it, and the three
           // alternates it carries are what the refinement chips offer once the
           // page is finished. A chip can therefore never offer a direction
           // whose recipe does not exist.
-          await writer.write('design.direction', directionPayload(memory.prompt));
+          await writer.write('design.direction', directionPayload(memory.prompt, direction.id));
         }
         const mission =
           resumePreamble +

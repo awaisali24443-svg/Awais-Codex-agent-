@@ -12,6 +12,7 @@ import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DIRECTIONS,
+  directionPayload,
   briefChoseDirection,
   chipDirections,
   describeDirection,
@@ -171,5 +172,32 @@ describe('what ships must not name a product', () => {
 
   test('a direction is described in one line the operator can read', () => {
     assert.equal(describeDirection(directionById('organica')!), 'Organica — soft mesh gradients, rounded forms, asymmetric flow');
+  });
+});
+
+describe('the payload tells the truth once somebody has answered', () => {
+  test('a chosen direction is what the task announces, not what the brief would have picked', () => {
+    // The bug this exists for: the payload re-derived the pick from the brief,
+    // so a task pointed at Kinetic announced Nocturne and built Kinetic.
+    const brief = 'Build a launch page for an AI security platform';
+    assert.equal(pickDirection(brief).id, 'nocturne', 'the brief points at Nocturne');
+    const payload = directionPayload(brief, 'kinetic');
+    assert.equal(payload.id, 'kinetic');
+    assert.equal(payload.name, 'Kinetic');
+    assert.equal(payload.why, 'chosen before the build started', 'and says why it is that one');
+  });
+
+  test('the alternates never include the direction already being built', () => {
+    const payload = directionPayload('a website for a fashion boutique', 'atelier');
+    assert.equal(payload.chips.length, 3);
+    assert.ok(!payload.chips.some((c) => c.id === 'atelier'), 'no chip offers to become what it already is');
+  });
+
+  test('an unknown or absent choice falls back to the brief, with the brief\u2019s own reason', () => {
+    const brief = 'Build a website for a music festival';
+    assert.equal(directionPayload(brief).id, 'kinetic');
+    assert.equal(directionPayload(brief).why, 'the brief points here');
+    assert.equal(directionPayload(brief, 'nothing-like-this').id, 'kinetic');
+    assert.equal(directionPayload('make me a nice page').why, 'nothing in the brief pointed anywhere, so this is the default');
   });
 });

@@ -24,6 +24,8 @@ import type { RunExecutor } from './executor.js';
 import type { SecretsStore } from './settings.js';
 import { BudgetExceededError, consumeRunBudget, peekDayTotal, refundRunBudget, type BudgetBucket } from './budget.js';
 import { looksComplex } from './planning.js';
+import { looksLikeUiMission } from './design.js';
+import { directionPayload } from './design/directions.js';
 import { attachmentSummary, withAttachments, type Attachment } from './attachments.js';
 import { maybeAskPlanApproval } from './whatsapp/approvals.js';
 import { RunConflictError, createRun, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
@@ -125,7 +127,13 @@ async function draftPlan(deps: AcceptDeps, run: Run): Promise<void> {
     if (steps.length > 0) {
       await saveRunPlan(db, run.id, steps);
       await setRunStatus(db, run.id, 'awaiting_plan');
-      await executor.announce(run.id, 'run.plan_ready', { plan: steps });
+      // A page is built in a direction, and the direction is chosen here —
+      // while the run is stopped for approval anyway, so asking costs no extra
+      // interruption and the plan the operator approves states the look of the
+      // page instead of leaving it to be discovered afterwards. The three
+      // alternates ride along so the card can offer them without a round trip.
+      const direction = looksLikeUiMission(run.prompt) ? directionPayload(run.prompt) : null;
+      await executor.announce(run.id, 'run.plan_ready', { plan: steps, direction });
       const held = await current();
       console.log(`[run] ${run.id} awaiting plan approval (${steps.length} steps)`);
       // The owner may be on the phone, not the web app: one WhatsApp ask,

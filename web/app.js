@@ -1487,7 +1487,7 @@ function draftingClock(card) {
  * and Edit. Rebuilding from scratch keeps an edited plan, a re-render, and a
  * replayed stream from ever duplicating rows or buttons.
  */
-function renderPlanPreview(card, plan) {
+function renderPlanPreview(card, plan, direction = null) {
   const steps = Array.isArray(plan) ? plan : [];
   card.plan.hidden = false;
   card.planIndex.clear();
@@ -1526,7 +1526,93 @@ function renderPlanPreview(card, plan) {
   card.plan.append(actions);
   approve.addEventListener('click', () => approvePlan(card, approve));
   edit.addEventListener('click', () => editPlan(card));
+  // A page is built in a direction, and this is the last moment it can be
+  // chosen without rewriting anything: the run is stopped for approval anyway,
+  // so the ask costs nothing. It is not a second gate — it is part of the plan
+  // the operator is already reading, which is why "approve all plans" cannot
+  // answer it for them.
+  if (direction) card.plan.insertBefore(directionAsk(card, direction), actions);
   scrollToEnd();
+}
+
+/**
+ * The direction ask on a plan card: what was proposed and why, plus the three
+ * alternates and a way to accept the proposal without choosing anything.
+ *
+ * The proposed direction is stated first and in full, because "let WAIS choose"
+ * is only a real option if the operator can see what WAIS would choose. A
+ * chosen chip is recorded immediately — before approval — so the plan and the
+ * build cannot disagree about what is being made.
+ */
+function directionAsk(card, direction) {
+  const wrap = document.createElement('div');
+  wrap.className = 'direction-ask';
+
+  const head = document.createElement('p');
+  head.className = 'direction-head';
+  head.textContent = `Direction: ${direction.name} — ${direction.blurb} (${direction.why}).`;
+  wrap.append(head);
+
+  const row = document.createElement('div');
+  row.className = 'direction-row';
+  const choices = [
+    ...(Array.isArray(direction.chips) ? direction.chips : []),
+  ];
+  for (const chip of choices) {
+    row.append(directionChip(card, chip.id, chip.name, chip.blurb, () => chooseDirection(card, { id: chip.id }, wrap)));
+  }
+  row.append(directionChip(card, 'auto', 'Let WAIS choose', `keep ${direction.name}`, () => chooseDirection(card, { auto: true }, wrap)));
+  wrap.append(row);
+
+  // Replay: a run whose direction was already chosen shows the choice, not the
+  // question again.
+  if (card.directionChosen) markDirectionChosen(wrap, card.directionChosen);
+  card.directionAsk = wrap;
+  return wrap;
+}
+
+/** One chip: the choice it makes, its label, its explanation. */
+function directionChip(card, id, label, hint, onPick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chip direction-chip';
+  btn.dataset.id = id;
+  btn.dataset.label = label;
+  btn.setAttribute('aria-pressed', 'false');
+  const name = document.createElement('span');
+  name.className = 'chip-label';
+  name.textContent = label;
+  const why = document.createElement('span');
+  why.className = 'chip-hint';
+  why.textContent = hint;
+  btn.append(name, why);
+  btn.addEventListener('click', () => onPick(btn));
+  return btn;
+}
+
+/** Record the operator's direction choice, and show it as chosen. */
+async function chooseDirection(card, body, wrap) {
+  if (!card.runId) return;
+  try {
+    await api(`/runs/${card.runId}/direction`, { method: 'POST', body: JSON.stringify(body) });
+    markDirectionChosen(wrap, body.auto ? 'auto' : body.id);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : 'Could not save the direction.');
+  }
+}
+
+/** One chip pressed, the rest released: a choice, not a vote. */
+function markDirectionChosen(wrap, id) {
+  let label = id;
+  wrap.querySelectorAll('.direction-chip').forEach((chip) => {
+    const chosen = chip.dataset.id === id;
+    chip.setAttribute('aria-pressed', chosen ? 'true' : 'false');
+    if (chosen) label = chip.dataset.label ?? id;
+  });
+  const note = wrap.querySelector('.direction-note') ?? document.createElement('p');
+  note.className = 'direction-note';
+  note.textContent = `Chosen: ${label}. Approve the plan when you are ready.`;
+  if (!note.parentNode) wrap.append(note);
 }
 
 /** The wait is over: drop the Approve / Edit buttons, keep the checklist. */
@@ -1912,7 +1998,8 @@ function handleEvent(card, event, data) {
       state.runStatus = 'awaiting_plan'; // waiting for a human, not working
       if (card.planClock) clearInterval(card.planClock);
       card.planClock = null;
-      renderPlanPreview(card, data.plan);
+      if (data.direction) card.directionAskPayload = data.direction;
+      renderPlanPreview(card, data.plan, card.directionAskPayload ?? null);
       break;
 
     case 'run.plan_approved':
@@ -1988,8 +2075,12 @@ function handleEvent(card, event, data) {
 
     case 'design.direction': {
       // The direction is a decision the task made, so it reads like one: a row
-      // in the same list as the work, not a banner.
+      // in the same list as the work, not a banner. On a run still waiting for
+      // approval this is the answer to the ask — the chips mark the choice and
+      // the row appears when the build actually starts.
       card.direction = data;
+      if (data.chosenBy) card.directionChosen = data.chosenBy === 'auto' ? 'auto' : data.id;
+      if (state.runStatus === 'awaiting_plan') break;
       addStep(card, 'design', {
         name: directionLine(data),
         icon: 'spark',

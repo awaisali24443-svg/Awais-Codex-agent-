@@ -41,9 +41,12 @@ import type { SecretsStore } from '../settings.js';
 import { budgetSnapshot } from '../budget.js';
 import { listArtifacts } from '../artifacts.js';
 import { BUCKET_FOR_KIND, acceptRun, estimateRunCost, type AcceptResult } from '../accept.js';
+import { looksLikeUiMission } from '../design.js';
+import { directionById, directionPayload } from '../design/directions.js';
 import {
   TERMINAL_STATUSES,
   approveRunPlan,
+  saveRunDirection,
   emitEvent,
   finishRun,
   getActiveRun,
@@ -475,6 +478,62 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     const approved = await getRun(db, run.id);
     if (approved) executor.start(approved);
     res.json({ run: approved ?? run });
+  });
+
+  /**
+   * Choose the direction a build will be made in.
+   *
+   * Only while the run is waiting for approval, and only for a task that is
+   * actually building a UI: the direction is chosen before any file exists, and
+   * a direction on a research task would be a setting that does nothing. The id
+   * is validated against the registry, so a stale client cannot store a
+   * direction whose recipe does not exist.
+   *
+   * `{ auto: true }` is the "let WAIS choose" chip: it records the direction
+   * the plan proposed, so the run is explicit about what it will build rather
+   * than leaving the column null and re-deriving it at start time.
+   */
+  router.post('/runs/:id/direction', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    if (run.status !== 'awaiting_plan') {
+      res.status(400).json({
+        error: 'not_awaiting_plan',
+        message: `The direction is chosen before the build starts (this task is ${run.status})`,
+      });
+      return;
+    }
+    if (!looksLikeUiMission(run.prompt)) {
+      res.status(400).json({ error: 'not_a_build', message: 'This task is not building a user interface.' });
+      return;
+    }
+    const body = (req.body ?? {}) as { id?: unknown; auto?: unknown };
+    const proposed = directionPayload(run.prompt);
+    const requested = body.auto === true ? proposed.id : typeof body.id === 'string' ? body.id : '';
+    const direction = directionById(requested);
+    if (!direction) {
+      res.status(400).json({ error: 'unknown_direction', message: `No such direction: ${String(requested)}` });
+      return;
+    }
+    const saved = await saveRunDirection(db, run.id, direction.id);
+    if (!saved) {
+      res.status(400).json({ error: 'not_awaiting_plan', message: 'That task is no longer waiting for approval.' });
+      return;
+    }
+    // Every open view re-renders from the same event, and the run's own record
+    // shows what was chosen and that it was chosen rather than proposed.
+    await announce(run.id, 'design.direction', {
+      ...proposed,
+      id: direction.id,
+      name: direction.name,
+      blurb: direction.blurb,
+      chosenBy: body.auto === true ? 'auto' : 'operator',
+    });
+    const updated = await getRun(db, run.id);
+    res.json({ run: updated ?? run, direction: direction.id });
   });
 
   /**
