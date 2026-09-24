@@ -504,6 +504,12 @@ export class RunExecutor {
         conversationId: run.conversationId,
         deepResearch: run.deepResearch,
         researchBudgetMinutes: run.researchBudgetMinutes,
+        // When the task actually started, not when this frame was sent. Every
+        // path that goes live replays this event first, and the card's timer
+        // reads it: without it, a reconnect three minutes into a task restarts
+        // the clock at zero, which is a timer that lies about the one thing it
+        // exists to report.
+        startedAt: run.startedAt,
       });
 
       if (memory.applied) {

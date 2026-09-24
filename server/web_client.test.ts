@@ -398,9 +398,18 @@ describe('the conversation reads like a conversation', () => {
   test('the working shows a clock while it works', () => {
     const client = app();
     assert.ok(client.includes('function startRunClock('), 'there is a clock');
-    assert.ok(client.includes('setInterval(tick, 1_000)'), 'ticking by the second');
+    assert.ok(client.includes('setInterval(tick, 250)'), 'ticking faster than the second it shows, so the second rolls over when it changes');
     assert.ok(client.includes('stopRunClock(card)'), 'stopped when the run ends');
     assert.ok(client.includes('thinkingClock'), 'and drawn in the run header');
+    // A stopwatch, not a counter: the number the operator reads is the one the
+    // tools they already use show next to a spinner.
+    assert.ok(client.includes('formatTimer(elapsed)'), 'formatted as a clock');
+    const clockBlock = css().slice(css().indexOf('.thinking-head .clock'));
+    assert.ok(
+      clockBlock.slice(0, clockBlock.indexOf('}')).includes('font-variant-numeric: tabular-nums'),
+      'and set in figures that do not jog sideways every second',
+    );
+    assert.ok(client.includes("import {"), 'from the pure module the tests drive directly');
   });
 
   test('a message arrives rather than appears', () => {
@@ -918,6 +927,39 @@ describe('a built page says its direction and offers its next moves', () => {
     assert.ok(client.includes('fillComposerFromChip(el.prompt, el.send, prompt);'), 'and it only fills');
     assert.ok(!/sendMessage\(|requestSubmit\(\);[\s\S]{0,80}refine-chip/.test(client), 'never auto-sent');
     assert.ok(css().includes('.refine {'), 'the row wraps');
+  });
+});
+
+describe('a running task shows a spinner and a timer that do not lie', () => {
+  test('the clock is seeded from the task, not from when the card appeared', () => {
+    // The failure this prevents: a reconnect three minutes in restarted the
+    // clock at 0:00, so the timer reported the age of the *screen*.
+    const client = app();
+    const started = client.slice(client.indexOf("case 'run.started'"), client.indexOf("case 'log'"));
+    assert.ok(started.includes("const startedAt = Date.parse(String(data.startedAt ?? ''));"), 'the run says when it started');
+    assert.ok(started.includes('if (Number.isFinite(startedAt) && startedAt <= Date.now())'), 'and a nonsense or future time is refused rather than drawn');
+    assert.ok(started.includes('card.startedAt = startedAt;'), 'the card adopts it');
+  });
+
+  test('the phase sits beside the timer, where the body cannot scroll it away', () => {
+    const client = app();
+    assert.ok(client.includes('card.phaseChip.textContent = phase ?? \'\';'), 'the head shows the phase');
+    assert.ok(client.includes('card.phaseChip.hidden = !phase;'), 'and hides it when there is none');
+    assert.ok(client.includes("setPhase(card, `Step ${data.index} of ${data.total}`);"), 'a milestone names the step');
+    assert.ok(css().includes('.thinking-head .phase'), 'it is styled as a fact beside the clock');
+  });
+
+  test('the finished card keeps the number and stops twitching', () => {
+    const client = app();
+    assert.ok(
+      client.includes('if (card.thinkingClock) card.thinkingClock.textContent = formatTimer(Date.now() - card.startedAt);'),
+      'frozen at the final time rather than cleared',
+    );
+    assert.ok(client.includes('card.phaseChip.hidden = true;'), 'and the phase goes when there is no phase');
+    const cssText = css();
+    assert.ok(cssText.includes('.spinner.done'), 'the spinner stops being a spinner');
+    assert.ok(cssText.includes('@keyframes spin'), 'and it was spinning while the task ran');
+    assert.ok(client.includes('role="timer"'), 'the clock announces itself as a timer, not as live text');
   });
 });
 

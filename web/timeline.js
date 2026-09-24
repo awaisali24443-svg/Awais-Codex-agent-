@@ -199,6 +199,26 @@ export function formatElapsedShort(ms) {
 }
 
 /**
+ * A running clock, the way a stopwatch reads: `0:07`, `1:42`, `1:02:05`.
+ *
+ * The card used to count in raw seconds ("12s", "127s"), which stops being
+ * legible exactly when a task gets long enough to need watching. Minutes and
+ * seconds, and hours only when there are hours — the same shape every timer the
+ * operator has ever looked at uses, including the one next to a spinner in the
+ * tools they already know.
+ *
+ * @param {number} ms elapsed milliseconds
+ */
+export function formatTimer(ms) {
+  const total = Math.max(0, Math.floor(Number(ms) / 1000)) || 0;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, '0');
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`;
+  return `${minutes}:${seconds}`;
+}
+
+/**
  * The frame queue behind the Raw switch, bounded.
  *
  * A long run emits thousands of events and a phone has one screen. The queue

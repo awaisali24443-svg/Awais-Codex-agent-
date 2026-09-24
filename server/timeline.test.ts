@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  formatTimer,
   quietSeconds,
   elapsedWords,
   waitLine,
@@ -258,5 +259,25 @@ describe('the wait has a shape', () => {
     );
     // With nothing known, it still says something true rather than nothing.
     assert.equal(waitLine({}), 'Working · 0s · nothing has come back from the model yet');
+  });
+});
+
+describe('the clock on a running task', () => {
+  it('reads like a stopwatch, at every length a task can reach', () => {
+    assert.equal(formatTimer(0), '0:00');
+    assert.equal(formatTimer(999), '0:00', 'not yet a second');
+    assert.equal(formatTimer(7_400), '0:07');
+    assert.equal(formatTimer(62_000), '1:02');
+    assert.equal(formatTimer(59 * 60_000 + 59_000), '59:59');
+    assert.equal(formatTimer(3_725_000), '1:02:05', 'hours appear only when there are hours');
+  });
+
+  it('cannot produce a negative or nonsense clock', () => {
+    // A clock that shows "-1:-3" is worse than no clock: it makes the operator
+    // doubt every other number on the card.
+    assert.equal(formatTimer(-5_000), '0:00');
+    assert.equal(formatTimer(Number.NaN), '0:00');
+    const missing = undefined as unknown as number;
+    assert.equal(formatTimer(missing), '0:00');
   });
 });

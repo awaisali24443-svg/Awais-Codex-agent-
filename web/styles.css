@@ -440,6 +440,33 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 }
+/* ------------------------------------------- the run timer and its spinner ---
+   A spinner and a clock, the pair every tool that streams work puts at the top
+   of the thing being streamed. The spinner answers "is it alive"; the clock
+   answers "how long has this been going", which is the question somebody
+   watching a three-minute task actually has. The phase sits with them, because
+   the wait line it also feeds lives in a body that scrolls. */
+
+.thinking-head .clock {
+  font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft);
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+}
+.thinking-head .phase {
+  flex: none; padding: 1px 6px; border-radius: var(--radius-xs);
+  font-size: 10.5px; color: var(--muted); background: var(--surface-2);
+  border: 1px solid var(--line); white-space: nowrap;
+}
+/* While the task runs the whole head reads as live: the label, the spinner and
+   the clock are one thing, and none of them twitches once the run stops. */
+.thinking-head .spinner.done ~ .label { color: var(--muted); }
+
+/* A phone head has one line and five facts in it: the clock and the silence are
+   the two that must survive, so the phase steps aside rather than pushing them
+   off the edge. It is still written in the body, in words, in the wait line. */
+@media (max-width: 719px) {
+  .thinking-head .phase { display: none; }
+}
+
 /* ------------------------------------- choosing the direction of a build ---
    The ask sits inside the plan card, above Approve, because that is the last
    moment a direction can be chosen without rewriting anything. It is part of

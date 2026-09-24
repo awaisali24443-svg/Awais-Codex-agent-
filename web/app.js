@@ -14,6 +14,7 @@ import {
   quietSeconds,
   elapsedWords,
   waitLine,
+  formatTimer,
   pushFrame,
 } from './timeline.js';
 import { directionLine, refinementChips } from './refine.js';
@@ -638,6 +639,7 @@ function existingCard(runId) {
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
     thinkingClock: thinking.querySelector('.clock'),
+    phaseChip: thinking.querySelector('.phase'),
     spinner: thinking.querySelector('.spinner'),
     steps: card.querySelector('.steps'),
     // A card being reused is being replayed from the start, so its accumulated
@@ -726,14 +728,17 @@ async function copyToClipboard(text, btn) {
 function startRunClock(card) {
   stopRunClock(card);
   const tick = () => {
-    const seconds = (Date.now() - card.startedAt) / 1000;
-    if (card.thinkingClock) card.thinkingClock.textContent = `${seconds.toFixed(0)}s`;
+    const elapsed = Date.now() - card.startedAt;
+    // A stopwatch, not a counter: `1:42`, and `1:02:05` after an hour. Ticking
+    // four times a second means the visible second changes when it actually
+    // changes, instead of drifting up to a second behind the truth.
+    if (card.thinkingClock) card.thinkingClock.textContent = formatTimer(elapsed);
     // The wait line carries the same number in words, and it is the only thing
     // on the panel until the model says something.
     updateWaitLine(card);
   };
   tick();
-  card.timer = setInterval(tick, 1_000);
+  card.timer = setInterval(tick, 250);
 }
 
 function stopRunClock(card) {
@@ -852,7 +857,8 @@ function createRunCard(runId = null) {
     <summary class="thinking-head">
       <span class="spinner"></span>
       <span class="label">Thinking</span>
-      <span class="clock"></span>
+      <span class="clock" role="timer" aria-label="Time running"></span>
+      <span class="phase" hidden></span>
       <span class="thinking-quiet" hidden></span>
       <span class="meta"></span>
       <button type="button" class="trace-raw-toggle" aria-pressed="false"
@@ -934,6 +940,7 @@ function createRunCard(runId = null) {
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
     thinkingClock: thinking.querySelector('.clock'),
+    phaseChip: thinking.querySelector('.phase'),
     spinner: thinking.querySelector('.spinner'),
     steps,
     answer,
@@ -1162,6 +1169,12 @@ function updateWaitLine(card) {
 /** Set the phase the wait line reports ("Drafting the plan", "Step 2 of 7"). */
 function setPhase(card, phase) {
   card.phase = phase;
+  // And on the head, beside the timer: the wait line lives in the body and the
+  // body scrolls, so the phase was invisible for most of a long task.
+  if (card.phaseChip) {
+    card.phaseChip.textContent = phase ?? '';
+    card.phaseChip.hidden = !phase;
+  }
   updateWaitLine(card);
 }
 
@@ -1930,6 +1943,14 @@ function handleEvent(card, event, data) {
       if (typeof data.conversationId === 'string') state.runConversationId = data.conversationId;
       state.runStatus = 'running';
       card.prompt = typeof data.prompt === 'string' ? data.prompt : '';
+      // The task's own start time, so a card that attaches late — a reconnect,
+      // a reload, a run opened from the sidebar — shows how long the task has
+      // really been going instead of restarting the clock at zero.
+      const startedAt = Date.parse(String(data.startedAt ?? ''));
+      if (Number.isFinite(startedAt) && startedAt <= Date.now()) {
+        card.startedAt = startedAt;
+        if (card.thinkingClock) card.thinkingClock.textContent = formatTimer(Date.now() - startedAt);
+      }
       setPhase(card, 'Working');
       // The definitive budget line arrives on 'research.started' below; this
       // early mark means a replay that starts mid-run still shows the mode.
@@ -2227,7 +2248,14 @@ function finishCard(card, outcome, data = {}) {
   state.runStatus = 'finished'; // nothing to watch any more; the answer is here
   flushTrace(card);
   stopRunClock(card);
-  if (card.thinkingClock) card.thinkingClock.textContent = '';
+  // Frozen at the final time, not cleared: the spinner stops, the clock keeps
+  // the number, and folding the working away leaves "Done · 1:42" in the one
+  // row that is still on screen.
+  if (card.thinkingClock) card.thinkingClock.textContent = formatTimer(Date.now() - card.startedAt);
+  if (card.phaseChip) {
+    card.phaseChip.textContent = '';
+    card.phaseChip.hidden = true;
+  }
   card.spinner.classList.add('done');
   card.spinner.style.animation = 'none';
   card.spinner.setAttribute('class', 'spinner done');
