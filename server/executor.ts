@@ -34,7 +34,7 @@ import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
 import { withDesignGuide } from './design.js';
-import { extractUrls, checkSources } from './sources.js';
+import { MAX_SEEN_URLS, extractUrls, checkSources, searchQueryOf, urlsIn } from './sources.js';
 import { extractLinkedInDraft, recordLinkedInDraft } from './linkedin.js';
 import { maybeAskDraftApproval } from './whatsapp/approvals.js';
 import {
@@ -398,6 +398,20 @@ export class RunExecutor {
     const controller = new AbortController();
     this.active.set(run.id, controller);
 
+    /* Where this run has looked, as it looks: deduped, bounded, and durable so
+       a reconnect rebuilds the same rail. Kept next to the writer because it
+       describes what the writer is about to announce. */
+    const seenSources = new Set<string>();
+    let seenSourceEvents = 0;
+    const noteSource = (payload: { kind: 'site' | 'search'; url?: string; query?: string; via?: string }): void => {
+      const key = payload.url ?? `${payload.kind}:${payload.query ?? ''}`;
+      if (!key || seenSources.has(key)) return;
+      if (seenSourceEvents >= MAX_SEEN_URLS) return;
+      seenSources.add(key);
+      seenSourceEvents += 1;
+      void writer.write('sources.seen', payload);
+    };
+
     const writer = new DurableWriter(this.deps.db, bus, run.id, (err) => {
       console.error(`[executor] event write failed for ${run.id}:`, err.message);
     });
@@ -469,6 +483,12 @@ export class RunExecutor {
 
         tool: (name, args) => {
           void writer.write('tool.call', { name, args: args ?? {} });
+          // A lookup is the moment the operator most wants to see what is
+          // happening, and the call itself says where it is going: the URL it
+          // is opening, or the question it is asking.
+          for (const url of urlsIn(args)) noteSource({ kind: 'site', url, via: name });
+          const query = searchQueryOf(name, args);
+          if (query) noteSource({ kind: 'search', query, via: name });
         },
 
         toolResult: (name, result) => {
@@ -477,6 +497,9 @@ export class RunExecutor {
 
         log: (message, level: LogLevel = 'info') => {
           void writer.write('log', { message, level });
+          // The agent's own narration often names the page it is reading
+          // before any tool call arrives; those URLs belong on the rail too.
+          for (const url of urlsIn(message, 2)) noteSource({ kind: 'site', url, via: 'reading' });
           // A progress line in the planning protocol becomes a durable
           // milestone the PWA renders as a checklist. Anything else is just a
           // log line, as before. Milestones are also checkpointed to

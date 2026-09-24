@@ -535,6 +535,45 @@ describe('reading while it works', () => {
   });
 });
 
+describe('a task that goes looking says where', () => {
+  test('the rail fills during the run, from the run\u2019s own events', () => {
+    const client = app();
+    assert.ok(client.includes('function addSeenSource('), 'frames become rows');
+    assert.ok(client.includes("case 'sources.seen':"), 'and the event that feeds it is handled');
+    // In the buffered list too: a reconnect replays into the same rail.
+    assert.ok(client.includes("'sources.seen', 'sources.checked',"), 'the event is durable, so it replays');
+    assert.ok(client.includes('const rail = document.createElement'), 'the card has somewhere to put it');
+    assert.ok(client.includes('card.append(thinking, plan, steps, rail, answer, sources, files);'), 'above the answer, where the working is');
+  });
+
+  test('it is a rail, not a transcript: newest first, few rows, one tap wider', () => {
+    const client = app();
+    assert.ok(client.includes('const RAIL_VISIBLE = 2;'), 'two rows while it moves');
+    assert.ok(client.includes('for (const entry of rows.slice().reverse()) list.append(railRow(entry));'), 'newest on top, because that is the news');
+    assert.ok(client.includes('entries.slice(0, RAIL_VISIBLE)'), 'the rest wait behind the toggle');
+    assert.ok(client.includes("toggle.textContent = card.railExpanded ? 'Show less' : `Show all ${entries.length}`;"), 'one control, and it says what it does');
+  });
+
+  test('a search is shown as the question, never as a page', () => {
+    const client = app();
+    assert.ok(client.includes("const icon = entry.kind === 'search' ? 'search' : 'globe';"), 'the two kinds are drawn differently');
+    assert.ok(client.includes("if (entry.kind === 'search') return entry.query || '';"), 'a search row is its query');
+    assert.ok(client.includes("if (!entry.url && !entry.query) return;"), 'an empty frame draws nothing');
+    assert.ok(client.includes("if (entry.url && card.seenSources.some((existing) => existing.url === entry.url)) return;"), 'and a repeated page is not a new row');
+  });
+
+  test('the rail folds away when the answer arrives', () => {
+    // The answer is the news at that point; the pages it opened are one line
+    // of background, still readable, because a task's reading list and its
+    // citations are not the same list.
+    const client = app();
+    assert.ok(client.includes('card.railCollapsed = true;'), 'finishing collapses it');
+    assert.ok(client.includes("head.querySelector('.rail-title').textContent = card.railCollapsed ? 'Where it looked' : 'Looking at';"), 'and the heading changes tense');
+    assert.ok(css().includes('.rail.collapsed .rail-list { display: none; }'), 'collapsed means the rows are hidden');
+    assert.ok(css().includes('.rail-row svg'), 'with the rail styled as its own quiet thing');
+  });
+});
+
 describe('a plan is a list, and it is edited like one', () => {
   test('a step moves, rewrites, drops, and can be added', () => {
     // Borrowed from the research plan that Deep Research shows before it runs,

@@ -775,7 +775,13 @@ function createRunCard(runId = null) {
   const sources = document.createElement('div');
   sources.className = 'sources-slot';
 
-  card.append(thinking, plan, steps, answer, sources, files);
+  // Where the task is looking, *while* it looks. Filled by `sources.seen`
+  // events; the block at the end of the answer is a different thing — that one
+  // is what the answer cited, and this one is what the task actually opened.
+  const rail = document.createElement('div');
+  rail.className = 'rail-slot';
+
+  card.append(thinking, plan, steps, rail, answer, sources, files);
   el.thread.append(card);
   startRunClock(card);
   scrollToEnd();
@@ -784,6 +790,8 @@ function createRunCard(runId = null) {
     card,
     files,
     sources,
+    rail,
+    seenSources: [],
     runId,
     plan,
     planIndex: new Map(),
@@ -930,6 +938,108 @@ function updatePlan(card, data) {
   if (data.label) row.querySelector('.plan-label').textContent = String(data.label);
   if (data.done) row.classList.add('done');
   scrollToEnd();
+}
+
+/* -------------------------------------------------------- source rail -- */
+
+/** How many rows the rail shows while it is still moving. */
+const RAIL_VISIBLE = 2;
+
+function railLabel(entry) {
+  if (entry.kind === 'search') return entry.query || '';
+  try {
+    const url = new URL(entry.url);
+    const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
+    return `${url.hostname.replace(/^www\./, '')}${path}`;
+  } catch {
+    return entry.url || '';
+  }
+}
+
+/**
+ * The rail: where this task has looked so far.
+ *
+ * This is the piece of a long research task the operator most wants and least
+ * gets — a task that is browsing looks exactly like a task that is stuck, and
+ * the only honest answer to "what is it doing" is the list of places it has
+ * actually been. Rows are deduped by the server, bounded there too, and the
+ * newest is on top because during a run the newest is the news.
+ *
+ * The rail is a *picture of the run*, not a citation list: nothing here says
+ * the answer used a page. That is what the Sources block under the answer is
+ * for, and the two are allowed to disagree.
+ */
+function renderSourceRail(card) {
+  const entries = card.seenSources ?? [];
+  if (entries.length === 0) return;
+  const sites = entries.filter((e) => e.kind === 'site').length;
+  const searches = entries.length - sites;
+  const parts = [];
+  if (sites) parts.push(sites === 1 ? '1 site' : `${sites} sites`);
+  if (searches) parts.push(searches === 1 ? '1 search' : `${searches} searches`);
+
+  const box = document.createElement('div');
+  box.className = 'rail' + (card.railCollapsed ? ' collapsed' : '');
+
+  const head = document.createElement('div');
+  head.className = 'rail-head';
+  head.innerHTML = iconFor('globe') +
+    '<span class="rail-title"></span><span class="rail-count"></span>';
+  head.querySelector('.rail-title').textContent = card.railCollapsed ? 'Where it looked' : 'Looking at';
+  head.querySelector('.rail-count').textContent = parts.join(' · ');
+
+  const list = document.createElement('ol');
+  list.className = 'rail-list';
+  const rows = card.railExpanded ? entries : entries.slice(0, RAIL_VISIBLE);
+  for (const entry of rows.slice().reverse()) list.append(railRow(entry));
+
+  // One control, and it says what it will do: everything except the finished,
+  // un-expanded rail is hiding rows, and a finished rail with nothing hidden
+  // needs no control at all.
+  const hidden = entries.length - rows.length;
+  const canCollapse = card.railExpanded && entries.length > RAIL_VISIBLE;
+  if (hidden > 0 || canCollapse) {
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'rail-toggle';
+    toggle.textContent = card.railExpanded ? 'Show less' : `Show all ${entries.length}`;
+    toggle.addEventListener('click', () => {
+      card.railExpanded = card.railExpanded ? false : true;
+      renderSourceRail(card);
+    });
+    head.append(toggle);
+  }
+
+  box.append(head, list);
+  card.rail.replaceChildren(box);
+}
+
+/** One place the task has been: a page it opened, or a question it asked. */
+function railRow(entry) {
+  const row = document.createElement('li');
+  row.className = 'rail-row ' + (entry.kind === 'search' ? 'search' : 'site');
+  const icon = entry.kind === 'search' ? 'search' : 'globe';
+  row.innerHTML = iconFor(icon) + '<span class="rail-text"></span><span class="rail-via"></span>';
+  const text = row.querySelector('.rail-text');
+  text.textContent = railLabel(entry);
+  if (entry.url) row.title = entry.url;
+  if (entry.via) row.querySelector('.rail-via').textContent = entry.via;
+  return row;
+}
+
+/** Called for every `sources.seen` frame; the server has already deduped. */
+function addSeenSource(card, data) {
+  if (!card.seenSources) card.seenSources = [];
+  const entry = {
+    kind: data?.kind === 'search' ? 'search' : 'site',
+    url: typeof data?.url === 'string' ? data.url : null,
+    query: typeof data?.query === 'string' ? data.query : null,
+    via: typeof data?.via === 'string' ? data.via : '',
+  };
+  if (!entry.url && !entry.query) return;
+  if (entry.url && card.seenSources.some((existing) => existing.url === entry.url)) return;
+  card.seenSources.push(entry);
+  renderSourceRail(card);
 }
 
 /* ------------------------------------------------------- plan preview -- */
@@ -1440,6 +1550,10 @@ function handleEvent(card, event, data) {
       });
       break;
 
+    case 'sources.seen':
+      addSeenSource(card, data);
+      break;
+
     case 'sources.checked': {
       const dead = Array.isArray(data.dead) ? data.dead : [];
       const checked = Number(data.checked) || 0;
@@ -1517,6 +1631,16 @@ function finishCard(card, outcome, data = {}) {
   card.thinkingLabel.textContent = 'Thinking';
   drawThinking(card);
   drawAnswer(card, false);
+
+  // The rail stops moving with the task: it folds to one honest line —
+  // "Where it looked · 8 sites" — because from here on the answer is the news,
+  // and the pages it opened are background. It stays readable, one tap away,
+  // for the case that matters: the answer's citations and the pages the task
+  // actually read are two different lists, and only one of them can be made up.
+  if (card.seenSources && card.seenSources.length > 0) {
+    card.railCollapsed = true;
+    renderSourceRail(card);
+  }
 
   // Prove-it's-done: the checks the server ran before closing the mission,
   // rendered as checklist lines. Present on both done and failed finishes —
@@ -2630,7 +2754,7 @@ function attach(runId, after = 0) {
     // answer and reports how many are dead — but it was never in this list, so
     // the work happened and the operator saw nothing. The `case` for it was
     // right there in handleEvent(), dead code waiting for a listener.
-    'sources.checked',
+    'sources.seen', 'sources.checked',
     'google.read',
     'run.completed', 'run.failed', 'run.cancelled',
     // Pausing is a declared run status — `setRunStatus` accepts 'paused' and

@@ -1493,3 +1493,47 @@ kbd {
   .plan-move, .plan-remove { min-width: 28px; padding: 4px; }
   .plan-edit { padding: 8px; }
 }
+
+/* -------------------------------------------------------- the source rail ---
+   Where a running task has been. Quiet by design — it sits under the steps,
+   shows the newest two rows while the task is moving, and folds to one line
+   when the answer arrives. Nothing here is a citation. */
+
+.rail {
+  margin: 6px 0 2px;
+  border: 1px solid var(--line-soft); border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--surface-2) 45%, var(--surface));
+  overflow: hidden;
+}
+.rail-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px; font-size: var(--text-xs); color: var(--muted);
+}
+.rail-head svg { width: 14px; height: 14px; flex: none; }
+.rail-title { font-weight: 550; color: var(--ink-soft); }
+.rail-count { font-variant-numeric: tabular-nums; }
+.rail-toggle {
+  margin-left: auto; padding: 2px 6px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--accent);
+  font: inherit; font-size: var(--text-xs); cursor: pointer;
+}
+.rail-toggle:hover { background: var(--surface-2); }
+.rail-list { margin: 0; padding: 0 10px 8px; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.rail-row {
+  display: flex; align-items: center; gap: 7px;
+  font-size: var(--text-xs); color: var(--ink-soft);
+}
+.rail-row svg { width: 13px; height: 13px; flex: none; color: var(--muted); }
+.rail-row.search svg { color: var(--accent); }
+.rail-text {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rail-via { flex: none; color: var(--muted); font-size: 10.5px; letter-spacing: .02em; }
+.rail.collapsed .rail-list { display: none; }
+/* The newest row gets a moment of attention: it is the only live part. */
+.rail:not(.collapsed) .rail-row:first-child .rail-text { color: var(--ink); }
+@media (prefers-reduced-motion: no-preference) {
+  .rail-row { animation: rail-in .18s var(--ease-out); }
+  @keyframes rail-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+}

@@ -489,6 +489,63 @@ describe('a heavy user walks the app', () => {
     }
   });
 
+  test('a task that goes looking says where it looked, while it looks', async () => {
+    // Two jobs in one: the rail has to fill from the run's own events (so a
+    // reconnect or a second device sees the same list), and it has to stay the
+    // size of a rail. A research task can open fifty pages; fifty rows of
+    // bookkeeping in the middle of a phone screen is not a feature.
+    const urls = Array.from({ length: 45 }, (_, i) => `https://example.com/page-${i}`);
+    const looking = await startApp(
+      new ScriptedEngine({
+        speed: 0,
+        steps: [
+          { tool: 'browse', toolArgs: { url: urls[0] } },
+          // The same page twice: one row, not two.
+          { tool: 'browse', toolArgs: { url: urls[0] } },
+          { tool: 'google_search', toolArgs: { query: 'best price for the blue widget' } },
+          // A page named in the narration, with no tool call of its own.
+          { log: `Reading ${urls[1]} now.` },
+          ...urls.slice(2).map((url) => ({ tool: 'fetch_page', toolArgs: { url } })),
+          { text: 'Done.', delayMs: 0 },
+        ],
+      }),
+    );
+
+    try {
+      const accept = await fetch(`${looking.base}/api/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ prompt: 'compare the blue widget prices' }),
+      });
+      assert.equal(accept.status, 201);
+      const runId = ((await accept.json()) as { run: { id: string } }).run.id;
+
+      const res = await fetch(`${looking.base}/api/runs/${runId}/stream`, {
+        headers: { cookie, accept: 'text/event-stream' },
+      });
+      const body = await res.text();
+      const frames = body
+        .split('\n\n')
+        .filter((chunk) => chunk.includes('event: sources.seen'))
+        .map((chunk) => JSON.parse(chunk.split('data: ')[1] ?? '{}') as { kind: string; url?: string; query?: string });
+
+      assert.ok(frames.length > 0, 'the rail is fed from the run itself');
+      assert.ok(
+        frames.some((f) => f.kind === 'search' && f.query === 'best price for the blue widget'),
+        'a search shows the question, not a fake URL',
+      );
+      assert.ok(frames.some((f) => f.url === urls[1]), 'a page named in the narration lands on the rail too');
+      const seen = frames.filter((f) => f.kind === 'site').map((f) => f.url);
+      assert.equal(new Set(seen).size, seen.length, 'no page is listed twice');
+      assert.ok(frames.length <= 40, `the rail stays bounded (got ${frames.length})`);
+      // Position in the stream matters: the rail fills *during* the run, not
+      // as a summary at the end.
+      assert.ok(body.indexOf('event: sources.seen') < body.indexOf('event: run.completed'), 'and it fills before the answer lands');
+    } finally {
+      await looking.close();
+    }
+  });
+
   test('the next task can be booked, the profile remembered, the budget read', async () => {
     const reminder = await api('/api/reminders', {
       method: 'POST',

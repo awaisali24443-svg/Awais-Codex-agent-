@@ -14,6 +14,8 @@
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
 /** More URLs than this in one report is noise; the check would take too long. */
 const MAX_URLS = 15;
+/** A live run reports where it looked; past this it is a firehose, not a rail. */
+export const MAX_SEEN_URLS = 40;
 /** A hung server must not hold the run's completion hostage. */
 const PER_REQUEST_MS = 8_000;
 /** Gentle on other people's servers and on our own event loop. */
@@ -91,4 +93,60 @@ export async function checkSources(urls: string[]): Promise<SourceCheck[]> {
   const workers = Array.from({ length: Math.min(CONCURRENCY, urls.length) }, () => worker());
   await Promise.all(workers);
   return results;
+}
+
+/**
+ * Every http(s) URL inside an arbitrary tool argument, in order and deduped.
+ *
+ * Tool arguments are whatever the agent decided to send — a string, a list of
+ * strings, an object three levels deep. This walks any of it and returns the
+ * URLs it finds, because "where is this task looking" is a question the
+ * operator should not have to answer by reading the transcript.
+ */
+export function urlsIn(value: unknown, limit = 5): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const walk = (node: unknown, depth: number): void => {
+    if (found.length >= limit || depth > 4) return;
+    if (typeof node === 'string') {
+      for (const url of extractUrls(node)) {
+        if (seen.has(url)) continue;
+        seen.add(url);
+        found.push(url);
+        if (found.length >= limit) return;
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+    if (node && typeof node === 'object') {
+      for (const item of Object.values(node as Record<string, unknown>)) walk(item, depth + 1);
+    }
+  };
+  walk(value, 0);
+  return found;
+}
+
+/** The field a search-shaped call keeps its question in, most specific first. */
+const QUERY_FIELDS = ['query', 'q', 'search_query', 'searchQuery', 'keywords', 'input', 'prompt', 'term'];
+/** Tools that are looking at the web rather than thinking about it. */
+const LOOKUP_RE = /search|browse|google|url|fetch|read_?page|website|web|http/i;
+
+/**
+ * The question a lookup tool is asking, or null when the call is not a lookup.
+ *
+ * Only called for calls whose *name* says they go and look, so a tool that
+ * happens to take a field called `input` is not mistaken for a search.
+ */
+export function searchQueryOf(name: string, args: unknown): string | null {
+  if (!LOOKUP_RE.test(name)) return null;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
+  const record = args as Record<string, unknown>;
+  for (const field of QUERY_FIELDS) {
+    const value = record[field];
+    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 140);
+  }
+  return null;
 }

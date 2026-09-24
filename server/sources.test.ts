@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { extractUrls, checkSources } from './sources.js';
+import { extractUrls, checkSources, searchQueryOf, urlsIn } from './sources.js';
 
 let server: http.Server;
 let base: string;
@@ -69,4 +69,42 @@ test('checkSources never rejects on unreachable hosts', async () => {
   const results = await checkSources(['http://127.0.0.1:1/unreachable']);
   assert.equal(results.length, 1);
   assert.equal(results[0].ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// The live rail's two questions: what page is this call opening, and what is
+// this call asking? Both are answered from whatever the agent sent, which is
+// never a shape anyone promised.
+// ---------------------------------------------------------------------------
+
+test('urls are found wherever the agent buried them', () => {
+  assert.deepEqual(urlsIn({ url: 'https://example.com/a' }), ['https://example.com/a']);
+  assert.deepEqual(urlsIn(['https://example.com/a', 'https://example.com/b']), [
+    'https://example.com/a',
+    'https://example.com/b',
+  ]);
+  // Nested, mixed, and with the trailing punctuation that comes from prose.
+  assert.deepEqual(
+    urlsIn({ steps: [{ action: { target: 'see https://example.com/c.' } }] }),
+    ['https://example.com/c'],
+  );
+  // Deduped within one call, and capped — the server's own cap is the last
+  // line of defence, not the only one.
+  assert.deepEqual(urlsIn(['https://example.com/a', 'https://example.com/a']), ['https://example.com/a']);
+  assert.equal(urlsIn(Array.from({ length: 9 }, (_, i) => `https://example.com/${i}`)).length, 5);
+  assert.deepEqual(urlsIn({ nothing: 'here' }), []);
+  assert.deepEqual(urlsIn(null), []);
+});
+
+test('a question is read from a lookup, and only from a lookup', () => {
+  assert.equal(searchQueryOf('google_search', { query: 'blue widget prices' }), 'blue widget prices');
+  assert.equal(searchQueryOf('browse', { url: 'https://example.com' }), null, 'a browse with no question is a page, not a search');
+  assert.equal(searchQueryOf('read_file', { path: '/tmp/x' }), null);
+  // A tool that happens to take a field called `input` is not a search.
+  assert.equal(searchQueryOf('run_shell', { input: 'ls -la' }), null);
+  assert.equal(searchQueryOf('web_search', { q: '  spaced  ' }), 'spaced');
+  assert.equal(searchQueryOf('search', { query: '   ' }), null, 'blank is not a question');
+  assert.equal(searchQueryOf('search', null), null);
+  assert.equal(searchQueryOf('fetch_page', { url: 'https://example.com' }), null);
+  assert.equal(searchQueryOf('search_web', { query: 'x'.repeat(400) })?.length, 140, 'and it is bounded');
 });
