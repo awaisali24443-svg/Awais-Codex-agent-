@@ -188,6 +188,38 @@ describe('the request it sends', () => {
     assert.equal(post?.body.environment, 'remote');
   });
 
+  test('the pictures the operator attached travel in the same request, in order', async () => {
+    fake = await startFake((_req, res) => sse(res, happyStream()));
+    const engine = engineFor(fake.base);
+    const { ctx } = makeCtx({
+      images: [
+        { name: 'broken.png', mimeType: 'image/png', data: 'AAAB' },
+        { name: 'better.png', mimeType: 'image/png', data: 'CCC D'.replace(' ', '') },
+      ],
+    });
+
+    await engine.run('match the second one', ctx);
+
+    const post = fake.requests.find((r) => r.method === 'POST');
+    const input = post?.body.input as Array<Record<string, unknown>>;
+    assert.equal(input[0].type, 'text');
+    assert.equal(input[0].text, 'match the second one', 'the words still come first');
+    assert.deepEqual(input[1], { type: 'image', mime_type: 'image/png', data: 'AAAB' });
+    assert.equal(input[2].data, 'CCCD', 'each image is its own part, in the order it was picked');
+    assert.equal(input[2].name, undefined, 'and the part carries no field the API did not ask for');
+  });
+
+  test('a task with no images sends exactly the request it sent before', async () => {
+    fake = await startFake((_req, res) => sse(res, happyStream()));
+    const engine = engineFor(fake.base);
+    const { ctx } = makeCtx();
+
+    await engine.run('hello', ctx);
+
+    const post = fake.requests.find((r) => r.method === 'POST');
+    assert.deepEqual(post?.body.input, [{ type: 'text', text: 'hello' }]);
+  });
+
   test('sends the key as a header, never in the URL', async () => {
     fake = await startFake((_req, res) => sse(res, happyStream()));
     const { ctx } = makeCtx();

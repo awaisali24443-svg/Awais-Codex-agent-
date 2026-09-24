@@ -542,6 +542,9 @@ export class RunExecutor {
         signal: controller.signal,
         previousInteractionId: run.previousInteractionId,
         environmentId: run.environmentId,
+        // Pictures the operator attached. In memory only — a run resumed after a
+        // restart has none, which is the same fate the folded-in file text has.
+        images: run.images,
 
         text: (chunk) => {
           const scanned = decisions ? decisions.push(chunk) : { text: chunk, decisions: [] };

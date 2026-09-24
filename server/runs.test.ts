@@ -211,6 +211,47 @@ describe('attached files', () => {
     const active = await api('/api/runs/active');
     assert.equal(active.body.run, null, 'a refused request starts nothing');
   });
+
+  test('an SVG is refused as a picture, in a sentence that names the file', async () => {
+    const { status, body } = await api('/api/runs', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: 'Look at this',
+        images: [{ name: 'logo.svg', mimeType: 'image/svg+xml', data: 'AAAA' }],
+      }),
+    });
+    assert.equal(status, 400);
+    assert.equal(body.error, 'invalid_images');
+    assert.match(body.message, /logo\.svg/);
+    assert.match(body.message, /SVG/);
+    const active = await api('/api/runs/active');
+    assert.equal(active.body.run, null, 'and nothing starts');
+  });
+
+  test('a picture rides the request and stops at the engine, naming itself in the thread', async () => {
+    // The row is what the operator reads and what an API response carries, so
+    // the pixels must not be in it — while the run the executor gets must have
+    // them, or the model is asked about a picture it never received.
+    const { status, body } = await api('/api/runs', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: 'Match this screenshot',
+        images: [{ name: 'shot.png', mimeType: 'image/png', data: 'A'.repeat(120) }],
+      }),
+    });
+    assert.equal(status, 201, JSON.stringify(body));
+    const stored = JSON.stringify(body.run);
+    assert.ok(!stored.includes('A'.repeat(120)), 'no pixels in the run the client gets back');
+    assert.match(body.run.prompt, /🖼 1 image: shot\.png/, 'the thread says what was sent');
+
+    // It runs to the end with the picture attached: the images are handed to the
+    // executor, not just accepted and dropped.
+    const finished = await waitFor(async () => {
+      const run = await api(`/api/runs/${body.run.id}`);
+      return ['completed', 'failed', 'cancelled'].includes(run.body.run.status) ? run : null;
+    });
+    assert.equal(finished.body.run.status, 'completed');
+  });
 });
 
 async function waitFor<T>(fn: () => Promise<T | null>, timeoutMs = 4_000): Promise<T> {

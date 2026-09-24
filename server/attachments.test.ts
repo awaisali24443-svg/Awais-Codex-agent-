@@ -11,8 +11,11 @@ import {
   ATTACHMENT_LIMITS,
   attachmentNames,
   attachmentSummary,
+  imageSummary,
   parseAttachments,
+  parseImages,
   withAttachments,
+  withImageNote,
 } from './attachments.js';
 
 const file = (name: string, text: string) => ({ name, text });
@@ -64,6 +67,95 @@ describe('attached files are bounded', () => {
     assert.equal(parseAttachments([file('', 'x')]).ok, false);
     assert.equal(parseAttachments([{ name: 'x.txt' }]).ok, false);
     assert.equal(parseAttachments(['nope']).ok, false);
+  });
+});
+
+describe('an image the operator attached', () => {
+  const png = (name = 'shot.png', size = 800) => ({
+    name,
+    mimeType: 'image/png',
+    data: 'A'.repeat(size),
+  });
+
+  test('a well-formed image is accepted as it arrived', () => {
+    const parsed = parseImages([png()]);
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+    assert.equal(parsed.images.length, 1);
+    assert.equal(parsed.images[0].mimeType, 'image/png');
+    assert.equal(parsed.images[0].name, 'shot.png');
+  });
+
+  test('a data URL is accepted and stripped to the bytes the API wants', () => {
+    const parsed = parseImages([
+      { name: 'shot.png', data: `data:image/png;base64,${'A'.repeat(40)}` },
+    ]);
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+    assert.equal(parsed.images[0].data.startsWith('data:'), false, 'no prefix reaches the API');
+    assert.equal(parsed.images[0].mimeType, 'image/png', 'the mime comes from the URL');
+  });
+
+  test('every refusal is a sentence naming the file', () => {
+    const cases: Array<[unknown, RegExp]> = [
+      [[{ name: 'shot.svg', mimeType: 'image/svg+xml', data: 'AAAA' }], /shot\.svg/],
+      [[{ name: 'shot.png', mimeType: 'image/png', data: 'not base64 !!!' }], /shot\.png/],
+      [[{ mimeType: 'image/png', data: 'AAAA' }], /name/],
+      [[{ name: 'shot.png', data: 'AAAA' }], /shot\.png/],
+      ['nope', /list/],
+    ];
+    for (const [input, pattern] of cases) {
+      const parsed = parseImages(input);
+      assert.equal(parsed.ok, false, `expected a refusal for ${JSON.stringify(input)}`);
+      if (parsed.ok) continue;
+      assert.match(parsed.message, pattern);
+    }
+  });
+
+  test('an SVG is refused by name, because it is markup, not pixels', () => {
+    const parsed = parseImages([{ name: 'logo.svg', mimeType: 'image/svg+xml', data: 'AAAA' }]);
+    assert.equal(parsed.ok, false);
+    if (parsed.ok) return;
+    assert.match(parsed.message, /SVG|not a picture the model can look at|image type/);
+  });
+
+  test('the caps are the caps, and the sentence says which one broke', () => {
+    const many = Array.from({ length: 4 }, (_, i) => png(`shot${i}.png`));
+    const tooMany = parseImages(many);
+    assert.equal(tooMany.ok, false);
+    if (!tooMany.ok) assert.match(tooMany.message, /at most 3 images/);
+
+    const huge = parseImages([png('huge.png', 2_000_001)]);
+    assert.equal(huge.ok, false);
+    if (!huge.ok) assert.match(huge.message, /huge\.png/);
+
+    const fat = parseImages([png('a.png', 1_500_000), png('b.png', 1_500_000), png('c.png', 1_500_000)]);
+    assert.equal(fat.ok, false);
+    if (!fat.ok) assert.match(fat.message, /add up to more than/);
+  });
+
+  test('no images is simply no images', () => {
+    for (const raw of [undefined, null, []]) {
+      const parsed = parseImages(raw);
+      assert.equal(parsed.ok, true);
+      if (parsed.ok) assert.deepEqual(parsed.images, []);
+    }
+  });
+
+  test('the thread hears what was sent, not what is in it', () => {
+    const images = [png('shot.png'), { name: 'chart.jpg', mimeType: 'image/jpeg', data: 'B'.repeat(60) }];
+    const summary = imageSummary(images);
+    assert.match(summary, /1 image|2 images/);
+    assert.ok(summary.includes('shot.png') && summary.includes('chart.jpg'), 'named');
+    assert.ok(!summary.includes('AAAA'), 'and no pixels in the message');
+    assert.equal(imageSummary([]), '', 'nothing when nothing was attached');
+  });
+
+  test('the engine is told the pictures are there, in order', () => {
+    const withNote = withImageNote('Build this page.', [png('shot.png')]);
+    assert.ok(withNote.startsWith('Build this page.'), 'the operator\u2019s words still come first');
+    assert.ok(withNote.includes('shot.png'), 'the note names the image');
+    assert.equal(withImageNote('Just this.', []), 'Just this.', 'and adds nothing when there is no image');
   });
 });
 

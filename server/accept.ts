@@ -26,7 +26,15 @@ import { BudgetExceededError, consumeRunBudget, peekDayTotal, refundRunBudget, t
 import { looksComplex } from './planning.js';
 import { looksLikeUiMission } from './design.js';
 import { directionPayload } from './design/directions.js';
-import { attachmentSummary, withAttachments, type Attachment } from './attachments.js';
+import {
+  attachmentSummary,
+  imageSummary,
+  parseImages,
+  withAttachments,
+  withImageNote,
+  type Attachment,
+  type ImageAttachment,
+} from './attachments.js';
 import { maybeAskPlanApproval } from './whatsapp/approvals.js';
 import { RunConflictError, createRun, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
 
@@ -72,6 +80,8 @@ export interface AcceptInput {
    * `parseAttachments`; their text goes to the engine only.
    */
   attachments?: Attachment[];
+  /** Pictures that arrived with the task, already validated by parseImages. */
+  images?: ImageAttachment[];
 }
 
 export type AcceptResult =
@@ -191,14 +201,16 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
   if (active) return { ok: false, reason: 'in_progress', active };
 
   const attachments = input.attachments ?? [];
+  const images = input.images ?? [];
 
   let run: Run;
   try {
     run = await createRun(db, {
       // The thread shows the operator's words plus a line naming the files; the
       // engine gets the words plus the files themselves.
-      prompt: prompt + attachmentSummary(attachments),
-      enginePrompt: withAttachments(prompt, attachments),
+      prompt: prompt + attachmentSummary(attachments) + imageSummary(images),
+      enginePrompt: withImageNote(withAttachments(prompt, attachments), images),
+      images,
       kind: input.kind,
       engine: config.engineName,
       conversationId: input.conversationId ?? null,
@@ -251,7 +263,10 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       // serialised writer: the stream can never show the plan before it.
       await executor.announce(run.id, 'run.plan_started', {});
       const held = await getRun(db, run.id);
-      const planning = draftPlan(deps, held ?? run);
+      // The planning pass is handed the images too: a screenshot decides what
+      // the plan should be, and asking for a plan about a picture it cannot see
+      // is how a plan comes back about the wrong thing.
+      const planning = draftPlan(deps, { ...(held ?? run), images: run.images });
       console.log(`[run] ${run.id} planning pass started in the background`);
       return { ok: true, run: held ?? run, remaining, bucket, planning };
     }

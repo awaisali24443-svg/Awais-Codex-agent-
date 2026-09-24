@@ -63,7 +63,7 @@ import {
 } from '../runs.js';
 import { forkBranch, listBranches } from '../branches.js';
 import { getMissionSteps, resumeFromStep } from '../mission_steps.js';
-import { parseAttachments } from '../attachments.js';
+import { parseAttachments, parseImages } from '../attachments.js';
 import { canShareRun, newShareToken, shareUrl } from '../share.js';
 
 export interface RunRouteDeps {
@@ -231,6 +231,14 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       return;
     }
 
+    // Pictures. Base64 travels in the request and stops at the engine call: the
+    // row keeps the operator's words plus a line naming the images.
+    const pictures = parseImages((body as { images?: unknown }).images);
+    if (!pictures.ok) {
+      res.status(400).json({ error: 'invalid_images', message: pictures.message });
+      return;
+    }
+
     // Same rules as the phone: one task at a time, one budget, one code path.
     const result = await acceptRun(
       { db, executor, config, secrets },
@@ -245,6 +253,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         deepResearch: research.deepResearch,
         researchBudgetMinutes: research.researchBudgetMinutes,
         attachments: parsed.attachments,
+        images: pictures.images,
       },
     );
 

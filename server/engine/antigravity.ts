@@ -264,9 +264,21 @@ export class AntigravityEngine implements Engine {
       log: (message: string, level?: 'info' | 'warn' | 'error'): void => ctx.log(message, level),
     };
 
+    // The prompt is the first part and the pictures follow it, in the order the
+    // operator picked them — the documented shape for this agent. Without
+    // images the input is exactly what it always was, so a task that attached
+    // nothing sends nothing new.
+    const images = ctx.images ?? [];
     const payload: Record<string, unknown> = {
       agent: this.agent,
-      input: [{ type: 'text', text: prompt }],
+      input: [
+        { type: 'text', text: prompt },
+        ...images.map((image) => ({
+          type: 'image',
+          mime_type: image.mimeType,
+          data: image.data,
+        })),
+      ],
       environment: ctx.environmentId?.trim() || 'remote',
       stream: true,
       store: true,

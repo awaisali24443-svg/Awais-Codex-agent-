@@ -31,6 +31,46 @@ const html = () => read('web/index.html');
 const css = () => read('web/styles.css');
 const app = () => read('web/app.js');
 
+describe('a picture in the composer', () => {
+  test('the picker offers images, and the client carries them as base64', () => {
+    assert.ok(html().includes('image/*'), 'the file picker offers pictures');
+    const client = app();
+    assert.ok(client.includes('readAsDataURL'), 'read in the browser, never uploaded to be looked at');
+    assert.ok(client.includes("if (file.type.startsWith('image/'))"), 'pictures take their own path');
+    assert.ok(
+      client.indexOf("file.type.startsWith('image/')") < client.indexOf('not a text file'),
+      'and a PNG is not read as text first and refused for being binary',
+    );
+    assert.ok(client.includes('images.push({ name: file.name.slice(0, 120), mimeType: mime, data })'));
+    assert.ok(client.includes("...(pictures.length ? { images: pictures } : {})"), 'sent with the prompt');
+  });
+
+  test('the caps are the server\u2019s caps, refused with a sentence naming the file', () => {
+    const client = app();
+    assert.ok(client.includes('const IMAGE_LIMIT = 3;'), 'three pictures');
+    assert.ok(client.includes('const IMAGE_BYTES = 2_000_000;'), 'and the same per-image ceiling');
+    assert.ok(client.includes('const IMAGE_TOTAL = 4_000_000;'), 'and the same total');
+    for (const phrase of ['only ${IMAGE_LIMIT} images per task', 'larger than ${formatBytes(IMAGE_BYTES)}', 'the pictures add up to more than']) {
+      assert.ok(client.includes(phrase), `and it says so: ${phrase}`);
+    }
+  });
+
+  test('a picture shows as a thumbnail with its name, and can be taken back off', () => {
+    const client = app();
+    assert.ok(client.includes('<img class="thumb" alt="" />'), 'a thumbnail, not a filename');
+    assert.ok(client.includes('thumb.src = `data:${picture.mimeType};base64,${picture.data}`'), 'drawn from the bytes already in hand');
+    assert.ok(client.includes("aria-label=\"Remove this picture\""), 'removable');
+    assert.ok(client.includes('images = images.filter((i) => i !== picture);'), 'and removing it removes it');
+    assert.ok(css().includes('.attach-chip .thumb'), 'sized like a chip, not a photo');
+  });
+
+  test('a task with no picture sends exactly what it sent before', () => {
+    const client = app();
+    assert.ok(client.includes("...(files.length ? { attachments: files } : {}),"), 'files unchanged');
+    assert.ok(!client.includes('images: pictures, }'), 'and no empty images array is invented');
+  });
+});
+
 describe('the composer fits a phone', () => {
   test('no token cap and no estimate chip', () => {
     for (const marker of ['token-cap', 'estimate-line', 'estimate-text', 'cap-toggle']) {

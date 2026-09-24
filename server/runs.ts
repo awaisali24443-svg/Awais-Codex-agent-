@@ -13,6 +13,7 @@
  *   - `finishRun` compacts intermediate `*.snapshot` events (they are
  *     cumulative, so only the first and last of each stream are kept)
  */
+import type { ImageAttachment } from './attachments.js';
 import crypto from 'crypto';
 
 import { appendEvent, type Db } from './db.js';
@@ -75,6 +76,15 @@ export interface Run {
   resumeFromStep: number | null;
   /** The direction the operator chose for a build, or null for the automatic pick. */
   direction: string | null;
+  /**
+   * Pictures that arrived with this task, in the order they were picked.
+   *
+   * In memory only, exactly like the wire prompt: `getRun` never fills it, so a
+   * run read back from the database has no images and a JSON response can never
+   * carry megabytes of pixels. They exist between the request and the engine
+   * call, which is the only interval in which they are useful.
+   */
+  images?: ImageAttachment[];
   /** The operator-visible plan, set by the planning pass; null until then. */
   plan: PlanStep[] | null;
   /**
@@ -311,6 +321,8 @@ export interface CreateRunInput {
    * the operator wrote.
    */
   enginePrompt?: string | null;
+  /** Pictures attached to this task. Never stored; see `Run.images`. */
+  images?: ImageAttachment[] | null;
 }
 
 /**
@@ -384,9 +396,15 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
   const run = await getRun(db, id);
   if (!run) throw new Error(`createRun: run ${id} vanished immediately after insert`);
   const enginePrompt = input.enginePrompt?.trim();
+  const images = input.images ?? [];
   // The caller passes this object straight to the executor; the database row it
-  // was read from keeps the operator's own words.
-  return enginePrompt ? { ...run, prompt: enginePrompt } : run;
+  // was read from keeps the operator's own words. Images ride the same way, for
+  // the same reason: they are input to the engine call, not part of the record.
+  return {
+    ...run,
+    ...(enginePrompt ? { prompt: enginePrompt } : {}),
+    ...(images.length ? { images } : {}),
+  };
 }
 
 export async function setRunStatus(

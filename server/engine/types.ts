@@ -11,6 +11,7 @@
  * "nothing is lost to a dropped connection" guarantee in a single place
  * (executor.ts) instead of spread across every provider integration.
  */
+import type { ImageAttachment } from '../attachments.js';
 
 export interface EngineContext {
   readonly runId: string;
@@ -24,6 +25,16 @@ export interface EngineContext {
    */
   readonly previousInteractionId: string | null;
   readonly environmentId: string | null;
+
+  /**
+   * Pictures the operator attached to this task, in the order they picked them.
+   *
+   * Carried in the request, never stored: the pixels travel from the composer to
+   * this call and go out as parts of the same input the prompt does. An engine
+   * that cannot take images ignores the field, which is why it is optional —
+   * the same reason `artifact` above is.
+   */
+  readonly images?: ImageAttachment[];
 
   /** Append to the assistant's visible answer. */
   text(chunk: string): void;

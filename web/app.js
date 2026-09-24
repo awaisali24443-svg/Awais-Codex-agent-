@@ -3809,18 +3809,43 @@ el.pingCheck.addEventListener('change', refreshResearchPicker);
 /**
  * What the composer will send with the prompt.
  *
- * Text files only, read in the browser and carried inside the request: the
- * sandbox is not needed to look at a note, and a file that never leaves the
+ * Notes and pictures, both read in the browser and carried inside the request:
+ * the sandbox is not needed to look at a note, and a file that never leaves the
  * phone cannot leak. The caps are the server's caps, repeated here so the
- * operator is told before a 200 KB upload rather than after it.
+ * operator is told before a 200 KB upload rather than after it — and so a
+ * picture that gets past this cannot be refused there.
  */
 const ATTACH_LIMIT = 3;
 const ATTACH_BYTES = 200_000;
 const ATTACH_TOTAL = 400_000;
+/**
+ * Pictures, which the operator's phone takes faster than it types. Bigger caps
+ * than a text file and the same idea: read in the browser, carried inside the
+ * request, refused here rather than by the server. The numbers are the server's
+ * (base64 characters), so a picture that gets past this cannot be refused there.
+ */
+const IMAGE_LIMIT = 3;
+const IMAGE_BYTES = 2_000_000;
+const IMAGE_TOTAL = 4_000_000;
 let attachments = [];
+let images = [];
 
 function attachmentBytes(list = attachments) {
   return list.reduce((sum, a) => sum + a.text.length, 0);
+}
+
+function imageBytes(list = images) {
+  return list.reduce((sum, i) => sum + i.data.length, 0);
+}
+
+/** A file read as a data URL, so nothing is uploaded anywhere to look at it. */
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('unreadable'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderAttachments(message = '') {
@@ -3831,6 +3856,22 @@ function renderAttachments(message = '') {
     bad.className = 'attach-error';
     bad.textContent = message;
     el.attachments.append(bad);
+  }
+  // Pictures first: a thumbnail is the fastest way to know the right one went.
+  for (const picture of images) {
+    const chip = document.createElement('span');
+    chip.className = 'attach-chip';
+    chip.innerHTML = '<img class="thumb" alt="" /><span class="name"></span><span class="size"></span>' +
+      '<button type="button" aria-label="Remove this picture"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+    const thumb = /** @type {HTMLImageElement | null} */ (chip.querySelector('.thumb'));
+    if (thumb) thumb.src = `data:${picture.mimeType};base64,${picture.data}`;
+    chip.querySelector('.name').textContent = picture.name;
+    chip.querySelector('.size').textContent = formatBytes(picture.data.length);
+    chip.querySelector('button').addEventListener('click', () => {
+      images = images.filter((i) => i !== picture);
+      renderAttachments();
+    });
+    el.attachments.append(chip);
   }
   for (const file of attachments) {
     const chip = document.createElement('span');
@@ -3849,6 +3890,7 @@ function renderAttachments(message = '') {
 
 function clearAttachments() {
   attachments = [];
+  images = [];
   el.fileInput.value = '';
   renderAttachments();
 }
@@ -3859,6 +3901,30 @@ el.fileInput.addEventListener('change', async () => {
   const chosen = [...(el.fileInput.files ?? [])];
   const refused = [];
   for (const file of chosen) {
+    // A picture takes a different path: base64, its own cap, its own count.
+    // `image/*` is what the picker offers and what the agent can look at; an
+    // SVG arrives here as image/svg+xml and is refused on the server, which
+    // says why better than a silent skip would.
+    if (file.type.startsWith('image/')) {
+      if (images.length >= IMAGE_LIMIT) { refused.push(`${file.name}: only ${IMAGE_LIMIT} images per task`); continue; }
+      if (file.size > IMAGE_BYTES) { refused.push(`${file.name}: larger than ${formatBytes(IMAGE_BYTES)}`); continue; }
+      if (imageBytes() + file.size > IMAGE_TOTAL) {
+        refused.push(`${file.name}: the pictures add up to more than ${formatBytes(IMAGE_TOTAL)}`);
+        continue;
+      }
+      try {
+        const url = await readAsDataUrl(file);
+        const comma = url.indexOf(',');
+        if (comma === -1) { refused.push(`${file.name}: could not be read`); continue; }
+        const mime = (url.slice(5, comma).split(';')[0] || file.type).toLowerCase();
+        const data = url.slice(comma + 1);
+        if (data.length > IMAGE_BYTES) { refused.push(`${file.name}: larger than ${formatBytes(IMAGE_BYTES)}`); continue; }
+        images.push({ name: file.name.slice(0, 120), mimeType: mime, data });
+      } catch {
+        refused.push(`${file.name}: could not be read`);
+      }
+      continue;
+    }
     if (attachments.length >= ATTACH_LIMIT) { refused.push(`${file.name}: only ${ATTACH_LIMIT} files per task`); continue; }
     if (file.size > ATTACH_BYTES) { refused.push(`${file.name}: larger than ${formatBytes(ATTACH_BYTES)}`); continue; }
     if (attachmentBytes() + file.size > ATTACH_TOTAL) { refused.push(`${file.name}: the files add up to more than ${formatBytes(ATTACH_TOTAL)}`); continue; }
@@ -3886,6 +3952,7 @@ el.composer.addEventListener('submit', async (event) => {
   const budgetMinutes = researchBudgetMinutes();
 
   const files = attachments.map(({ name, text }) => ({ name, text }));
+  const pictures = images.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
 
   // The ping, the research mode and the files are per task, not sticky
   // preferences: they are reset with the composer.
@@ -3894,7 +3961,7 @@ el.composer.addEventListener('submit', async (event) => {
   refreshResearchPicker();
   el.note.textContent = '';
   clearAttachments();
-  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes, files });
+  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes, files, pictures });
 });
 
 /**
@@ -3919,7 +3986,7 @@ function pendingRunNotice() {
 /* Start one run: the single path for the composer and for branch forks.
    The run is filed under the current branch, so a forked "what if" stays in
    its own branch instead of leaking back into the original thread. */
-async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15, files = [] } = {}) {
+async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15, files = [], pictures = [] } = {}) {
   el.prompt.value = '';
   autoGrow();
   el.send.disabled = true;
@@ -3942,6 +4009,7 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
         branchId: state.branchId,
         notifyWhatsapp,
         ...(files.length ? { attachments: files } : {}),
+        ...(pictures.length ? { images: pictures } : {}),
         ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: budgetMinutes } : {}),
       }),
     });
