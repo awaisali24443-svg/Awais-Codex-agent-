@@ -11,6 +11,10 @@ import {
   takeTraceRows,
   thinkingLabel,
   formatElapsedShort,
+  quietSeconds,
+  elapsedWords,
+  waitLine,
+  pushFrame,
 } from './timeline.js';
 import {
   PANEL_DOCK_MIN_WIDTH,
@@ -590,6 +594,9 @@ function renderNotice(text, bad = false, icon = 'info') {
 }
 
 /* The live card showing this run, if the thread already has one. */
+/** Live card handles, by element. A reused card replaces its entry. */
+const cardHandles = new WeakMap();
+
 function cardFor(runId) {
   if (!runId) return null;
   return el.thread.querySelector(`.run[data-run-id="${runId}"]`);
@@ -612,7 +619,7 @@ function existingCard(runId) {
   card.classList.remove('work-collapsed');
   thinking.open = true;
   stopRunClock({ card });
-  return {
+  const handle = {
     card,
     files: card.querySelector('.files'),
     sources: card.querySelector('.sources-slot'),
@@ -623,6 +630,9 @@ function existingCard(runId) {
     planIndex: new Map(),
     thinking,
     trace: card.querySelector('.trace'),
+    quietChip: card.querySelector('.thinking-quiet'),
+    raw: card.querySelector('.raw'),
+    rawToggle: card.querySelector('.trace-raw-toggle'),
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
@@ -635,6 +645,14 @@ function existingCard(runId) {
     // story: a replay must not stack a second copy of it on the first.
     thinkingText: '',
     thinkingTail: '',
+    // The Raw switch: every frame as it arrived, newest kept, and the phase
+    // sentence for the wait line while the panel is still empty.
+    frames: [],
+    framesDropped: 0,
+    framesSeen: 0,
+    rawOn: false,
+    phase: null,
+    quiet: null,
     traceRows: 0,
     traceLive: null,
     thinkingKind: 'narration',
@@ -644,6 +662,8 @@ function existingCard(runId) {
     elapsed: null,
     startedAt: Date.now(),
   };
+  cardHandles.set(card, handle);
+  return handle;
 }
 
 /**
@@ -707,6 +727,9 @@ function startRunClock(card) {
   const tick = () => {
     const seconds = (Date.now() - card.startedAt) / 1000;
     if (card.thinkingClock) card.thinkingClock.textContent = `${seconds.toFixed(0)}s`;
+    // The wait line carries the same number in words, and it is the only thing
+    // on the panel until the model says something.
+    updateWaitLine(card);
   };
   tick();
   card.timer = setInterval(tick, 1_000);
@@ -829,11 +852,15 @@ function createRunCard(runId = null) {
       <span class="spinner"></span>
       <span class="label">Thinking</span>
       <span class="clock"></span>
+      <span class="thinking-quiet" hidden></span>
       <span class="meta"></span>
+      <button type="button" class="trace-raw-toggle" aria-pressed="false"
+              title="Show every frame the browser received">Raw</button>
       <svg class="thinking-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
     </summary>
     <div class="thinking-body">
       <div class="trace" aria-live="polite" aria-label="What the model is doing"></div>
+      <div class="raw" hidden aria-label="Raw frames received"></div>
       <p class="thinking-wait"></p>
     </div>`;
   // The panel is open from the first second, and for the first while it has
@@ -888,7 +915,7 @@ function createRunCard(runId = null) {
   startRunClock(card);
   scrollToEnd();
 
-  return {
+  const handle = {
     card,
     files,
     sources,
@@ -899,6 +926,9 @@ function createRunCard(runId = null) {
     planIndex: new Map(),
     thinking,
     trace: thinking.querySelector('.trace'),
+    quietChip: thinking.querySelector('.thinking-quiet'),
+    raw: thinking.querySelector('.raw'),
+    rawToggle: thinking.querySelector('.trace-raw-toggle'),
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
@@ -909,6 +939,14 @@ function createRunCard(runId = null) {
     // the durable text, and the un-acknowledged tail drawn on top of it
     thinkingText: '',
     thinkingTail: '',
+    // The Raw switch: every frame as it arrived, newest kept, and the phase
+    // sentence for the wait line while the panel is still empty.
+    frames: [],
+    framesDropped: 0,
+    framesSeen: 0,
+    rawOn: false,
+    phase: null,
+    quiet: null,
     // The trace: how many rows are drawn, the element the unfinished fragment
     // is being written into (so the caret has somewhere to live), and which
     // channel the words are coming from.
@@ -921,6 +959,8 @@ function createRunCard(runId = null) {
     elapsed: null,
     startedAt: Date.now(),
   };
+  cardHandles.set(card, handle);
+  return handle;
 }
 
 function drawThinking(card) {
@@ -1016,6 +1056,88 @@ function rebuildTrace(card, full) {
   for (const row of rows) addTraceRow(card, row, 'thought');
   if (tail.trim()) addTraceRow(card, tail.trim(), 'thought');
   drawThinking(card);
+}
+
+/**
+ * Keep the frame, and show it if the switch is on.
+ *
+ * This is the answer to "is it working, or is the screen stuck": every event
+ * the browser received, verbatim, with its time. The queue is bounded and the
+ * count of what was dropped is kept, because a long run emits thousands of
+ * frames and a phone has one screen.
+ */
+function noteFrame(card, name, data) {
+  const next = pushFrame(card.frames, { name, data, at: Date.now() }, 300);
+  card.frames = next.frames;
+  card.framesDropped += next.overflow;
+  card.framesSeen += 1;
+  if (card.rawOn) renderRaw(card);
+}
+
+/** Draw the raw feed: every frame, newest last, with what was dropped stated. */
+function renderRaw(card) {
+  if (!card.raw) return;
+  const rows = card.frames.map((frame) => {
+    const when = new Date(frame.at).toLocaleTimeString(undefined, { hour12: false });
+    let payload = '';
+    try {
+      payload = JSON.stringify(frame.data ?? {});
+    } catch {
+      payload = '[unserialisable]';
+    }
+    return `<div class="raw-row"><span class="raw-when">${escapeHtml(when)}</span>` +
+      `<span class="raw-name">${escapeHtml(frame.name)}</span>` +
+      `<span class="raw-payload">${escapeHtml(payload)}</span></div>`;
+  });
+  const dropped = card.framesDropped
+    ? `<p class="raw-note">Showing the last ${card.frames.length} of ${card.framesSeen} frames received.</p>`
+    : '';
+  card.raw.innerHTML = dropped + rows.join('');
+}
+
+/** Turn the Raw feed on or off, rendering the frames already held. */
+function setRaw(card, on) {
+  card.rawOn = on;
+  if (card.raw) card.raw.hidden = !on;
+  if (card.rawToggle) card.rawToggle.setAttribute('aria-pressed', String(on));
+  if (on) renderRaw(card);
+}
+
+/**
+ * The line above an empty panel: what the task is doing, for how long, and
+ * whether the model has gone quiet. It is redrawn by the clock, so a minute of
+ * waiting visibly passes instead of looking like a freeze.
+ */
+function updateWaitLine(card) {
+  // The empty-state sentence, which the first token removes for good.
+  const node = card.thinkingBody?.querySelector('.thinking-wait');
+  if (node) {
+    node.textContent = waitLine({
+      phase: card.phase,
+      seconds: (Date.now() - card.startedAt) / 1000,
+      quiet: card.quiet,
+    });
+  }
+  // And the same fact on the panel head, where it cannot be scrolled away.
+  // Once the trace has rows the operator is reading the *bottom* of the panel,
+  // so a silence that only exists above the rows is a silence nobody sees —
+  // which is how a task looks frozen while it is working normally, and how a
+  // genuinely stuck one looks identical.
+  const chip = card.quietChip;
+  if (!chip) return;
+  if (typeof card.quiet === 'number') {
+    chip.hidden = false;
+    chip.textContent = `quiet ${elapsedWords(card.quiet)}`;
+  } else {
+    chip.hidden = true;
+    chip.textContent = '';
+  }
+}
+
+/** Set the phase the wait line reports ("Drafting the plan", "Step 2 of 7"). */
+function setPhase(card, phase) {
+  card.phase = phase;
+  updateWaitLine(card);
 }
 
 /** Whatever is still in the tail is a row the moment the thinking stops. */
@@ -1685,6 +1807,10 @@ function iconForTool(name = '') {
 /* ------------------------------------------------------------ event sink -- */
 
 function handleEvent(card, event, data) {
+  // Captured before dispatch, so the Raw view shows the frame even when the
+  // handler does nothing with it — which is exactly the case someone turns it
+  // on to diagnose.
+  if (card) noteFrame(card, event, data);
   switch (event) {
     case 'run.started':
       note('');
@@ -1693,6 +1819,7 @@ function handleEvent(card, event, data) {
       if (typeof data.conversationId === 'string') state.runConversationId = data.conversationId;
       state.runStatus = 'running';
       card.prompt = typeof data.prompt === 'string' ? data.prompt : '';
+      setPhase(card, 'Working');
       // The definitive budget line arrives on 'research.started' below; this
       // early mark means a replay that starts mid-run still shows the mode.
       if (data.deepResearch) {
@@ -1719,6 +1846,8 @@ function handleEvent(card, event, data) {
       // and forty-five rows in a timeline is not information either.
       if (HEARTBEAT_RE.test(message)) {
         addStep(card, 'heartbeat', { name: message, icon: 'info', status: 'note' });
+        card.quiet = quietSeconds(message);
+        updateWaitLine(card);
         break;
       }
       // Keyed by the message, not by position: an engine that retries says the
@@ -1735,6 +1864,9 @@ function handleEvent(card, event, data) {
 
     case 'plan.milestone':
       updatePlan(card, data);
+      // A milestone names the step being worked on, which is the most useful
+      // answer to "what is it doing right now".
+      if (data && data.index && data.total) setPhase(card, `Step ${data.index} of ${data.total}`);
       break;
 
     case 'run.plan_started':
@@ -1742,6 +1874,7 @@ function handleEvent(card, event, data) {
       // rather than letting the first minute of a complex task be a blank page.
       state.runStatus = 'planning';
       setRunning(true);
+      setPhase(card, 'Drafting the plan');
       renderPlanDrafting(card);
       draftingClock(card);
       break;
@@ -1820,6 +1953,8 @@ function handleEvent(card, event, data) {
       const waiting = card.stepIndex.get('rate-limit');
       if (waiting) setStepStatus(waiting, 'done');
       setThinkingKind(card, data.kind);
+      // Words from the model are the end of the silence, wherever the chip was.
+      if (card.quiet !== null) { card.quiet = null; updateWaitLine(card); }
       card.thinkingTail += data.chunk || '';
       if (!card.thinking.open) card.thinking.open = true;
       drainTrace(card);
@@ -4640,6 +4775,26 @@ el.settingsOpen.addEventListener('click', () => {
 });
 el.settingsBack.addEventListener('click', () => closeSettings());
 window.addEventListener('popstate', () => closeSettings({ fromHistory: true }));
+/**
+ * The Raw switch on every run card's panel head.
+ *
+ * One delegated listener rather than one per card: a button inside <summary>
+ * toggles the fold as well as itself, so the click has to stop there — and a
+ * card can be *reused* (a replay rebuilds its handle), which would leave a
+ * per-card listener holding a stale state object. The handle is looked up on
+ * the element instead.
+ */
+document.addEventListener('click', (e) => {
+  const target = /** @type {HTMLElement} */ (e.target);
+  const toggle = target.closest('.trace-raw-toggle');
+  if (!toggle) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const cardEl = /** @type {HTMLElement | null} */ (toggle.closest('.run'));
+  const handle = cardEl ? cardHandles.get(cardEl) : undefined;
+  if (cardEl && handle) setRaw(handle, !handle.rawOn);
+});
+
 $('btn-close-drawer').addEventListener('click', closeDrawer);
 el.scrim.addEventListener('click', closeDrawer);
 

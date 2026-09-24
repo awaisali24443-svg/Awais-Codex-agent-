@@ -862,6 +862,47 @@ describe('the drawer is a front door, not a form', () => {
   });
 });
 
+describe('the wait line, and the raw view behind it', () => {
+  test('an empty panel says what is happening, for how long, and whether the model is talking', () => {
+    const client = app();
+    assert.ok(client.includes('function updateWaitLine(card)'), 'the line is redrawn, not written once');
+    assert.ok(client.includes('function setPhase(card, phase)'), 'and it knows the phase');
+    assert.ok(client.includes("setPhase(card, 'Drafting the plan');"), 'set when the plan is being drafted');
+    assert.ok(client.includes('setPhase(card, `Step ${data.index} of ${data.total}`);'), 'and when a milestone names the step');
+    assert.ok(client.includes('waitLine({'), 'through the pure helper that is tested without a browser');
+    // The clock already ticked the seconds; the wait line is where that number
+    // becomes a sentence.
+    assert.ok(client.includes('updateWaitLine(card);\n  };'), 'the clock keeps it honest');
+  });
+
+  test('a silent model is said on the head, where it cannot be scrolled away', () => {
+    const client = app();
+    assert.ok(client.includes("class=\"thinking-quiet\" hidden"), 'there is a place for it');
+    assert.ok(client.includes('chip.textContent = `quiet ${elapsedWords(card.quiet)}`;'), 'it counts the silence');
+    assert.ok(client.includes('card.quiet = quietSeconds(message);'), 'read from the engine heartbeat');
+    assert.ok(
+      client.includes('if (card.quiet !== null) { card.quiet = null; updateWaitLine(card); }'),
+      'and cleared the moment the model talks again',
+    );
+    assert.ok(css().includes('.thinking-quiet'), 'it is styled like a fact, not like an alarm');
+  });
+
+  test('the raw view shows every frame, off by default', () => {
+    const client = app();
+    assert.ok(client.includes('function noteFrame(card, name, data)'), 'every frame is captured');
+    assert.ok(client.includes('pushFrame(card.frames,'), 'through the bounded queue');
+    assert.ok(client.includes('card.framesDropped += next.overflow;'), 'and what fell out is counted, never hidden');
+    assert.ok(client.includes("if (card) noteFrame(card, event, data);\n  switch (event) {"), 'captured before it is handled, so unhandled frames still appear');
+    assert.ok(client.includes('function renderRaw(card)'), 'the view renders it');
+    assert.ok(client.includes('Showing the last ${card.frames.length} of ${card.framesSeen} frames received.'), 'saying plainly when it is showing a tail');
+    assert.ok(client.includes('function setRaw(card, on)'), 'and can be turned on');
+    assert.ok(client.includes("card.raw.hidden = !on;"), 'with the view hidden until it is');
+    assert.ok(client.includes('const handle = cardEl ? cardHandles.get(cardEl) : undefined;'), 'the switch finds the live handle for that card');
+    assert.ok(css().includes('.raw-payload'), 'the payload has a style');
+    assert.ok(css().includes('.trace-raw-toggle[aria-pressed="true"]'), 'and the switch shows its own state');
+  });
+});
+
 describe('the trace is a feed, and it says which channel it is reading', () => {
   test('a reason gets its own row', () => {
     const client = app();

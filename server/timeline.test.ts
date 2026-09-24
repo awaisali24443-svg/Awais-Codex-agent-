@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  quietSeconds,
+  elapsedWords,
+  waitLine,
   STEP_STATUSES,
   statusForStep,
   nodeIconForStatus,
@@ -228,5 +231,32 @@ describe('the raw frame queue', () => {
     }
     assert.deepEqual(queue.map((f) => f.i), [8, 9, 10], 'the newest three');
     assert.equal(dropped, 7, 'and it knows how many went');
+  });
+});
+
+describe('the wait has a shape', () => {
+  it('the engine\u2019s heartbeat is read for its number', () => {
+    // "Nothing from the model yet — 45s in. The request is open and thinking."
+    // The one useful fact in that sentence is the number.
+    assert.equal(quietSeconds('Nothing from the model yet — 45s in. The request is open and thinking.'), 45);
+    assert.equal(quietSeconds('Step 2/3: reading the file'), null);
+    assert.equal(quietSeconds(''), null);
+  });
+
+  it('time is said the way a person says it', () => {
+    assert.equal(elapsedWords(0), '0s');
+    assert.equal(elapsedWords(59), '59s');
+    assert.equal(elapsedWords(124), '2m 04s');
+    assert.equal(elapsedWords(4_020), '1h 07m');
+  });
+
+  it('one line says what is happening, for how long, and whether the model is talking', () => {
+    assert.equal(waitLine({ phase: 'Drafting the plan', seconds: 18 }), 'Drafting the plan · 18s · nothing has come back from the model yet');
+    assert.equal(
+      waitLine({ phase: 'Step 2 of 7', seconds: 124, quiet: 45 }),
+      'Step 2 of 7 · 2m 04s · the model has been quiet for 45s',
+    );
+    // With nothing known, it still says something true rather than nothing.
+    assert.equal(waitLine({}), 'Working · 0s · nothing has come back from the model yet');
   });
 });

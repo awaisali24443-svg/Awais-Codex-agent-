@@ -210,3 +210,48 @@ export function pushFrame(queue, frame, cap = 300) {
   const overflow = Math.max(0, next.length - cap);
   return { frames: next.slice(overflow), overflow };
 }
+
+/**
+ * Silence, in words: "45s" from the engine's own heartbeat line.
+ *
+ * The heartbeat is the only signal during a long think, and it carries the one
+ * number that says whether the wait is normal — how long the model has been
+ * quiet.
+ * @param {string} message
+ */
+export function quietSeconds(message) {
+  const match = /(\d+)s\s+in\b/.exec(String(message ?? ''));
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds : null;
+}
+
+/**
+ * A span of time as the operator would say it: "12s", "2m 04s", "1h 07m".
+ * Seconds are only spelled out under a minute; past that they are noise.
+ * @param {number} seconds
+ */
+export function elapsedWords(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total}s`;
+  if (total < 3600) return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+  return `${Math.floor(total / 3600)}h ${String(Math.floor((total % 3600) / 60)).padStart(2, '0')}m`;
+}
+
+/**
+ * The line above an empty panel: what the task is doing, for how long, and
+ * whether the model has gone quiet.
+ *
+ * Before this the panel said one sentence and never changed, so a task that was
+ * thinking normally and a task that was stuck read exactly the same. Three
+ * facts, one line, and it is the *absence* of the last one that says the model
+ * is talking.
+ *
+ * @param {{ phase?: string | null, seconds?: number, quiet?: number | null }} state
+ */
+export function waitLine({ phase = null, seconds = 0, quiet = null } = {}) {
+  const parts = [phase || 'Working', elapsedWords(seconds)];
+  if (typeof quiet === 'number') parts.push(`the model has been quiet for ${elapsedWords(quiet)}`);
+  else parts.push('nothing has come back from the model yet');
+  return parts.join(' · ');
+}

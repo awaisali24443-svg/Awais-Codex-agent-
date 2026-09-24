@@ -442,6 +442,49 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 /* Which channel the words came from, on the panel head. */
 .thinking[data-kind="reasoning"] .label { color: var(--ink); }
+
+/* ------------------------------------------------------------ raw view ---
+   Every frame the browser received, verbatim, off by default. The filtered
+   trace is a reading of the stream — this is the stream, and it exists so an
+   operator (or I) can tell a quiet model from a broken connection without
+   guessing. */
+
+.trace-raw-toggle {
+  flex: none; padding: 2px 7px; border-radius: var(--radius-xs);
+  font: inherit; font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); background: transparent;
+  border: 1px solid var(--line); cursor: pointer;
+}
+.trace-raw-toggle[aria-pressed="true"] {
+  color: var(--ink); border-color: var(--ink-soft);
+}
+/* The button lives inside <summary>, where a tap would also fold the panel:
+   the gap between it and the chevron keeps it from being a mis-tap target. */
+.thinking-head .trace-raw-toggle { margin-right: 2px; }
+
+.raw {
+  margin-top: 8px; white-space: normal;
+  font-size: 11.5px; line-height: 1.5;
+}
+.raw-row {
+  display: flex; gap: 8px; padding: 1px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+}
+.raw-when { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.raw-name { flex: none; min-width: 8.5em; color: var(--ink-soft); }
+.raw-payload {
+  flex: 1; min-width: 0; color: var(--muted);
+  overflow-wrap: anywhere; word-break: break-word;
+}
+.raw-note { margin: 6px 0 0; font-size: 10.5px; color: var(--muted); font-style: italic; }
+
+/* Nothing has come back from the model for a while. Said on the head, in the
+   open, because that is the one part of the panel that never scrolls. */
+.thinking-quiet {
+  flex: none; padding: 1px 6px; border-radius: var(--radius-xs);
+  font-size: 10.5px; color: var(--muted); background: var(--surface-2);
+  border: 1px solid var(--line);
+}
 .spinner {
   width: 13px; height: 13px; flex: none; border-radius: 50%;
   border: 1.8px solid var(--line); border-top-color: var(--ink-soft);
