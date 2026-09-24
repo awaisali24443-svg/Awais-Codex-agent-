@@ -110,3 +110,103 @@ export function stripMilestones(text) {
   // Collapse the blank runs the removed lines leave behind.
   return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
+
+/* ------------------------------------------------------------- the trace ---
+   What the model is thinking, as rows rather than as one growing paragraph.
+
+   The panel used to append every fragment to a single text node, so three
+   minutes of thinking was one wall of prose that the eye could not follow and
+   the scroll could not keep. The stream arrives in fragments, so the rows are
+   cut from a growing tail: a newline ends a row, and a row that runs long is
+   broken at a sentence — never mid-word unless there is no sentence to break
+   at. Nothing is ever dropped: every character ends up in a row or stays in
+   the tail.
+   */
+
+/** The two kinds of row the trace stream produces. */
+export const TRACE_KINDS = ['thought', 'decision'];
+
+/**
+ * Cut every complete row out of a growing tail.
+ *
+ * @param {string} tail  everything received so far that is not yet a row
+ * @param {{ max?: number, sentence?: number }} [opts]
+ * @returns {{ rows: string[], tail: string }}
+ */
+export function takeTraceRows(tail, { max = 220, sentence = 90 } = {}) {
+  const rows = [];
+  let rest = String(tail ?? '');
+  for (;;) {
+    const newline = rest.indexOf('\n');
+    if (newline !== -1) {
+      const row = rest.slice(0, newline).trim();
+      rest = rest.slice(newline + 1);
+      if (row) rows.push(row);
+      continue;
+    }
+    if (rest.length > max) {
+      const cut = sentenceBreak(rest, sentence, max);
+      const row = rest.slice(0, cut).trim();
+      if (row) rows.push(row);
+      rest = rest.slice(cut);
+      continue;
+    }
+    break;
+  }
+  return { rows, tail: rest };
+}
+
+/**
+ * Where a long line breaks: at the last sentence end between `min` and a little
+ * past `max`, or at `max` itself when the text has no sentence in it (a URL, a
+ * wall of words, a language that does not use spaces).
+ */
+function sentenceBreak(text, min, max) {
+  const limit = Math.min(text.length, Math.round(max * 1.3));
+  for (let i = limit - 1; i >= min; i--) {
+    const ch = text[i];
+    if ((ch === '.' || ch === '!' || ch === '?' || ch === '\u2026') && /\s/.test(text[i + 1] ?? '')) {
+      return i + 1;
+    }
+  }
+  return Math.min(max, text.length);
+}
+
+/**
+ * What the panel head calls the thing it is showing.
+ *
+ * `reasoning` is the model's own thinking, when the backend exposes it;
+ * everything else is the agent narrating what it is doing. Calling the second
+ * one "Reasoning" would be a nicer lie than the truth, and the operator would
+ * have no way to tell the difference.
+ */
+export function thinkingLabel(kind) {
+  return kind === 'reasoning' ? 'Reasoning' : "What it's doing";
+}
+
+/**
+ * How long after the task started a row happened, e.g. "+12s", "+2m04s".
+ * On a trace that is read top to bottom, "before/after" is the useful fact —
+ * the wall clock is already on every step node.
+ * @param {number} ms
+ */
+export function formatElapsedShort(ms) {
+  const total = Math.max(0, Math.round(Number(ms) / 1000));
+  if (total < 60) return `+${total}s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = String(total % 60).padStart(2, '0');
+  return `+${minutes}m${seconds}s`;
+}
+
+/**
+ * The frame queue behind the Raw switch, bounded.
+ *
+ * A long run emits thousands of events and a phone has one screen. The queue
+ * keeps the newest frames and counts what it threw away, so the panel can say
+ * "showing the last 300 of 1,842" rather than either melting or lying.
+ */
+export function pushFrame(queue, frame, cap = 300) {
+  const next = [...queue, frame];
+  const overflow = Math.max(0, next.length - cap);
+  return { frames: next.slice(overflow), overflow };
+}

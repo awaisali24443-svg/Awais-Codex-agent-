@@ -34,6 +34,8 @@ import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
 import { withDesignGuide } from './design.js';
+import { DecisionScanner, stripDecisions, wantsDecisions, withDecisions } from './decisions.js';
+import type { ThinkingKind } from './engine/types.js';
 import { MAX_SEEN_URLS, extractUrls, checkSources, searchQueryOf, urlsIn } from './sources.js';
 import { extractLinkedInDraft, recordLinkedInDraft } from './linkedin.js';
 import { maybeAskDraftApproval } from './whatsapp/approvals.js';
@@ -514,9 +516,19 @@ export class RunExecutor {
       const text = new FieldBuffer(this.snapshotIntervalMs, (value) =>
         writer.write('text.snapshot', { text: value }),
       );
+      let lastThinkingKind: ThinkingKind = 'narration';
       const thinking = new FieldBuffer(this.snapshotIntervalMs, (value) =>
-        writer.write('thinking.snapshot', { text: value }),
+        writer.write('thinking.snapshot', { text: value, kind: lastThinkingKind }),
       );
+      // Complex tasks are asked to say why before each tool call. The scanner
+      // lifts those lines out of the prose and they become `decision` events;
+      // a task that was not asked never gets a scanner, so nothing can be
+      // mistaken for a protocol line it never sent.
+      const decisionsOn = wantsDecisions(run.prompt);
+      const decisions = decisionsOn ? new DecisionScanner() : null;
+      // Every reason the model actually gave, so the answer can be cleaned by
+      // exact text rather than by pattern.
+      const saidWhy: string[] = [];
 
       const ctx: EngineContext = {
         runId: run.id,
@@ -525,14 +537,27 @@ export class RunExecutor {
         environmentId: run.environmentId,
 
         text: (chunk) => {
-          text.append(chunk);
+          const scanned = decisions ? decisions.push(chunk) : { text: chunk, decisions: [] };
+          for (const why of scanned.decisions) {
+            saidWhy.push(why);
+            // Durable, because a decision is part of what the task did, not
+            // decoration: a reconnecting client replays it onto the trace.
+            void writer.write('decision', { text: why });
+          }
+          if (!scanned.text) return;
+          text.append(scanned.text);
           // Straight to the browser, never stored: the snapshot is the record.
-          bus.publishTransient(run.id, 'text.delta', { chunk });
+          bus.publishTransient(run.id, 'text.delta', { chunk: scanned.text });
         },
 
-        thinking: (chunk) => {
+        thinking: (chunk, kind = 'narration') => {
           thinking.append(chunk);
-          bus.publishTransient(run.id, 'thinking.delta', { chunk });
+          // The kind travels with the fragment so the panel can label what it
+          // is showing: the model's own reasoning when the backend exposes it,
+          // and its narration of what it is doing when it does not. The
+          // snapshot carries the latest kind for a reconnecting client.
+          lastThinkingKind = kind;
+          bus.publishTransient(run.id, 'thinking.delta', { chunk, kind });
         },
 
         tool: (name, args) => {
@@ -619,10 +644,13 @@ export class RunExecutor {
         const mission =
           resumePreamble +
           planPreamble +
-          withGoogle(withDesignGuide(withLinkedIn(withPlanning(memory.prompt))), googleConnected);
+          withGoogle(
+            withDesignGuide(withLinkedIn(withPlanning(withDecisions(memory.prompt)))),
+            googleConnected,
+          );
         result =
           run.deepResearch && (run.researchBudgetMinutes ?? 0) > 0
-            ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking)
+            ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking, saidWhy)
             : await this.runWithGoogleReads(
                 run,
                 mission,
@@ -632,6 +660,7 @@ export class RunExecutor {
                 text,
                 thinking,
                 googleConnected,
+                saidWhy,
               );
       } finally {
         // Runs even on failure: whatever the engine produced is still worth
@@ -652,7 +681,10 @@ export class RunExecutor {
       // the complete text at the end. Whichever is longer is the better record,
       // and the `final: true` snapshot below overwrites what the client drew.
       const streamed = text.text;
-      const authoritative = result.text ?? '';
+      // The engine's own copy of the answer still carries the decision lines
+      // it streamed past us — it wrote them, we lifted them out. Stripping
+      // here is what keeps them out of what gets stored, quoted and shared.
+      const authoritative = decisionsOn ? stripDecisions(result.text ?? '', saidWhy) : (result.text ?? '');
       const finalText = authoritative.length >= streamed.length ? authoritative : streamed;
       await writer.write('text.snapshot', { text: finalText, final: true });
       // Source check before the run closes: every URL in the final text is
@@ -817,6 +849,8 @@ export class RunExecutor {
     writer: DurableWriter,
     text: FieldBuffer,
     thinking: FieldBuffer,
+    /** Reasons already lifted out of this run's prose, removed by exact text. */
+    saidWhy: readonly string[] = [],
   ): Promise<EngineResult> {
     const engine = this.deps.engine;
     const budgetMinutes = run.researchBudgetMinutes ?? 15;
@@ -956,6 +990,8 @@ export class RunExecutor {
     text: FieldBuffer,
     thinking: FieldBuffer,
     googleConnected: boolean,
+    /** Reasons already lifted out of this run's prose, removed by exact text. */
+    saidWhy: readonly string[] = [],
   ): Promise<EngineResult> {
     const engine = this.deps.engine;
     let previousInteractionId = run.previousInteractionId;
@@ -970,7 +1006,9 @@ export class RunExecutor {
       environmentId = result.environmentId ?? environmentId;
       await this.persistContinuation(run.id, previousInteractionId, environmentId);
       const streamed = text.text.slice(before);
-      const authoritative = result.text ?? '';
+      const authoritative = wantsDecisions(run.prompt)
+        ? stripDecisions(result.text ?? '', saidWhy)
+        : (result.text ?? '');
       return {
         result,
         passText: authoritative.length >= streamed.length ? authoritative : streamed,

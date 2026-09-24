@@ -862,6 +862,59 @@ describe('the drawer is a front door, not a form', () => {
   });
 });
 
+describe('the trace is a feed, and it says which channel it is reading', () => {
+  test('a reason gets its own row', () => {
+    const client = app();
+    // The model is asked (on complex tasks only) to say why before each tool
+    // call. Those lines are lifted out of the prose by the server and arrive as
+    // `decision` events, and a reason must never read like a thought.
+    assert.ok(client.includes("case 'decision':"), 'the client listens for it');
+    assert.ok(client.includes("addTraceRow(card, String(data.text ?? ''), 'decision')"), 'and draws it as a decision');
+    assert.ok(client.includes("'decision',"), 'and it is durable, so a reconnect replays it');
+    assert.ok(client.includes('function addTraceRow(card, text, kind = \'thought\', at = null)'), 'one function draws every kind');
+    assert.ok(client.includes("row.dataset.kind = kind;"), 'the kind is on the row, so CSS can speak to it');
+    assert.ok(client.includes("flag.textContent = 'why';"), 'with a flag that marks it as a reason');
+  });
+
+  test('the feed is rows cut from the stream, not one paragraph', () => {
+    const client = app();
+    assert.ok(client.includes("import {"), 'the pure row logic is imported');
+    assert.ok(client.includes('takeTraceRows'), 'from timeline.js, where it is tested without a browser');
+    assert.ok(client.includes('function drainTrace(card)'), 'fragments are drained into rows');
+    assert.ok(client.includes('function flushTrace(card)'), 'and the tail is flushed when the run ends');
+    assert.ok(client.includes('flushTrace(card);\n  stopRunClock(card);'), 'the card folds its last thought in before it stops');
+    assert.ok(client.includes("card.trace = thinking.querySelector('.trace')") || client.includes("trace: thinking.querySelector('.trace')"), 'the feed has its own element');
+    assert.ok(client.includes('class="trace" aria-live="polite"'), 'which announces itself to a screen reader');
+    // The caret is what says "still writing" — and only the live row has it.
+    assert.ok(client.includes("card.traceLive.dataset.live = card.thinkingTail ? 'true' : 'false';"), 'the caret follows the live row');
+    const cssText = css();
+    assert.ok(cssText.includes('.trace-row[data-live="true"] .trace-text::after'), 'the caret is drawn in CSS');
+    assert.ok(cssText.includes('@keyframes caret-blink'), 'and blinks');
+    assert.ok(cssText.includes('.trace-flag'), 'the decision flag has a style of its own');
+  });
+
+  test('the panel head never calls narration reasoning', () => {
+    const client = app();
+    assert.ok(client.includes('function setThinkingKind(card, kind)'), 'the kind is tracked');
+    assert.ok(client.includes('card.thinkingLabel.textContent = thinkingLabel(kind);'), 'and written where the operator reads it');
+    assert.ok(client.includes("thinkingLabel(kind)"), 'through the pure helper');
+    assert.ok(!/card\.thinkingLabel\.textContent = 'Reasoning'/.test(client), 'never hard-coded to the nicer word');
+  });
+
+  test('a reconnect redraws the feed instead of stacking a second one', () => {
+    const client = app();
+    // A snapshot longer than what the screen holds means fragments were lost;
+    // cutting the authoritative text into rows again is deterministic.
+    assert.ok(client.includes('function rebuildTrace(card, full)'), 'there is a rebuild path');
+    assert.ok(
+      client.includes('if (full.length > card.thinkingText.length + card.thinkingTail.length) {'),
+      'taken only when the snapshot holds words the screen never saw',
+    );
+    assert.ok(client.includes("card.trace.innerHTML = '';"), 'and it starts from an empty feed');
+    assert.ok(client.includes('traceRows: 0,'), 'with the row count reset, on both card handles');
+  });
+});
+
 describe('the drawer reads like a list, not a wall', () => {
   test('the row you are on is marked', () => {
     const cssText = css();

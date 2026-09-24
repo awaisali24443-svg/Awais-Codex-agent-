@@ -27,8 +27,16 @@ export interface EngineContext {
 
   /** Append to the assistant's visible answer. */
   text(chunk: string): void;
-  /** Append to the reasoning trace. Kept separate from the answer. */
-  thinking(chunk: string): void;
+  /**
+   * Append to the trace beside the answer. Kept separate from the answer.
+   *
+   * `kind` says what the fragment *is*: the model's own reasoning, when the
+   * backend exposes it, or its narration of what it is doing, which is what
+   * every engine can always produce. The panel labels the two differently,
+   * because calling narration "reasoning" would be a nicer lie than the truth
+   * and the operator would have no way to tell.
+   */
+  thinking(chunk: string, kind?: ThinkingKind): void;
   /** A tool/step the agent is starting. */
   tool(name: string, args?: unknown): void;
   /** The outcome of that step. */
@@ -44,6 +52,13 @@ export interface EngineContext {
 }
 
 export type LogLevel = 'info' | 'warn' | 'error';
+
+/**
+ * What a thinking fragment is: the model's reasoning (`reasoning`), or its
+ * narration of the work (`narration`). Never inferred by the client — the
+ * engine knows which channel a fragment came from and says so.
+ */
+export type ThinkingKind = 'reasoning' | 'narration';
 
 export interface EngineResult {
   /** The complete answer. The executor also accumulates from `text()`. */

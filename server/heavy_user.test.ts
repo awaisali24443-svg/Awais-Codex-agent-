@@ -493,6 +493,104 @@ describe('a heavy user walks the app', () => {
     assert.equal((await fetch(`${base}/share/${token}`)).status, 404, 'and a revoked link stops working');
   });
 
+  test('a big task says why before each step, and the answer is not polluted by it', async () => {
+    // The operator watches a task work and can see *what* it does — every tool
+    // call is a row. Why it chose that step is the one thing the model never
+    // says unless it is asked, so complex tasks are asked: a `WHY:` line before
+    // each call. Those lines are lifted out of the prose onto the trace, and
+    // they must not end up in the answer that gets stored, quoted or shared.
+    const reasoning = await startApp(
+      new ScriptedEngine({
+        steps: [
+          { log: 'Step 1/2: Read the brief', delayMs: 1 },
+          { text: 'WHY: the brief names the prices, so read it before writing anything\n', delayMs: 1 },
+          { text: 'Reading it through. ', delayMs: 1 },
+          { log: 'Step 2/2: Build the page', delayMs: 1 },
+          { text: 'WHY: the prices change weekly, so fetch them rather than hard-code\n', delayMs: 1 },
+          { text: 'Built it at site/index.html. ', delayMs: 1 },
+          { log: 'Step 1/2 done: read the brief', delayMs: 1 },
+          { log: 'Step 2/2 done: built the page', delayMs: 1 },
+        ],
+        speed: 0,
+      }),
+    );
+    try {
+      const accepted = await fetch(`${reasoning.base}/api/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ prompt: COMPLEX_PROMPT }),
+      });
+      const body = (await accepted.json()) as {
+        run?: { id: string; status: string };
+        message?: string;
+        activeRunId?: string;
+      };
+      assert.equal(accepted.status, 201, `acceptance refused: ${body.message ?? ''} ${body.activeRunId ?? ''}`);
+      const run = body.run!;
+      if ((await settleToPlan(reasoning.base, run.id)) === 'awaiting_plan') {
+        await fetch(`${reasoning.base}/api/runs/${run.id}/approve`, { method: 'POST', headers: { cookie } });
+      }
+      const events = await readStream(run.id, { until: (e) => e.name === 'run.completed' });
+      const decisions = events.filter((e) => e.name === 'decision').map((e) => String(e.data.text));
+      assert.equal(decisions.length, 2, `two reasons said, two reasons shown (${JSON.stringify(decisions)})`);
+      assert.match(decisions[0]!, /the brief names the prices/, 'in the model\u2019s own words');
+      assert.match(decisions[1]!, /the prices change weekly/, 'in order');
+
+      // Durable, so a reconnect replays them onto the trace rather than losing
+      // the explanation for steps that are already on screen.
+      const replay = await readStream(run.id, { after: 0, until: (e) => e.name === 'run.completed' });
+      assert.equal(replay.filter((e) => e.name === 'decision').length, 2, 'a replay has them too');
+      for (const event of replay.filter((e) => e.name === 'decision')) {
+        assert.equal(typeof event.seq, 'number', 'with a sequence number like any other durable event');
+      }
+
+      // And nowhere does the protocol leak into the answer.
+      const conversations2 = (await (await api('/api/conversations')).json()) as {
+        conversations: Array<{ id: string }>;
+      };
+      assert.ok(conversations2.conversations.length > 0);
+      const messages = (await (await api(`/api/conversations/${conversations2.conversations[0].id}/messages`)).json()) as {
+        messages: Array<{ runId: string | null; role: string; content: string }>;
+      };
+      const answer = messages.messages.find((m) => m.runId === run.id && m.role === 'assistant');
+      assert.ok(answer, 'the answer is stored');
+      assert.ok(!/WHY:/.test(answer!.content), `the stored answer carries no protocol: ${answer!.content}`);
+      assert.match(answer!.content, /Built it at site\/index\.html/, 'and keeps the real answer');
+    } finally {
+      await reasoning.close();
+    }
+  });
+
+  test('a quick question is never asked for a decision line, and pays nothing', async () => {
+    // The contract costs tokens on every step, so it rides only on the tasks
+    // that already pay for a plan. A one-line question gets the plain prompt.
+    const quick = await startApp(
+      new ScriptedEngine({
+        steps: [
+          { text: 'Islamabad. ', delayMs: 1 },
+          { text: 'Roughly 1.2 million people in the city.', delayMs: 1 },
+        ],
+        speed: 0,
+      }),
+    );
+    try {
+      const accepted = await fetch(`${quick.base}/api/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ prompt: 'what is the capital of Pakistan' }),
+      });
+      const { run } = (await accepted.json()) as { run: { id: string } };
+      const events = await readStream(run.id, { until: (e) => e.name === 'run.completed' });
+      const started = events.find((e) => e.name === 'run.started');
+      assert.ok(started, 'the run started');
+      assert.ok(!/WHY:/.test(String(started!.data.prompt)), 'no contract on a quick question');
+      // The stored prompt is what the operator typed either way.
+      assert.equal(String(started!.data.prompt), 'what is the capital of Pakistan');
+    } finally {
+      await quick.close();
+    }
+  });
+
   test('a big task answers first, and plans afterwards in the open', async () => {
     // The complaint, end to end: "it takes a couple of minutes without showing
     // any live stream". The acceptance used to wait for the planning pass, so

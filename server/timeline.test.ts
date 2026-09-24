@@ -8,6 +8,10 @@ import {
   formatStepTime,
   isMilestoneLine,
   stripMilestones,
+  takeTraceRows,
+  thinkingLabel,
+  formatElapsedShort,
+  pushFrame,
 } from '../web/timeline.js';
 
 describe('a warning is not an accomplishment', () => {
@@ -138,5 +142,91 @@ describe('plan-protocol lines are kept out of the answer', () => {
     assert.equal(stripMilestones(''), '');
     assert.equal(stripMilestones(undefined), '');
     assert.equal(stripMilestones(null), '');
+  });
+});
+
+describe('the trace is rows, not one paragraph', () => {
+  it('every character survives being cut into rows, in order', () => {
+    // The invariant that matters: a fragment split anywhere must not lose or
+    // reorder a single character on the way to the screen.
+    const text = [
+      'Reading the brief now. ',
+      'It names three prices, so the pricing page is the place to start. ',
+      'Nothing about the guide yet, so I will come back to that. ',
+      'The render check can wait until the page exists — it is the last thing ',
+      'the brief asks for, and doing it early would only mean doing it twice. ',
+      'So: read, build, then check.',
+    ].join('');
+    let tail = '';
+    const rows = [];
+    for (let i = 0; i < text.length; i += 7) {
+      tail += text.slice(i, i + 7);
+      const out = takeTraceRows(tail);
+      rows.push(...out.rows);
+      tail = out.tail;
+    }
+    const rebuilt = (rows.join('') + tail).replace(/\s+/g, ' ').trim();
+    assert.equal(rebuilt, text.replace(/\s+/g, ' ').trim());
+    assert.ok(rows.length >= 1, `long text became rows, not one blob (${rows.length})`);
+    assert.ok(tail.length <= 240, `and the live tail stays bounded (${tail.length})`);
+  });
+
+  it('a newline ends a row', () => {
+    const { rows, tail } = takeTraceRows('first thought\nsecond thought\nstill going');
+    assert.deepEqual(rows, ['first thought', 'second thought']);
+    assert.equal(tail, 'still going');
+  });
+
+  it('a long line breaks at a sentence, and the tail stays small', () => {
+    const line = `${'a'.repeat(95)}. ${'b'.repeat(95)}. ${'c'.repeat(30)}`;
+    const { rows, tail } = takeTraceRows(line);
+    assert.equal(rows.length, 1, 'one row cut so far');
+    assert.ok(rows[0].endsWith('.'), `cut at a sentence, not mid-word: ${rows[0].slice(-40)}`);
+    assert.ok(rows[0].length < 200, 'and the row is readable');
+    assert.ok(tail.length > 0, 'the rest waits in the tail');
+  });
+
+  it('a line with no sentence in it is cut anyway — nothing is held forever', () => {
+    const url = 'https://example.com/' + 'x'.repeat(400);
+    const { rows, tail } = takeTraceRows(url);
+    assert.equal(rows.length, 1, 'cut at the cap rather than held');
+    assert.ok(rows[0].length <= 220, 'a row is never longer than the cap');
+    assert.equal(rows[0].length + tail.length, url.length, 'no character lost');
+  });
+
+  it('blank rows are not rows', () => {
+    const { rows } = takeTraceRows('one\n\n\ntwo\n');
+    assert.deepEqual(rows, ['one', 'two']);
+  });
+});
+
+describe('the panel says what it is showing', () => {
+  it('reasoning is reasoning, and narration is not dressed up as it', () => {
+    assert.equal(thinkingLabel('reasoning'), 'Reasoning');
+    assert.equal(thinkingLabel('narration'), "What it's doing");
+    assert.equal(thinkingLabel(undefined), "What it's doing");
+  });
+
+  it('a row says how far into the task it happened', () => {
+    assert.equal(formatElapsedShort(0), '+0s');
+    assert.equal(formatElapsedShort(12_400), '+12s');
+    assert.equal(formatElapsedShort(124_000), '+2m04s');
+    assert.equal(formatElapsedShort(-5), '+0s');
+  });
+});
+
+describe('the raw frame queue', () => {
+  it('keeps the newest frames and counts what it dropped', () => {
+    let queue = [];
+    let dropped = 0;
+    for (let i = 1; i <= 10; i++) {
+      const next = pushFrame(queue, { i }, 3);
+      queue = next.frames;
+      // The counter is the caller's, so the number can be reported as a total
+      // ("showing the last 300 of 1,842") rather than per frame.
+      dropped += next.overflow;
+    }
+    assert.deepEqual(queue.map((f) => f.i), [8, 9, 10], 'the newest three');
+    assert.equal(dropped, 7, 'and it knows how many went');
   });
 });

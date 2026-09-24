@@ -8,6 +8,9 @@ import {
   hasExpandableDetail,
   formatStepTime,
   stripMilestones,
+  takeTraceRows,
+  thinkingLabel,
+  formatElapsedShort,
 } from './timeline.js';
 import {
   PANEL_DOCK_MIN_WIDTH,
@@ -619,6 +622,7 @@ function existingCard(runId) {
     plan: card.querySelector('.plan'),
     planIndex: new Map(),
     thinking,
+    trace: card.querySelector('.trace'),
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
@@ -627,9 +631,13 @@ function existingCard(runId) {
     steps: card.querySelector('.steps'),
     // A card being reused is being replayed from the start, so its accumulated
     // buffers are reset with it — otherwise the replayed thinking and answer
-    // would be appended to text the card already showed.
+    // would be appended to text the card already showed. The trace is the same
+    // story: a replay must not stack a second copy of it on the first.
     thinkingText: '',
     thinkingTail: '',
+    traceRows: 0,
+    traceLive: null,
+    thinkingKind: 'narration',
     answerText: '',
     answerTail: '',
     stepIndex: new Map(),
@@ -824,7 +832,10 @@ function createRunCard(runId = null) {
       <span class="meta"></span>
       <svg class="thinking-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
     </summary>
-    <div class="thinking-body"><p class="thinking-wait"></p></div>`;
+    <div class="thinking-body">
+      <div class="trace" aria-live="polite" aria-label="What the model is doing"></div>
+      <p class="thinking-wait"></p>
+    </div>`;
   // The panel is open from the first second, and for the first while it has
   // nothing in it — which is what an empty box with a chevron looks like: a
   // bug. It says what is true instead: the request is out, nothing is back yet.
@@ -887,6 +898,7 @@ function createRunCard(runId = null) {
     plan,
     planIndex: new Map(),
     thinking,
+    trace: thinking.querySelector('.trace'),
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
@@ -897,6 +909,12 @@ function createRunCard(runId = null) {
     // the durable text, and the un-acknowledged tail drawn on top of it
     thinkingText: '',
     thinkingTail: '',
+    // The trace: how many rows are drawn, the element the unfinished fragment
+    // is being written into (so the caret has somewhere to live), and which
+    // channel the words are coming from.
+    traceRows: 0,
+    traceLive: null,
+    thinkingKind: 'narration',
     answerText: '',
     answerTail: '',
     stepIndex: new Map(),
@@ -907,17 +925,110 @@ function createRunCard(runId = null) {
 
 function drawThinking(card) {
   const text = card.thinkingText + card.thinkingTail;
-  // Once there is something to read, the placeholder goes for good.
-  card.thinkingBody.querySelector('.thinking-wait')?.remove();
-  if (text) {
-    // The text node is written only when it changed: replacing it on every
-    // token would restart selection and scroll inside the panel.
-    const body = card.thinkingBody;
-    const existing = body.lastChild;
-    if (existing && existing.nodeType === Node.TEXT_NODE) existing.nodeValue = text;
-    else body.append(document.createTextNode(text));
+  if (text) card.thinkingBody.querySelector('.thinking-wait')?.remove();
+  // Once there is something to read, the placeholder goes for good. Only the
+  // live row is rewritten: replacing rows on every token would restart
+  // selection, reset the caret and fight the scroll.
+  if (card.traceLive) {
+    card.traceLive.querySelector('.trace-text').textContent = card.thinkingTail;
+    card.traceLive.dataset.live = card.thinkingTail ? 'true' : 'false';
   }
   card.thinkingMeta.textContent = card.elapsed ?? (text ? `${Math.round(text.length / 4)} tok` : '');
+}
+
+/**
+ * The panel head says which channel it is reading.
+ *
+ * `reasoning` is the model's own thinking, when the backend exposes it;
+ * everything else is the agent narrating what it is doing. Showing the second
+ * under the first's name would be a nicer lie than the truth, and the operator
+ * would have no way to tell which one they were reading.
+ */
+function setThinkingKind(card, kind) {
+  if (!kind || kind === card.thinkingKind) return;
+  card.thinkingKind = kind;
+  if (!card.thinkingLabel) return;
+  card.thinkingLabel.textContent = thinkingLabel(kind);
+  card.thinking.dataset.kind = kind;
+}
+
+/** One row on the trace: a thought, or a decision with its flag. */
+function addTraceRow(card, text, kind = 'thought', at = null) {
+  const row = document.createElement('div');
+  row.className = `trace-row trace-${kind}`;
+  row.dataset.kind = kind;
+  row.dataset.live = 'false';
+  const when = document.createElement('span');
+  when.className = 'trace-when';
+  when.textContent = formatElapsedShort((at ?? Date.now()) - card.startedAt);
+  if (kind === 'decision') {
+    const flag = document.createElement('span');
+    flag.className = 'trace-flag';
+    flag.textContent = 'why';
+    row.append(flag);
+  }
+  const body = document.createElement('span');
+  body.className = 'trace-text';
+  body.textContent = text;
+  row.append(body, when);
+  if (card.trace) card.trace.append(row);
+  card.traceRows += 1;
+  scrollToEnd();
+  return row;
+}
+
+/**
+ * Cut every finished row out of the tail and draw it, leaving the fragment
+ * still being written in the live row — the one place the caret lives.
+ */
+function drainTrace(card) {
+  const { rows, tail } = takeTraceRows(card.thinkingTail, {});
+  for (const row of rows) {
+    if (card.traceLive) {
+      card.traceLive.remove();
+      card.traceLive = null;
+    }
+    addTraceRow(card, row, 'thought');
+  }
+  card.thinkingTail = tail;
+  if (!card.traceLive && (tail || rows.length)) {
+    card.traceLive = addTraceRow(card, tail, 'thought');
+  }
+  drawThinking(card);
+}
+
+/**
+ * Redraw the feed from a snapshot the screen is behind on.
+ *
+ * This is the path a dropped connection takes: some fragments were never
+ * delivered, so the rows drawn from them are wrong. The snapshot is the
+ * authoritative text, and cutting it into rows again is deterministic — so the
+ * feed is rebuilt rather than patched. The tail is left empty afterwards
+ * because everything in it is in the snapshot: it is durable now.
+ */
+function rebuildTrace(card, full) {
+  if (card.trace) card.trace.innerHTML = '';
+  card.traceRows = 0;
+  card.traceLive = null;
+  card.thinkingTail = '';
+  card.thinkingText = full;
+  const { rows, tail } = takeTraceRows(full, {});
+  for (const row of rows) addTraceRow(card, row, 'thought');
+  if (tail.trim()) addTraceRow(card, tail.trim(), 'thought');
+  drawThinking(card);
+}
+
+/** Whatever is still in the tail is a row the moment the thinking stops. */
+function flushTrace(card) {
+  if (card.traceLive) {
+    card.traceLive.remove();
+    card.traceLive = null;
+  }
+  const rest = (card.thinkingTail || '').trim();
+  card.thinkingTail = '';
+  if (rest) addTraceRow(card, rest, 'thought');
+  else if (!card.traceRows && (card.thinkingText || '').trim()) addTraceRow(card, card.thinkingText.trim(), 'thought');
+  drawThinking(card);
 }
 
 /**
@@ -1685,18 +1796,41 @@ function handleEvent(card, event, data) {
       break;
     }
 
-    case 'thinking.snapshot':
-      card.thinkingText = data.text || '';
-      card.thinkingTail = '';
-      drawThinking(card);
+    case 'thinking.snapshot': {
+      // The snapshot is the whole trace so far, written by the server so a
+      // reconnect loses nothing. What it holds that the screen does not is
+      // drawn; a snapshot that is *behind* the screen (a replay, a reopened
+      // task) rebuilds the feed rather than leaving rows that never existed.
+      const full = data.text || '';
+      setThinkingKind(card, data.kind);
+      // What the screen has is `thinkingText` (durable) plus the live tail.
+      // A snapshot longer than the two together holds words that were lost —
+      // the only case that needs the expensive rebuild.
+      if (full.length > card.thinkingText.length + card.thinkingTail.length) {
+        rebuildTrace(card, full);
+      } else {
+        card.thinkingText = full;
+        card.thinkingTail = '';
+        drawThinking(card);
+      }
       break;
+    }
 
     case 'thinking.delta': {
       const waiting = card.stepIndex.get('rate-limit');
       if (waiting) setStepStatus(waiting, 'done');
+      setThinkingKind(card, data.kind);
       card.thinkingTail += data.chunk || '';
       if (!card.thinking.open) card.thinking.open = true;
-      drawThinking(card);
+      drainTrace(card);
+      break;
+    }
+
+    case 'decision': {
+      // A reason, in the model's own words, said just before it acted. It gets
+      // its own row: a decision is not a thought and must not read like one.
+      if (!card.thinking.open) card.thinking.open = true;
+      addTraceRow(card, String(data.text ?? ''), 'decision');
       break;
     }
 
@@ -1828,6 +1962,7 @@ function handleEvent(card, event, data) {
 
 function finishCard(card, outcome, data = {}) {
   state.runStatus = 'finished'; // nothing to watch any more; the answer is here
+  flushTrace(card);
   stopRunClock(card);
   if (card.thinkingClock) card.thinkingClock.textContent = '';
   card.spinner.classList.add('done');
@@ -2956,6 +3091,9 @@ function attach(runId, after = 0) {
   const durable = [
     'run.started', 'log', 'tool.call', 'tool.result',
     'thinking.snapshot', 'text.snapshot', 'run.environment',
+    // A decision is part of what the task did, so a reconnect replays it onto
+    // the trace instead of losing the reason behind steps already on screen.
+    'decision',
     'artifact', 'memory.recall', 'plan.milestone',
     'run.plan_started', 'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
     'research.started', 'research.pass', 'verification.checked',

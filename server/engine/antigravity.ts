@@ -54,6 +54,7 @@ import {
   type Engine,
   type EngineContext,
   type EngineResult,
+  type ThinkingKind,
 } from './types.js';
 
 /**
@@ -252,9 +253,9 @@ export class AntigravityEngine implements Engine {
         if (chunk) emitted = true;
         ctx.text(chunk);
       },
-      thinking: (chunk: string): void => {
+      thinking: (chunk: string, kind: ThinkingKind = 'narration'): void => {
         if (chunk) emitted = true;
-        ctx.thinking(chunk);
+        ctx.thinking(chunk, kind);
       },
       tool: (name: string, args?: unknown): void => {
         emitted = true;
@@ -515,7 +516,7 @@ export class AntigravityEngine implements Engine {
     ctx: EngineContext,
     emit: {
       text: (chunk: string) => void;
-      thinking: (chunk: string) => void;
+      thinking: (chunk: string, kind?: ThinkingKind) => void;
       tool: (name: string, args?: unknown) => void;
       log: (message: string, level?: 'info' | 'warn' | 'error') => void;
     },
@@ -614,7 +615,9 @@ export class AntigravityEngine implements Engine {
             emit.log(summary);
             if (summary !== lastSummary) {
               lastSummary = summary;
-              emit.thinking(`${summary}\n`);
+              // Narration: the agent saying what it is doing. It is not
+              // reasoning and the panel must not call it that.
+              emit.thinking(`${summary}\n`, 'narration');
             }
           }
 
@@ -640,7 +643,7 @@ export class AntigravityEngine implements Engine {
             const stepThought = extractContentText(data.step?.content);
             if (stepThought && stepThought !== lastThought) {
               lastThought = stepThought;
-              emit.thinking(stepThought);
+              emit.thinking(stepThought, 'reasoning');
             }
           }
 
@@ -653,7 +656,7 @@ export class AntigravityEngine implements Engine {
                 (typeof data.delta.text === 'string' ? data.delta.text : '');
               if (thought && thought !== lastThought) {
                 lastThought = thought;
-                emit.thinking(thought);
+                emit.thinking(thought, 'reasoning');
               }
             } else {
               const direct = typeof data.delta.text === 'string' ? data.delta.text : '';
@@ -671,7 +674,7 @@ export class AntigravityEngine implements Engine {
             // (a stray `type: "text"` once leaked into the Thinking panel).
             for (const key of ['reasoning', 'thinking', 'thought', 'reasoning_text']) {
               const value = data.delta[key];
-              if (typeof value === 'string' && value) emit.thinking(value);
+              if (typeof value === 'string' && value) emit.thinking(value, 'reasoning');
             }
           }
         }
