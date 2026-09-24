@@ -415,7 +415,7 @@ describe('the drawer is the front door', () => {
     const search = htmlText.indexOf('id="drawer-search"');
     const fresh = htmlText.indexOf('id="btn-new-2"');
     const list = htmlText.indexOf('id="convos"');
-    const foot = htmlText.indexOf('id="drawer-actions"') >= 0 || htmlText.indexOf('class="drawer-actions"');
+    const foot = Math.max(htmlText.indexOf('id="drawer-actions"'), htmlText.indexOf('class="drawer-actions"'));
     assert.ok(search > 0 && search < fresh, 'search sits above the list');
     assert.ok(fresh < list, 'and “New task” is the first thing after it');
     assert.ok(foot > list, 'settings, theme and sign-out live at the bottom, where a thumb rests');
