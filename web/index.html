@@ -284,7 +284,19 @@ try {
     </button>
     <span class="page-title">Settings</span>
   </header>
-  <div class="page-body" id="settings-body"></div>
+  <div class="page-body">
+    <!-- The search box lives outside #settings-body on purpose: the body is
+         re-rendered on every keystroke to filter it, and an input that gets
+         re-created between keystrokes loses focus (and, on a phone, the
+         keyboard) — the exact bug that makes a filter unusable. -->
+    <div class="settings-search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+      <input id="settings-search" type="search" autocomplete="off" spellcheck="false"
+             placeholder="Search settings and connections"
+             aria-label="Search settings and connections" />
+    </div>
+    <div id="settings-body"></div>
+  </div>
 </section>
 
 <!-- ======================= command palette ======================= -->

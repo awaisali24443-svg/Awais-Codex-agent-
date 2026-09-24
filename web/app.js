@@ -85,6 +85,7 @@ const el = {
   memoryBody: $('memory-body'),
   memoryToggle: $('memory-toggle'),
   settingsBody: $('settings-body'),
+  settingsSearch: $('settings-search'),
   settingsScreen: $('screen-settings'),
   settingsOpen: $('btn-settings'),
   settingsBack: $('btn-settings-back'),
@@ -143,6 +144,8 @@ const state = {
   budget: null,
   memory: null,
   settings: null,
+  /** What the Settings search box is filtering by ('' when it is empty). */
+  settingsQuery: '',
   scheduled: null,
 };
 
@@ -3650,17 +3653,26 @@ async function forgetEverything() {
 
 /* --------------------------------------------------------------- settings -- */
 
+/* Every state a credential can be in: the pill on its card, and the sentence
+   that explains it. `short` is what fits in the pill ("Connected"), `text` is
+   the long form the tests and the WhatsApp note read. */
 const SECRET_STATE = {
   stored: (secret) => ({
     text: `saved here · ${secret.fingerprint}`,
+    short: 'Connected',
     className: 'ok',
   }),
   environment: (secret) => ({
     text: `from ${secret.envVar} in the environment`,
+    short: 'Connected',
     className: 'ok',
   }),
-  missing: () => ({ text: 'not set', className: 'bad' }),
-  unreadable: () => ({ text: 'cannot decrypt — MASTER_KEY changed', className: 'bad' }),
+  missing: () => ({ text: 'not set', short: 'Not set', className: 'muted' }),
+  unreadable: () => ({
+    text: 'cannot decrypt — MASTER_KEY changed',
+    short: 'Needs attention',
+    className: 'bad',
+  }),
 };
 
 /** The delegated settings listener is bound once per page load (see below). */
@@ -3687,23 +3699,20 @@ async function loadSettings() {
  * belongs.
  */
 async function renderBuildLine() {
-  document.getElementById('build-line')?.remove();
+  const host = document.getElementById('build-line');
+  if (!host) return;
   let status;
   try {
     status = await api('/api/status');
   } catch {
     return;
   }
-  const line = document.createElement('p');
-  line.className = 'build-line';
-  line.id = 'build-line';
-  const commit = typeof status.commit === 'string' && status.commit !== 'unknown'
-    ? status.commit
-    : null;
-  line.textContent = commit
-    ? `WAIS · build ${commit}`
-    : 'WAIS · development build';
-  el.settingsBody.append(line);
+  const commit = typeof status.commit === 'string' && status.commit !== 'unknown' ? status.commit : null;
+  host.innerHTML =
+    `<span class="setting-main">
+       <span class="setting-label">${commit ? `WAIS · build ${escapeHtml(commit)}` : 'WAIS · development build'}</span>
+       <span class="setting-desc">The last line to check when a fix seems to be missing: a phone can still be running the previous build for a minute after a deploy.</span>
+     </span>`;
 }
 
 /* The LinkedIn connection card in Settings. Plain language, because the
@@ -3902,78 +3911,149 @@ function renderSettings() {
   const data = state.settings;
   if (!data) return;
 
-  const rows = data.settings.map((setting) => {
-    // Boolean settings render as an on/off toggle; everything else keeps the
-    // existing text/number input, and the change listener below already picks
-    // up checkboxes because they carry the same .setting-input class.
-    const input = typeof setting.value === 'boolean'
-      ? `<input class="setting-input setting-toggle" data-setting="${escapeHtml(setting.key)}"
-        type="checkbox" ${setting.value ? 'checked' : ''} />`
-      : `<input class="setting-input" data-setting="${escapeHtml(setting.key)}"
-        type="${typeof setting.value === 'number' ? 'number' : 'text'}"
-        value="${escapeHtml(String(setting.value))}" />`;
-    // The label is the question, the note is where the answer comes from, and
-    // the control is a whole row of its own on a phone. Side by side, an input
-    // beside a long label is a two-line label, a clipped field, or both.
-    return `
-    <label class="setting-row">
-      <span class="setting-label">
-        ${escapeHtml(setting.label)}
-        <em>${setting.source === 'stored' ? 'saved here' : `from ${escapeHtml(setting.envVar)}`}</em>
-      </span>
-      ${input}
-    </label>`;
-  });
+  const query = state.settingsQuery.trim().toLowerCase();
+  const matches = (...haystack) => !query || haystack.some((h) => String(h).toLowerCase().includes(query));
 
-  const secrets = data.secrets.map((secret) => {
-    const state_ = (SECRET_STATE[secret.source] || SECRET_STATE.missing)(secret);
-    return `
-      <div class="secret" data-secret="${escapeHtml(secret.name)}">
-        <div class="secret-main">
-          <span class="secret-name">${escapeHtml(secret.label)}</span>
-          <span class="secret-state ${state_.className}">${escapeHtml(state_.text)}</span>
-        </div>
-        <div class="secret-actions">
-          <button class="primary" data-act="set" data-name="${escapeHtml(secret.name)}">${secret.source === 'stored' ? 'Replace key' : 'Add key'}</button>
-          ${secret.name === 'gemini_api_key'
-            ? `<button data-act="test" data-name="${escapeHtml(secret.name)}">Test it</button>`
-            : ''}
-          ${secret.source === 'stored'
-            ? `<button class="danger" data-act="remove" data-name="${escapeHtml(secret.name)}">Remove</button>`
-            : ''}
-        </div>
+  /* ---- how it runs ------------------------------------------------------
+     A setting is a question ("what is the run budget?"), the answer (its
+     current value) and the reason it exists (the description the server has
+     always sent and this page always threw away). The control opens under the
+     row instead of standing next to the label, which is what made the page a
+     wall of inputs on a phone. */
+  const settingRows = data.settings.map((setting) => {
+    const value = typeof setting.value === 'boolean' ? (setting.value ? 'On' : 'Off') : String(setting.value);
+    const source = setting.source === 'stored' ? 'saved here' : `from ${setting.source === 'environment' ? setting.envVar : 'the default'}`;
+    if (!matches(setting.label, setting.description, setting.key, value)) return '';
+
+    if (typeof setting.value === 'boolean') {
+      return `
+      <div class="setting-row" data-key="${escapeHtml(setting.key)}">
+        <label class="setting-toggle-row">
+          <span class="setting-main">
+            <span class="setting-label">${escapeHtml(setting.label)}</span>
+            <span class="setting-desc">${escapeHtml(setting.description)}</span>
+          </span>
+          <input class="setting-input setting-toggle" data-setting="${escapeHtml(setting.key)}"
+            type="checkbox" ${setting.value ? 'checked' : ''} />
+        </label>
+        <p class="setting-source">${escapeHtml(source)}</p>
       </div>`;
+    }
+
+    return `
+    <div class="setting-row" data-key="${escapeHtml(setting.key)}">
+      <button type="button" class="setting-summary" aria-expanded="false"
+              aria-label="Edit ${escapeHtml(setting.label)}">
+        <span class="setting-main">
+          <span class="setting-label">${escapeHtml(setting.label)}</span>
+          <span class="setting-desc">${escapeHtml(setting.description)}</span>
+        </span>
+        <span class="setting-value"></span>
+        <svg class="setting-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="setting-editor" hidden>
+        <input class="setting-input" data-setting="${escapeHtml(setting.key)}"
+          type="${typeof setting.value === 'number' ? 'number' : 'text'}"
+          value="${escapeHtml(String(setting.value))}"
+          aria-label="${escapeHtml(setting.label)}" />
+        <p class="setting-source">${escapeHtml(source)} — changes save as soon as you leave the field.</p>
+      </div>
+    </div>`.replace('<span class="setting-value"></span>', `<span class="setting-value">${escapeHtml(value)}</span>`);
   });
 
-  // Whether the phone channel is actually connected. "Paste the API key" is the
-  // whole setup, so the panel shows the result of having done it — including the
-  // reason when it is not working, which is the difference between "it is off"
-  // and "it is broken".
+  /* ---- connections ------------------------------------------------------
+     The pattern is Claude's connectors directory, which gets this right: a
+     named thing, what it lets the app do, its state, and one obvious action —
+     instead of a bare "Replace" beside a hash. */
+  const connectionFor = (secret) => {
+    const state_ = (SECRET_STATE[secret.source] || SECRET_STATE.missing)(secret);
+    if (!matches(secret.label, secret.description, secret.name, state_.text)) return '';
+    const detail = [
+      secret.fingerprint ? `${secret.fingerprint}` : null,
+      secret.source === 'stored' ? 'saved here' : secret.source === 'environment' ? `from ${secret.envVar}` : null,
+      secret.updatedAt ? `updated ${relativeTime(secret.updatedAt)}` : null,
+    ].filter(Boolean).join(' · ');
+    return `
+    <article class="connection" data-secret="${escapeHtml(secret.name)}">
+      <div class="connection-head">
+        <span class="connection-name">${escapeHtml(secret.label)}</span>
+        <span class="pill ${state_.className}">${escapeHtml(state_.short)}</span>
+      </div>
+      <p class="connection-desc">${escapeHtml(secret.description)}</p>
+      ${detail ? `<p class="connection-detail">${escapeHtml(detail)}</p>` : ''}
+      <div class="secret-actions">
+        <button class="primary" data-act="set" data-name="${escapeHtml(secret.name)}">${secret.source === 'stored' || secret.source === 'unreadable' ? 'Replace key' : 'Add key'}</button>
+        ${secret.name === 'gemini_api_key'
+          ? `<button data-act="test" data-name="${escapeHtml(secret.name)}">Test it</button>`
+          : ''}
+        ${secret.source === 'stored'
+          ? `<button class="danger" data-act="remove" data-name="${escapeHtml(secret.name)}">Remove</button>`
+          : ''}
+      </div>
+    </article>`;
+  };
+  const connections = data.secrets.map(connectionFor);
+
   const whatsapp = data.whatsapp;
-  const whatsappNote = !whatsapp
-    ? ''
+  const whatsappPill = !whatsapp
+    ? null
     : whatsapp.state === 'running'
-      ? `<p class="setting-note"><b>WhatsApp connected</b>${whatsapp.agentId ? ` as ${escapeHtml(whatsapp.agentId)}` : ''}. Text it a task and it answers here too.</p>`
+      ? { className: 'ok', short: 'Connected' }
       : whatsapp.state === 'error'
-        ? `<p class="setting-note bad"><b>WhatsApp cannot connect.</b> ${escapeHtml(whatsapp.lastError || 'The platform refused the key.')} Generate a new API key in WhatsApp → Settings → Agents, and replace it here.</p>`
-        : `<p class="setting-note">${escapeHtml(whatsapp.detail || 'WhatsApp is not connected.')}</p>`;
+        ? { className: 'bad', short: 'Not connecting' }
+        : { className: 'muted', short: 'Off' };
+  const whatsappNote = !whatsapp
+    ? '<p class="connection-desc">The phone channel is not configured.</p>'
+    : whatsapp.state === 'running'
+      ? `<p class="connection-desc"><b>Connected${whatsapp.agentId ? ` as ${escapeHtml(whatsapp.agentId)}` : ''}.</b> Text the agent a task from your phone and it answers here too.</p>`
+      : whatsapp.state === 'error'
+        ? `<p class="connection-desc"><b>WhatsApp cannot connect.</b> ${escapeHtml(whatsapp.lastError || 'The platform refused the key.')} Generate a new API key in WhatsApp → Settings → Agents, and replace it here.</p>`
+        : `<p class="connection-desc">${escapeHtml(whatsapp.detail || 'WhatsApp is not connected.')}</p>`;
 
   const encryptionNote = data.encryption.available
-    ? `<p class="setting-note">Keys are encrypted with MASTER_KEY before they are stored, and are never sent back to this screen — only a short fingerprint is.</p>`
-    : `<p class="setting-note bad">${escapeHtml(data.encryption.hint || 'Storing secrets is unavailable.')}</p>`;
+    ? '<p class="setting-source">Keys are encrypted with MASTER_KEY before they are stored, and never sent back to this screen — only a short fingerprint is.</p>'
+    : `<p class="setting-source bad">${escapeHtml(data.encryption.hint || 'Storing secrets is unavailable.')}</p>`;
 
-  // The page used to be one undifferentiated list: three settings, then keys,
-  // then the phone channel, with a note in between. Grouping it costs nothing
-  // and answers the only question a settings page is ever asked — "where is the
-  // thing I came here for".
+  const keysSet = data.secrets.filter((s) => s.source === 'stored' || s.source === 'environment').length;
+  const visibleSettings = settingRows.filter(Boolean);
+  const visibleConnections = connections.filter(Boolean);
+
+  const emptyNote = '<p class="settings-empty">Nothing matches that.</p>';
+
   el.settingsBody.innerHTML =
     '<p class="settings-lead">Everything on this page applies the moment you change it. Nothing here needs a restart.</p>' +
-    section('How it runs', `<div class="settings-list">${rows.join('')}</div>`) +
-    section('Keys', `<div class="settings-list">${secrets.join('')}</div>` + encryptionNote) +
-    section('The phone channel', `<div class="settings-list">${whatsappNote}</div>`);
+    (visibleSettings.length
+      ? section(
+          `How it runs · ${visibleSettings.length}`,
+          `<div class="settings-list">${visibleSettings.join('')}</div>`,
+        )
+      : query ? '' : '') +
+    (visibleConnections.length
+      ? section(
+          `Connections · ${keysSet} of ${data.secrets.length} set`,
+          `<div class="settings-list">${visibleConnections.join('')}</div>` + encryptionNote,
+        )
+      : query ? '' : '') +
+    (matches('whatsapp', 'phone', whatsappNote) && !query
+      ? section('The phone channel', `<div class="settings-list"><div class="setting-row">${whatsappPill ? `<div class="connection-head"><span class="connection-name">WhatsApp</span><span class="pill ${whatsappPill.className}">${whatsappPill.short}</span></div>` : ''}${whatsappNote}</div></div>`)
+      : '') +
+    (!query || matches('build', 'version', 'commit')
+      ? section('About this build', '<div class="settings-list"><div class="setting-row" id="build-line"></div></div>')
+      : '') +
+    (!visibleSettings.length && !visibleConnections.length && query ? emptyNote : '');
 
   for (const input of el.settingsBody.querySelectorAll('.setting-input')) {
     input.addEventListener('change', () => saveSetting(input));
+  }
+  for (const summary of el.settingsBody.querySelectorAll('.setting-summary')) {
+    summary.addEventListener('click', () => {
+      const row = summary.closest('.setting-row');
+      const editor = row.querySelector('.setting-editor');
+      const open = summary.getAttribute('aria-expanded') === 'true';
+      summary.setAttribute('aria-expanded', String(!open));
+      editor.hidden = open;
+      if (!open) editor.querySelector('.setting-input').focus();
+    });
   }
   // The body element survives every re-render, so the delegated click handler
   // is bound once. Binding it per render stacked identical listeners, which
@@ -3982,6 +4062,7 @@ function renderSettings() {
     settingsClickBound = true;
     el.settingsBody.addEventListener('click', onSettingsClick);
   }
+  void renderBuildLine();
 }
 
 async function saveSetting(input) {
@@ -4018,7 +4099,7 @@ function onSettingsClick(event) {
 
 /** The value is entered, sent, and forgotten by this screen — it is never shown again. */
 function askSecret(button, name) {
-  const row = button.closest('.secret');
+  const row = button.closest('.connection');
   const actions = row.querySelector('.secret-actions');
   actions.innerHTML = `
     <input class="secret-input" type="password" autocomplete="off" spellcheck="false"
@@ -4361,7 +4442,16 @@ function closeSettings({ fromHistory = false } = {}) {
   if (!fromHistory) history.back();
 }
 
-el.settingsOpen.addEventListener('click', openSettings);
+el.settingsSearch.addEventListener('input', () => {
+  state.settingsQuery = el.settingsSearch.value;
+  renderSettings();
+});
+// Leaving the page clears the filter, so coming back never hides rows behind a
+// search the operator has forgotten about.
+el.settingsOpen.addEventListener('click', () => {
+  el.settingsSearch.value = '';
+  state.settingsQuery = '';
+});
 el.settingsBack.addEventListener('click', () => closeSettings());
 window.addEventListener('popstate', () => closeSettings({ fromHistory: true }));
 $('btn-close-drawer').addEventListener('click', closeDrawer);

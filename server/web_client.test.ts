@@ -862,6 +862,74 @@ describe('the drawer is a front door, not a form', () => {
   });
 });
 
+describe('Settings is a directory, not a form', () => {
+  // The redesign takes its shape from a connectors directory (Claude's, and the
+  // ones it borrowed from): one searchable list, each item showing what it is,
+  // what state it is in, and one obvious thing to do about it — instead of a
+  // wall of inputs whose labels only make sense if you already know the keys.
+
+  test('there is one search box, and it filters the page', () => {
+    const page = read('web/index.html');
+    assert.ok(page.includes('id="settings-search"'), 'the box exists');
+    const bodyStart = page.indexOf('id="settings-body"');
+    assert.ok(page.indexOf('id="settings-search"') < bodyStart, 'and sits above the content');
+    assert.ok(
+      page.indexOf('id="settings-body"') > page.indexOf('id="settings-search"'),
+      'the list is what gets re-rendered, not the box: re-creating the input on every',
+      'keystroke loses focus and, on a phone, the keyboard',
+    );
+    const client = app();
+    assert.ok(client.includes("state.settingsQuery = el.settingsSearch.value;"), 'typing filters');
+    assert.ok(client.includes('if (!matches(setting.label, setting.description, setting.key, value)) return'),
+      'a setting is matched on its words, not just its key');
+    assert.ok(client.includes('if (!matches(secret.label, secret.description, secret.name, state_.text)) return'),
+      'so is a connection');
+    assert.ok(client.includes("el.settingsSearch.value = '';"), 'and opening the page clears the filter');
+    assert.ok(client.includes('<p class="settings-empty">Nothing matches that.</p>'), 'an empty result says so');
+  });
+
+  test('a connection says what it is, and what state it is in', () => {
+    const client = app();
+    assert.ok(client.includes('class="connection-name"'), 'the name');
+    assert.ok(client.includes('class="connection-desc"'), 'what it lets the app do');
+    assert.ok(client.includes('class="pill ${state_.className}"'), 'its state, as a pill');
+    assert.ok(client.includes("short: 'Connected'"), 'connected');
+    assert.ok(client.includes("short: 'Not set', className: 'muted'"), 'not set is honest, not alarming');
+    assert.ok(client.includes("short: 'Needs attention'"), 'and an undecryptable key is called out, not hidden');
+    assert.ok(client.includes('class="connection-detail"'), 'with the fingerprint, never the key');
+  });
+
+  test('each item offers one primary action', () => {
+    const client = app();
+    assert.ok(client.includes('<button class="primary" data-act="set"'), 'the one thing to do is the loud one');
+    assert.ok(client.includes("? 'Replace key' : 'Add key'"), 'and it says which of the two it is');
+    assert.ok(client.includes('data-act="test"'), 'testing the key is secondary');
+    assert.ok(client.includes('data-act="remove"'), 'so is removing it');
+    const actions = css().slice(css().indexOf('.secret-actions {'));
+    assert.ok(actions.slice(0, actions.indexOf('}')).includes('flex-wrap: wrap'), 'and they never crush each other');
+  });
+
+  test('a setting shows the reason it exists, and the answer', () => {
+    const client = app();
+    // The server has always sent `description`; the old page ignored it, so the
+    // panel was a list of keys and values nobody but the author could read.
+    assert.ok(client.includes('escapeHtml(setting.description)'), 'the description is shown');
+    assert.ok(client.includes('class="setting-value"'), 'with the current value on the row');
+    assert.ok(client.includes('class="setting-editor" hidden'), 'and the editor closed until asked for');
+    assert.ok(client.includes("editor.querySelector('.setting-input').focus()"), 'opening it puts the cursor in the field');
+    assert.ok(client.includes('changes save as soon as you leave the field'), 'saving is explained where it happens');
+  });
+
+  test('the page is a single scroll, with rows you can hit', () => {
+    const cssText = css();
+    const search = cssText.slice(cssText.indexOf('.settings-search {'));
+    assert.ok(!/overflow(-y)?:\s*(auto|scroll)/.test(search.slice(0, search.indexOf('}'))), 'the filter does not scroll on its own');
+    const connection = cssText.slice(cssText.indexOf('.connection {'));
+    assert.ok(!/overflow(-y)?:\s*(auto|scroll)/.test(connection.slice(0, connection.indexOf('}'))), 'nor a connection card');
+    assert.ok(cssText.includes('.setting-summary, .setting-toggle-row { min-height: 44px; }'), 'and a row is a 44px target');
+  });
+});
+
 describe('Settings is a page you can read on a phone', () => {
   test('nothing in a settings card is clipped', () => {
     const cssText = css();
@@ -877,11 +945,12 @@ describe('Settings is a page you can read on a phone', () => {
 
   test('each block says what it is, and the page says when it applies', () => {
     const client = app();
-    assert.ok(client.includes("section('How it runs'"), 'the settings block');
-    assert.ok(client.includes("section('Keys'"), 'the keys block');
+    assert.ok(client.includes('`How it runs · ${visibleSettings.length}`'), 'the settings block');
+    assert.ok(client.includes('`Connections · ${keysSet} of ${data.secrets.length} set`'), 'the connections block');
     assert.ok(client.includes("section('The phone channel'"), 'the WhatsApp block');
     assert.ok(client.includes('class="settings-lead"'), 'with a line saying changes apply immediately');
     assert.ok(client.includes("? 'Replace key' : 'Add key'"), 'and a key action that says what it replaces');
+    assert.ok(client.includes('class="pill ${state_.className}"'), 'each connection shows its state as a pill');
   });
 });
 
@@ -1013,9 +1082,10 @@ describe('the decision points are the loudest thing on the screen', () => {
   test('settings is grouped by question, not listed by key', () => {
     const client = app();
     assert.ok(client.includes('function section(title, body)'), 'there are sections');
-    assert.ok(client.includes("section('How it runs'"), 'how it runs');
-    assert.ok(client.includes("section('Keys'"), 'the keys');
-    assert.ok(client.includes("section('The phone channel'"), 'and the phone channel');
+    assert.ok(client.includes('`How it runs · ${visibleSettings.length}`'), 'how it runs, with how many');
+    assert.ok(client.includes('`Connections · ${keysSet} of ${data.secrets.length} set`'), 'the connections, with how many are set');
+    assert.ok(client.includes("section('The phone channel'"), 'the phone channel');
+    assert.ok(client.includes("section('About this build'"), 'and the build this page is running');
     assert.ok(css().includes('.settings-heading'), 'with a heading style of its own');
   });
 
