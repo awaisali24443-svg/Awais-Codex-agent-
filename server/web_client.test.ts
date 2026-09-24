@@ -467,16 +467,67 @@ describe('a kept file can actually be kept', () => {
     assert.ok(client.includes("pinning ? 'pin' : 'unpin'"), 'pin to keep, unpin to stop keeping');
   });
 
-  test('a pinned row is shown as kept, and the chips follow the record', () => {
+  test('a kept file is shown as kept everywhere it appears', () => {
     const client = app();
-    assert.ok(client.includes("artifact.pinned ? ' · kept' : ''"), 'the chip says so');
-    assert.ok(client.includes('refreshArtifactChips'), 'and both views are repainted from the record');
-    assert.ok(css().includes('.file.kept'), 'with a style of its own');
+    // The card's second line is built by artifactMeta, which is the same
+    // function the repaint uses — so the answer's card, the panel's card and
+    // whatever the operator just tapped can never disagree.
+    assert.ok(client.includes('artifactMeta(artifact, formatBytes)'), 'the meta line says it is kept');
+    assert.ok(client.includes('refreshArtifactChips'), 'and every view is repainted from the record');
+    assert.ok(css().includes('.result.kept'), 'with a style of its own');
+    assert.ok(client.includes("card.className = 'result' + (artifact.pinned ? ' kept' : '')"), 'on the card itself');
   });
 
   test('a failed pin explains itself instead of failing silently', () => {
     const client = app();
     assert.ok(client.includes("err.body?.message || err.message || 'Could not keep that file.'"), 'the reason is surfaced');
+  });
+});
+
+describe('a produced file is a card, and an answer shows its sources', () => {
+  test('the card says what the file is, how big, and what can be done with it', () => {
+    const client = app();
+    assert.ok(client.includes('function artifactCard('), 'there is a card');
+    assert.ok(client.includes('artifactKind(artifact.name)'), 'the kind comes from the name');
+    assert.ok(client.includes('artifactMeta(artifact, formatBytes)'), 'the second line comes from one helper');
+    assert.ok(client.includes("open.querySelector('span').textContent = 'Open'"), 'a page can be opened');
+    assert.ok(client.includes("download.querySelector('span').textContent = 'Download'"), 'and saved');
+    assert.ok(client.includes('keepButton(artifact)'), 'and kept');
+    // The panel and the thread draw the same component, not two similar rows.
+    assert.ok(client.includes('body.append(artifactCard(artifact))'), 'the panel uses it too');
+    assert.ok(!client.includes("row.className = 'panel-file'"), 'and the old row layout is gone');
+  });
+
+  test('the panel says which task it is showing', () => {
+    const client = app();
+    assert.ok(client.includes('function renderPanelHead()'), 'the panel has a head');
+    assert.ok(client.includes('panel-subtitle'), 'with the task under the title');
+    assert.ok(client.includes('const counts = {'), 'and each tab counts what is inside it');
+  });
+
+  test('an answer shows the links it cites, checked and marked', () => {
+    const client = app();
+    assert.ok(client.includes('function renderSources(card)'), 'there is a sources strip');
+    assert.ok(client.includes('sourcesFromText(text)'), 'built from the answer text');
+    assert.ok(client.includes('markDead(sourcesFromText(text), card.deadSources ?? [])'), 'with what the link check found');
+    assert.ok(client.includes("head.querySelector('.sources-title').textContent = 'Sources'"), 'under a heading');
+    assert.ok(client.includes("more.textContent = `Show ${sources.length - VISIBLE} more`"), 'and only the first few until asked');
+    assert.ok(client.includes("row.rel = 'noopener noreferrer'"), 'opened safely');
+  });
+
+  test('a reopened task shows its sources too', () => {
+    // The links are in the stored answer, so nothing has to be fetched and a
+    // week-old task reads the same as the day it ran.
+    const client = app();
+    const open = client.slice(client.indexOf('async function openConversation'));
+    assert.ok(open.includes('renderSources({ answerText: message.content'), 'history answers get the strip');
+  });
+
+  test('a bare URL in the prose is a link, not text', () => {
+    const client = app();
+    const fn = client.slice(client.indexOf('function inline(text)'), client.indexOf('function inline(text)') + 900);
+    assert.ok(fn.includes('bare URL is a link'), 'bare URLs are linkified');
+    assert.ok(fn.includes("rel=\"noopener noreferrer\""), 'safely');
   });
 });
 

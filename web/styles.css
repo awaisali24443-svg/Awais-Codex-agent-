@@ -867,21 +867,85 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .memory-note { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 
-/* ---- artifact chips on a finished run ---- */
-.files { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 10px 0 2px; }
-.file {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: var(--space-2) 13px; font-size: var(--text-sm); color: var(--ink);
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius-pill); cursor: pointer; text-decoration: none;
+/* ---- what a task produced: result cards -------------------------------- */
+
+.files { display: flex; flex-direction: column; gap: var(--space-2); }
+.files-head {
+  margin: var(--space-2) 0 0; font-size: var(--text-xs);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
-.file:hover { background: var(--surface-2); }
-.file svg { width: 15px; height: 15px; fill: none; stroke: var(--ink-soft); stroke-width: 1.9; }
-.file.busy { opacity: .55; pointer-events: none; }
-/* A file the operator asked us to keep. A quiet mark, not a badge: the point is
-   that it is still there next month, not that it is special today. */
-.file.kept { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
-.file.kept svg { stroke: var(--ok); }
+
+/* A file is a card, not a filename: what it is, how big, and what can be done
+   with it. The icon is the kind (a page, an app, a sheet), which is the thing
+   the eye is looking for when it scans a list of results. */
+.result {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: 11px var(--space-3);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface);
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.result:hover { border-color: color-mix(in srgb, var(--ink) 22%, var(--line)); box-shadow: var(--shadow-sm); }
+.result.kept { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.result-mark {
+  display: grid; place-items: center; flex: none;
+  width: 34px; height: 34px; border-radius: 10px;
+  background: var(--surface-2); color: var(--ink-soft);
+}
+.result-mark svg { width: 17px; height: 17px; }
+.result.kept .result-mark { background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)); color: var(--accent); }
+.result-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.result-name {
+  font-size: var(--text-md); color: var(--ink); font-weight: var(--weight-medium);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.result-line { font-size: var(--text-xs); color: var(--muted); }
+.result-actions { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
+.result-actions .msg-btn { opacity: 1; }
+
+/* ---- the sources an answer cites --------------------------------------- */
+
+.sources-slot:empty { display: none; }
+.sources {
+  margin-top: var(--space-3);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); overflow: hidden;
+}
+.sources-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px var(--space-3) 7px;
+  color: var(--muted); font-size: var(--text-xs);
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.sources-head svg { width: 14px; height: 14px; }
+.sources-title { color: var(--ink-soft); }
+.sources-count { margin-left: auto; letter-spacing: 0; text-transform: none; }
+.sources-list { display: flex; flex-direction: column; }
+.source {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: 8px var(--space-3);
+  text-decoration: none; color: inherit;
+  border-top: 1px solid var(--line-soft);
+}
+.source:hover { background: var(--surface-2); }
+.source-badge {
+  display: grid; place-items: center; flex: none;
+  width: 26px; height: 26px; border-radius: 8px;
+  background: var(--surface-2); color: var(--ink-soft);
+  font-size: 12px; font-weight: var(--weight-semibold);
+}
+.source-body { min-width: 0; display: flex; flex-direction: column; }
+.source-label { font-size: var(--text-sm); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-domain { font-size: var(--text-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source.dead .source-badge { background: color-mix(in srgb, var(--danger) 12%, var(--surface-2)); color: var(--danger); }
+.source.dead .source-domain { color: var(--danger); }
+.source.dead .source-label { text-decoration: line-through; text-decoration-color: var(--line); }
+.sources-more {
+  width: 100%; padding: 9px var(--space-3); text-align: left;
+  border: 0; border-top: 1px solid var(--line-soft); background: transparent;
+  color: var(--ink-soft); font: inherit; font-size: var(--text-sm); cursor: pointer;
+}
+.sources-more:hover { background: var(--surface-2); }
 
 /* ---- live website preview overlay ---- */
 .preview-overlay {
@@ -1004,6 +1068,62 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .setting-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .setting-note.bad { color: var(--danger); }
 
+/* ------------------------------------------------------------- the drawer ---
+   The list is the app's front door, so it gets the front door's furniture:
+   search at the top, one obvious way to start something, the recents in the
+   middle, and everything else at the foot where a thumb rests. */
+
+.drawer-search {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-3);
+  padding: 8px 12px; border-radius: var(--radius-pill);
+  background: var(--surface-2); color: var(--muted);
+}
+.drawer-search svg { width: 16px; height: 16px; flex: none; }
+.drawer-search input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  font: inherit; font-size: 15px; color: var(--ink);
+}
+.drawer-search input::placeholder { color: var(--muted); }
+
+.cta.new-task { display: flex; align-items: center; justify-content: center; gap: var(--space-2); }
+.cta.new-task svg { width: 16px; height: 16px; }
+
+.convo-group {
+  margin: var(--space-4) var(--space-2) var(--space-1);
+  font-size: var(--text-xs); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.convo {
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  width: 100%; padding: 10px var(--space-2); border-radius: var(--radius-xs);
+  border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.convo:hover { background: var(--surface-2); }
+.convo.on { background: var(--surface-2); }
+.convo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.convo-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-preview { font-size: var(--text-xs); color: var(--muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-date { flex: none; font-size: var(--text-xs); color: var(--muted); padding-top: 2px; font-variant-numeric: tabular-nums; }
+.drawer-actions { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-1); padding-top: var(--space-3); }
+
+/* --------------------------------------------------------- screen changes ---
+   One transition for every screen change, owned by the View Transitions API
+   when it exists: the leaving screen fades and lifts, the arriving one settles
+   from just below. No library, no layout thrash, and nothing at all under
+   prefers-reduced-motion (theme.css switches every animation off). */
+
+::view-transition-old(root) { animation: screen-out var(--dur-2) var(--ease-out) both; }
+::view-transition-new(root) { animation: screen-in var(--dur-3) var(--ease-spring) both; }
+@keyframes screen-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes screen-in { from { opacity: 0; transform: translateY(10px); } }
+
+/* The mark on the welcome screen draws itself in once, when the app first
+   paints: the two strokes of the W, then the spark. */
+.badge-art .badge-w { stroke-dasharray: 100; stroke-dashoffset: 100; animation: draw 700ms var(--ease-out) 80ms forwards; }
+.badge-art .badge-spark { opacity: 0; animation: spark 520ms var(--ease-out) 620ms forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes spark { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
+
 /* ------------------------------------------------------- outputs panel --- */
 /* Claude-style slide-over: run outputs (files, preview, plan, proof) open
    from the right edge instead of cramped inline cards. On narrow screens it
@@ -1031,6 +1151,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .panel-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
 .panel-title { flex: 1; font-family: var(--serif); font-size: 21px; }
 .panel-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.panel-subtitle { margin: -6px 0 var(--space-3); font-size: var(--text-xs); color: var(--muted); }
 .panel-tabs[hidden] { display: none; }
 .panel-tab {
   padding: 7px 14px; font: inherit; font-size: var(--text-sm); color: var(--ink-soft);
@@ -1039,14 +1160,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .panel-tab[aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
 .panel-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
-.panel-file {
-  display: flex; align-items: center; gap: var(--space-2);
-  padding: 10px 0; border-top: 1px solid var(--line-soft);
-}
-.panel-file:first-child { border-top: none; padding-top: 0; }
-.panel-file-name { flex: 1; min-width: 0; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.panel-file-size { flex: none; font-size: 12px; color: var(--muted); }
-.panel-file .msg-btn { flex: none; }
+/* Files arrive as result cards, so the panel body stacks them with the same
+   spacing the thread uses. */
+.panel-body .result { border-radius: var(--radius-sm); }
+.panel-body .result + .result { margin-top: var(--space-2); }
 .panel-preview-pick { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
 .panel-frame {
   flex: 1; width: 100%; min-height: 320px;

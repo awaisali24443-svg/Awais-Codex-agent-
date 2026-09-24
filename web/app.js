@@ -1,4 +1,5 @@
 import { stripMarkdownForSpeech, combineTranscripts, recognitionErrorMessage } from './voice.js';
+import { artifactKind, artifactMeta, markDead, sourcesFromText, sourcesSummary } from './records.js';
 import { SUGGESTIONS, suggestionFill, fillComposerFromChip } from './welcome.js';
 import {
   statusForStep,
@@ -431,6 +432,14 @@ async function openConversation(id, branchId = null) {
       // how a thread knows the streaming card belongs to it.
       if (message.runId && message.runId === state.runId) ownsLiveRun = true;
       const node = message.role === 'user' ? renderAsk(message.content) : renderAnswer(message.content);
+      // A reopened conversation shows the same sources the live one did; they
+      // are in the stored answer, so nothing has to be fetched for them.
+      if (message.role === 'assistant') {
+        const slot = document.createElement('div');
+        slot.className = 'sources-slot';
+        node.append(slot);
+        renderSources({ answerText: message.content, answerTail: '', sources: slot, deadSources: [], sourcesChecked: 0 });
+      }
       attachMessageActions(node, message, draftByRun.get(message.runId));
     }
   } catch { /* silent */ }
@@ -570,6 +579,9 @@ function existingCard(runId) {
   return {
     card,
     files: card.querySelector('.files'),
+    sources: card.querySelector('.sources-slot'),
+    deadSources: [],
+    sourcesChecked: 0,
     runId,
     plan: card.querySelector('.plan'),
     planIndex: new Map(),
@@ -732,10 +744,18 @@ function createRunCard(runId = null) {
 
   // Filled at the end of the run, from the artifact record rather than from the
   // stream, so a replayed or reopened conversation shows the same files.
+  // Filled at the end of the run, from the artifact record rather than from the
+  // stream, so a replayed or reopened conversation shows the same files.
   const files = document.createElement('div');
   files.className = 'files';
 
-  card.append(thinking, plan, steps, answer, files);
+  // The links the answer cites. Filled by renderSources, which runs when the
+  // answer is complete — the strip is a summary, so it does not flicker
+  // mid-stream.
+  const sources = document.createElement('div');
+  sources.className = 'sources-slot';
+
+  card.append(thinking, plan, steps, answer, sources, files);
   el.thread.append(card);
   startRunClock(card);
   scrollToEnd();
@@ -743,6 +763,7 @@ function createRunCard(runId = null) {
   return {
     card,
     files,
+    sources,
     runId,
     plan,
     planIndex: new Map(),
@@ -769,6 +790,81 @@ function drawThinking(card) {
   const text = card.thinkingText + card.thinkingTail;
   card.thinkingBody.textContent = text;
   card.thinkingMeta.textContent = card.elapsed ?? `${Math.round(text.length / 4)} tok`;
+}
+
+/**
+ * The links an answer cites, as a list under it.
+ *
+ * An answer that says "according to the RBI circular" and does not say where
+ * is only trustworthy if you already trust it. The links are in the text — this
+ * pulls them out, keeps the order, and shows what the server's link check found
+ * (a dead source is a fact about the answer, not something to hide).
+ *
+ * Rebuilt rather than appended, because the answer streams: the same link may
+ * be rewritten three times before the run ends.
+ */
+function renderSources(card) {
+  const text = card.answerText + card.answerTail;
+  const sources = markDead(sourcesFromText(text), card.deadSources ?? []);
+  if (sources.length === 0) return;
+
+  const box = document.createElement('div');
+  box.className = 'sources';
+
+  const head = document.createElement('div');
+  head.className = 'sources-head';
+  head.innerHTML = iconFor('globe') + '<span class="sources-title"></span><span class="sources-count"></span>';
+  head.querySelector('.sources-title').textContent = 'Sources';
+  head.querySelector('.sources-count').textContent = sourcesSummary(sources, card.sourcesChecked ?? 0);
+  box.append(head);
+
+  const list = document.createElement('div');
+  list.className = 'sources-list';
+  // On a phone, four is a glance and eleven is a scroll inside a scroll.
+  const VISIBLE = 4;
+  sources.slice(0, VISIBLE).forEach((source) => list.append(sourceRow(source)));
+  box.append(list);
+
+  if (sources.length > VISIBLE) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'sources-more';
+    more.textContent = `Show ${sources.length - VISIBLE} more`;
+    more.addEventListener('click', () => {
+      for (const source of sources.slice(VISIBLE)) list.append(sourceRow(source));
+      more.remove();
+    });
+    box.append(more);
+  }
+
+  card.sources.replaceChildren(box);
+}
+
+/** One cited link: a badge for the domain, the name the answer gave it, the host. */
+function sourceRow(source) {
+  const row = document.createElement('a');
+  row.className = 'source' + (source.dead ? ' dead' : '');
+  row.href = source.url;
+  row.target = '_blank';
+  row.rel = 'noopener noreferrer';
+  row.title = source.dead ? `${source.url} — this link did not respond when it was checked` : source.url;
+
+  const badge = document.createElement('span');
+  badge.className = 'source-badge';
+  badge.textContent = source.badge;
+
+  const body = document.createElement('span');
+  body.className = 'source-body';
+  const label = document.createElement('span');
+  label.className = 'source-label';
+  label.textContent = source.label;
+  const domain = document.createElement('span');
+  domain.className = 'source-domain';
+  domain.textContent = source.dead ? `${source.domain} · did not respond` : source.domain;
+  body.append(label, domain);
+
+  row.append(badge, body);
+  return row;
 }
 
 function drawAnswer(card, streaming) {
@@ -1186,6 +1282,11 @@ function handleEvent(card, event, data) {
     case 'sources.checked': {
       const dead = Array.isArray(data.dead) ? data.dead : [];
       const checked = Number(data.checked) || 0;
+      // The strip under the answer is the same fact in a more useful place:
+      // which of the links this answer cites are real.
+      card.deadSources = dead;
+      card.sourcesChecked = checked;
+      renderSources(card);
       addStep(card, 'sources', {
         name: dead.length === 0
           ? `Sources checked — ${checked} link${checked === 1 ? '' : 's'} alive`
@@ -1298,6 +1399,7 @@ function finishCard(card, outcome, data = {}) {
   }
 
   foldWork(card);
+  renderSources(card);
   setRunning(false);
   loadBudget();
   loadConversations();
@@ -1634,10 +1736,13 @@ async function loadArtifacts(card) {
   try {
     const { artifacts } = await api(`/api/runs/${card.runId}/artifacts`);
     card.files.innerHTML = '';
-    for (const artifact of artifacts) {
-      card.files.append(artifactChip(artifact));
-      if (artifact.previewable) card.files.append(previewButton(artifact));
+    if (artifacts.length > 0) {
+      const head = document.createElement('p');
+      head.className = 'files-head';
+      head.textContent = artifacts.length === 1 ? 'File' : `Files (${artifacts.length})`;
+      card.files.append(head);
     }
+    for (const artifact of artifacts) card.files.append(artifactCard(artifact));
   } catch { /* the run is what matters; a missing file list is not fatal */ }
 }
 
@@ -1674,32 +1779,90 @@ const artifactChips = new Map();
 /** Repaint every chip for this artifact from the record that was just updated. */
 function refreshArtifactChips(artifact) {
   for (const chip of artifactChips.get(artifact.id) ?? []) {
-    const label = chip.querySelector('span');
+    const label = chip.querySelector('.result-line') ?? chip.querySelector('span');
     if (!label) continue;
     chip.classList.toggle('kept', !!artifact.pinned);
-    label.textContent = artifact.name
-      + (artifact.size ? ` · ${formatBytes(artifact.size)}` : '')
-      + (artifact.pinned ? ' · kept' : '');
+    // Same three facts in the same order whichever view is repainting: what it
+    // is, how big it is, whether it is kept.
+    label.textContent = artifactMeta(artifact, formatBytes);
   }
 }
 
-function artifactChip(artifact) {
-  const chip = document.createElement('button');
-  chip.className = 'file' + (artifact.pinned ? ' kept' : '');
-  chip.type = 'button';
-  chip.innerHTML = `${iconFor('package')}<span></span>`;
-  const label = artifact.name
-    + (artifact.size ? ` · ${formatBytes(artifact.size)}` : '')
-    + (artifact.pinned ? ' · kept' : '');
-  chip.querySelector('span').textContent = label;
+/**
+ * A produced file, as a card.
+ *
+ * The old chip was a pill with a filename in it, which said "something exists"
+ * and nothing else. A card says what the thing *is* — a web page, an Android
+ * app, a spreadsheet — how big it is, whether it is being kept, and what can be
+ * done with it right now: open a page in the preview, download it, keep it. The
+ * filename is still the title, because the filename is what the operator sees
+ * again in their downloads folder.
+ */
+function artifactCard(artifact) {
+  const kind = artifactKind(artifact.name);
+  const card = document.createElement('div');
+  card.className = 'result' + (artifact.pinned ? ' kept' : '');
+  card.dataset.artifactId = artifact.id;
 
-  chip.addEventListener('click', () => downloadArtifact(artifact, chip));
+  const mark = document.createElement('span');
+  mark.className = 'result-mark';
+  mark.innerHTML = iconFor(kind.icon);
 
+  const body = document.createElement('div');
+  body.className = 'result-body';
+
+  const name = document.createElement('span');
+  name.className = 'result-name';
+  name.textContent = artifact.name;
+  name.title = artifact.name;
+
+  // The same line the other views repaint through refreshArtifactChips, so the
+  // label format is kept in one place.
+  const meta = document.createElement('span');
+  meta.className = 'result-line';
+  meta.textContent = artifactMeta(artifact, formatBytes);
+
+  body.append(name, meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'result-actions';
+
+  if (artifact.previewable) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'msg-btn';
+    open.innerHTML = iconFor('eye') + '<span></span>';
+    open.querySelector('span').textContent = 'Open';
+    open.title = `Open ${artifact.name} in a preview`;
+    open.addEventListener('click', () => openPreview(artifact));
+    actions.append(open);
+  }
+
+  const download = document.createElement('button');
+  download.type = 'button';
+  download.className = 'msg-btn';
+  download.innerHTML = iconFor('file') + '<span></span>';
+  download.querySelector('span').textContent = 'Download';
+  download.title = `Save ${artifact.name}`;
+  download.addEventListener('click', () => downloadArtifact(artifact, download));
+  actions.append(download);
+
+  actions.append(keepButton(artifact));
+
+  card.append(mark, body, actions);
+
+  // Registering the card keeps every view of this file in step: pinning in the
+  // panel repaints the card under the answer, and the other way round.
   const known = artifactChips.get(artifact.id) ?? [];
-  known.push(chip);
+  known.push(card);
   artifactChips.set(artifact.id, known);
 
-  return chip;
+  return card;
+}
+
+/** Back-compat alias: the registry and its tests call this a chip. */
+function artifactChip(artifact) {
+  return artifactCard(artifact);
 }
 
 /**
@@ -1758,16 +1921,6 @@ function keepButton(artifact) {
    iframe: its own scripts and styles run, but the sandbox keeps it away from
    the app — allow-scripts only, never allow-same-origin, never
    allow-top-navigation. */
-function previewButton(artifact) {
-  const btn = document.createElement('button');
-  btn.className = 'file preview-btn';
-  btn.type = 'button';
-  btn.innerHTML = `${iconFor('eye')}<span></span>`;
-  btn.querySelector('span').textContent = `Preview ${artifact.name}`;
-  btn.addEventListener('click', () => openPreview(artifact));
-  return btn;
-}
-
 function openPreview(artifact) {
   closePreview();
 
@@ -1863,6 +2016,7 @@ async function openOutputs(runId) {
       verification: panelData.run?.verification,
     });
     panel = { ...panel, section: defaultSection(panelVisible) };
+    renderPanelHead();
     renderPanelTabs();
     renderPanelBody();
   } catch {
@@ -1884,9 +2038,28 @@ function panelEscape(event) {
   if (event.key === 'Escape') closeOutputs();
 }
 
+/* Which run the panel is showing, in words: "Outputs" alone is a drawer with
+   no address on it. The task's own title is the address. */
+function renderPanelHead() {
+  const title = panelData?.run?.prompt?.trim() || 'Outputs';
+  el.panelTitle.textContent = 'Outputs';
+  const existing = document.querySelector('.panel-subtitle');
+  existing?.remove();
+  const subtitle = document.createElement('p');
+  subtitle.className = 'panel-subtitle';
+  subtitle.textContent = title.length > 90 ? `${title.slice(0, 90)}…` : title;
+  el.panelTitle.after(subtitle);
+}
+
 function renderPanelTabs() {
   el.panelTabs.innerHTML = '';
   el.panelTabs.hidden = panelVisible.length === 0;
+  const counts = {
+    files: panelData?.artifacts?.length ?? 0,
+    preview: (panelData?.artifacts ?? []).filter((a) => a && a.previewable).length,
+    plan: (panelData?.run?.plan ?? []).length,
+    proof: (panelData?.run?.verification ?? []).length,
+  };
   for (const id of panelVisible) {
     const def = PANEL_SECTIONS.find((s) => s.id === id);
     const tab = document.createElement('button');
@@ -1894,7 +2067,8 @@ function renderPanelTabs() {
     tab.className = 'panel-tab';
     tab.setAttribute('role', 'tab');
     tab.setAttribute('aria-selected', String(panel.section === id));
-    tab.textContent = def ? def.label : id;
+    const count = counts[id] ?? 0;
+    tab.textContent = count > 1 && def ? `${def.label} · ${count}` : (def ? def.label : id);
     tab.addEventListener('click', () => {
       panel = selectPanelSection(panel, id);
       renderPanelTabs();
@@ -1927,37 +2101,10 @@ function renderPanelBody() {
 }
 
 function renderPanelFiles(body, artifacts) {
+  // The panel shows the same card the answer shows — one component, two places,
+  // so a file never looks like one thing in the thread and another in the panel.
   for (const artifact of artifacts) {
-    const row = document.createElement('div');
-    row.className = 'panel-file';
-    const name = document.createElement('span');
-    name.className = 'panel-file-name';
-    name.textContent = artifact.name;
-    name.title = artifact.name;
-    const size = document.createElement('span');
-    size.className = 'panel-file-size';
-    size.textContent = artifact.size ? formatBytes(artifact.size) : '';
-    const dl = document.createElement('button');
-    dl.type = 'button';
-    dl.className = 'msg-btn';
-    dl.textContent = 'Download';
-    dl.addEventListener('click', () => downloadArtifact(artifact, dl));
-    row.append(name, size, dl);
-    row.append(keepButton(artifact));
-    if (artifact.previewable) {
-      const pv = document.createElement('button');
-      pv.type = 'button';
-      pv.className = 'msg-btn';
-      pv.textContent = 'Preview';
-      pv.addEventListener('click', () => {
-        panelPreviewId = artifact.id;
-        panel = selectPanelSection(panel, 'preview');
-        renderPanelTabs();
-        renderPanelBody();
-      });
-      row.append(pv);
-    }
-    body.append(row);
+    body.append(artifactCard(artifact));
   }
 }
 
@@ -3478,7 +3625,12 @@ function inline(text) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    // A bare URL is a link too. Models write them half the time, and text that
+    // looks like a link but is not one reads as broken. Trailing punctuation is
+    // left out, and the markdown-link form is skipped so nothing is linked twice.
+    .replace(/(?<!href="|>)(https?:\/\/[^\s<>()"']+[^\s<>()"'.,;:!?])/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
 }
 
 /**
