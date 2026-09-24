@@ -5,11 +5,14 @@
  * the LinkedIn contract, and the Google read contract:
  *
  *   OUT  `withDesignGuide(prompt, directionId)` — when the task is about
- *        designing or building a UI, prepend two things: the chosen art
+ *        designing or building a UI, prepend four things: the chosen art
  *        direction's recipe (canvas, type, space, motion, hero, skeleton, and
- *        the shapes it forbids) and the craft guide that applies in every
- *        direction. The operator's stored prompt is never rewritten; only the
- *        text sent to the model carries them.
+ *        the shapes it forbids), the craft guide that applies in every
+ *        direction, the asset kit (generated imagery — gradient fields, grain,
+ *        duotone, drawn frames — since there is no stock library and no image
+ *        API on the free tier), and the self-check. The operator's stored
+ *        prompt is never rewritten; only the text sent to the model carries
+ *        them.
  *
  *        The direction is what stopped every page looking the same. "Warm,
  *        minimal, quiet" was the entire house style, so a jewellery launch and
@@ -38,6 +41,7 @@ import path from 'node:path';
 import { findDir } from './paths.js';
 import { directionById, recipeFor } from './design/directions.js';
 import { gateChecklist } from './design/gate.js';
+import { assetKit } from './design/assets.js';
 import type { DirectionId } from './design/types.js';
 
 /** Verbs that signal the operator wants something built or shaped. */
@@ -91,6 +95,12 @@ whole page in it: it is not a theme, and it does not blend with another.]
 
 `;
 
+const ASSET_PREAMBLE = `[Asset kit — how this page gets its imagery without a stock
+library, an image API or a key. These are complete snippets: use them rather than
+inventing a technique, and never link an image from another site.]
+
+`;
+
 const SELF_CHECK_PREAMBLE = `[Self-check — the same checks the server runs on a finished
 build. Run them on your own work before you say the page is done, and fix what
 fails in the files you already wrote.]
@@ -110,6 +120,10 @@ export function withDesignGuide(prompt: string, directionId?: DirectionId | stri
   return (
     (direction ? DIRECTION_PREAMBLE + recipeFor(direction) + '\n\n' : '') +
     (guide ? GUIDE_PREAMBLE + guide + '\n\n' : '') +
+    // Only with a direction, because the kit is filtered by it: the techniques
+    // are chosen to suit the direction, and a halftone dot field handed to a
+    // wellness page is how a direction turns into a menu.
+    (direction ? ASSET_PREAMBLE + assetKit(direction.id) + '\n\n' : '') +
     // The server cannot read what the engine builds in its own sandbox, so the
     // gate's rules travel to the one thing that can run them: the model that
     // wrote the page. Same rules, same ids — see `gateChecklist`.

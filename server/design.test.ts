@@ -71,6 +71,19 @@ describe('withDesignGuide — the art direction rides on the wire too', () => {
     assert.ok(wired.indexOf('ART DIRECTION') < wired.indexOf('Craft guide'), 'direction first, craft second');
   });
 
+  it('the asset kit travels with the direction, and arrives before the self-check', () => {
+    // Imagery is the gap a generated page falls into: without a photograph and
+    // without a technique, the page becomes text on a coloured rectangle.
+    const prompt = 'Design a landing page for a jewellery atelier';
+    const wired = withDesignGuide(prompt, 'atelier');
+    assert.ok(wired.includes('Asset kit'), 'the kit is on the wire');
+    assert.ok(wired.includes('Mesh gradient field'), 'with the universal techniques');
+    assert.ok(wired.includes('Duotone treatment'), 'and the ones this direction needs');
+    assert.ok(!wired.includes('Halftone dots'), 'and none it does not');
+    assert.ok(wired.includes('no stock library'), 'and the reason it exists');
+    assert.ok(wired.indexOf('Asset kit') < wired.indexOf('Self-check'), 'imagery decides, then the check confirms');
+  });
+
   it('the self-check travels with the direction, because only the builder can run it', () => {
     // The built files live in the engine's own sandbox and the server can only
     // read them when someone downloads one, so the checks have to reach the
