@@ -579,6 +579,9 @@ describe('everything is a keystroke away', () => {
     // No dialog element: this is a layer over the thread, and the click-away
     // has to work on a phone as well.
     assert.ok(html().includes('id="palette-backdrop"'), 'with a backdrop to tap out of');
+    // And not on the login screen, where every row would be an action for a
+    // session that does not exist yet.
+    assert.ok(client.includes('if (!el.login.hidden) return;'), 'the palette waits until there is a session');
   });
 });
 

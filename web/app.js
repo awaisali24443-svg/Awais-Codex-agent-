@@ -4116,6 +4116,9 @@ function isPaletteOpen() {
 
 function openPalette({ from = null } = {}) {
   if (paletteOpen) return;
+  // Not on the login screen: every row there is an action for a session that
+  // does not exist yet.
+  if (!el.login.hidden) return;
   paletteOpen = true;
   paletteReturnFocus = from ?? document.activeElement;
   el.palette.hidden = false;
