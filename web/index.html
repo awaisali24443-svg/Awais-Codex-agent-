@@ -81,6 +81,10 @@ try {
     <div class="topbar-mid">
       <span class="topbar-title" id="topbar-title">WAIS</span>
       <span class="status-dot" id="status-dot" hidden></span>
+      <!-- The run's clock, in the bar rather than only inside the panel: the
+           panel scrolls and the operator scrolls with it, so a timer that only
+           lives there is a timer nobody reads on a long task. -->
+      <span class="run-timer" id="run-timer" hidden role="timer" aria-label="Time running"></span>
     </div>
     <button type="button" class="icon-btn" id="btn-stop" aria-label="Stop task" hidden>
       <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2.5" fill="currentColor" stroke="none"/></svg>

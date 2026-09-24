@@ -265,6 +265,16 @@ describe('config validation', () => {
     // Not scripted: a deployment that silently ran the demo engine would look
     // like the agent working while nothing real ever ran.
     assert.equal(loadConfig({ ...productionEnv } as NodeJS.ProcessEnv).engineName, 'antigravity');
+
+    // A demo that runs at real speed: the scripted engine plays back a couple of
+    // seconds of script, which is far too fast to judge a spinner, a timer or a
+    // wait line against. SCRIPTED_SPEED stretches it — clamped, so a typo in a
+    // shell cannot make a demo run for a day or divide by zero.
+    assert.equal(loadConfig({} as NodeJS.ProcessEnv).scriptedSpeed, 1, 'real time by default');
+    assert.equal(loadConfig({ SCRIPTED_SPEED: '45' } as NodeJS.ProcessEnv).scriptedSpeed, 45);
+    assert.equal(loadConfig({ SCRIPTED_SPEED: '0' } as NodeJS.ProcessEnv).scriptedSpeed, 1, 'zero is refused, not obeyed');
+    assert.equal(loadConfig({ SCRIPTED_SPEED: 'nope' } as NodeJS.ProcessEnv).scriptedSpeed, 1);
+    assert.equal(loadConfig({ SCRIPTED_SPEED: '9999' } as NodeJS.ProcessEnv).scriptedSpeed, 200, 'clamped');
   });
 
   test('production boots the real engine without an env key — it warns, the key can come from Settings', () => {

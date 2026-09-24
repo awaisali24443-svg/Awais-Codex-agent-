@@ -40,7 +40,10 @@ import { maybeSendBreakageAlerts } from './whatsapp/alerts.js';
 function createEngine(config: AppConfig, secrets: SecretsStore): Engine {
   if (config.engineName === 'scripted') {
     console.warn('[boot] ENGINE=scripted — tasks will not reach the real agent');
-    return new ScriptedEngine();
+    if (config.scriptedSpeed !== 1) {
+      console.log(`[boot] scripted play-back slowed ${config.scriptedSpeed}x (SCRIPTED_SPEED)`);
+    }
+    return new ScriptedEngine({ speed: config.scriptedSpeed });
   }
 
   console.log(`[boot] agent: ${config.antigravityAgent}`);

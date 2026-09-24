@@ -43,6 +43,18 @@ export interface AppConfig {
   antigravityMaxTokens: number;
 
   /**
+   * How much slower the scripted engine plays its script. 1 is real time.
+   *
+   * The scripted engine exists so the whole pipeline can be watched without
+   * spending a single run of the daily quota — but its script is over in a
+   * couple of seconds, which is too fast to look at a timer, a spinner or a
+   * wait line and see whether they are honest. A multiplier makes a demo task
+   * last as long as a real one, which is the only way to judge a panel that
+   * claims to show a task in progress.
+   */
+  scriptedSpeed: number;
+
+  /**
    * What the operator asked for, from POLLER_ENABLED:
    *
    *   'auto' (default) - poll whenever a token is available, from the
@@ -120,6 +132,13 @@ class ConfigError extends Error {
 function readBool(raw: string | undefined, fallback: boolean): boolean {
   if (raw === undefined || raw === '') return fallback;
   return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
+/** A positive multiplier, clamped so a typo cannot make a demo run for a day. */
+function readFloat(raw: string | undefined, fallback: number): number {
+  const value = Number((raw ?? '').trim());
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(200, Math.max(0.05, value));
 }
 
 function readInt(raw: string | undefined, fallback: number): number {
@@ -300,6 +319,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     antigravityAgent: (env.ANTIGRAVITY_AGENT ?? 'antigravity-preview-09-2026').trim(),
     antigravityApiBase: (env.ANTIGRAVITY_API_BASE ?? '').trim(),
     antigravityMaxTokens: readInt(env.ANTIGRAVITY_MAX_TOKENS, 0),
+    scriptedSpeed: readFloat(env.SCRIPTED_SPEED, 1),
     pollerMode,
     // Resolved for real by the WhatsApp service once secrets are loaded; this is
     // the honest answer available at this point: a token is reachable and

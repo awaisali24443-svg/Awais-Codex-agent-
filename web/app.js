@@ -104,6 +104,7 @@ const el = {
   schedulesToggle: $('schedules-toggle'),
   topbarTitle: $('topbar-title'),
   statusDot: $('status-dot'),
+  runTimer: $('run-timer'),
   toast: $('toast'),
   panel: $('panel'),
   panelBackdrop: $('panel-backdrop'),
@@ -729,16 +730,37 @@ function startRunClock(card) {
   stopRunClock(card);
   const tick = () => {
     const elapsed = Date.now() - card.startedAt;
+    const text = formatTimer(elapsed);
     // A stopwatch, not a counter: `1:42`, and `1:02:05` after an hour. Ticking
     // four times a second means the visible second changes when it actually
     // changes, instead of drifting up to a second behind the truth.
-    if (card.thinkingClock) card.thinkingClock.textContent = formatTimer(elapsed);
+    if (card.thinkingClock) card.thinkingClock.textContent = text;
+    // The same clock in the top bar and in the tab, but only for the task that
+    // is actually running: an old card replaying in the background must not
+    // drive the clock the operator is reading.
+    if (card.runId && card.runId === state.runId) showRunTimer(text);
     // The wait line carries the same number in words, and it is the only thing
     // on the panel until the model says something.
     updateWaitLine(card);
   };
   tick();
   card.timer = setInterval(tick, 250);
+}
+
+/**
+ * The run's clock, wherever the operator is looking.
+ *
+ * Three places, one number: the panel head, the top bar, and the tab title. The
+ * bar is what survives scrolling the panel away; the tab is what survives
+ * switching to another app, which is what people do the moment a task takes
+ * minutes rather than seconds.
+ */
+function showRunTimer(text) {
+  if (el.runTimer) {
+    el.runTimer.textContent = text ?? '';
+    el.runTimer.hidden = !text;
+  }
+  document.title = text ? `${text} · WAIS` : 'WAIS';
 }
 
 function stopRunClock(card) {
@@ -2252,6 +2274,9 @@ function finishCard(card, outcome, data = {}) {
   // the number, and folding the working away leaves "Done · 1:42" in the one
   // row that is still on screen.
   if (card.thinkingClock) card.thinkingClock.textContent = formatTimer(Date.now() - card.startedAt);
+  // The task is over: the bar and the tab go back to the product name, and the
+  // final time stays where the work is — on the card.
+  if (card.runId && card.runId === state.runId) showRunTimer(null);
   if (card.phaseChip) {
     card.phaseChip.textContent = '';
     card.phaseChip.hidden = true;
@@ -3505,6 +3530,9 @@ function setRunning(on) {
   if (!on) state.runConversationId = null;
   if (on) stopSpeaking(); // A new answer replaces whatever was being read.
   el.statusDot.hidden = !on;
+  // The bar clock is state, not decoration: a stopped task must not leave a
+  // number ticking in the header, whatever path got it there.
+  if (!on) showRunTimer(null);
   el.stop.hidden = !on;
   el.stop.disabled = false;
   el.topbarTitle.textContent = on

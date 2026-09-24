@@ -31,6 +31,42 @@ const html = () => read('web/index.html');
 const css = () => read('web/styles.css');
 const app = () => read('web/app.js');
 
+describe('the run timer is one clock in three places', () => {
+  test('the top bar carries it, so scrolling the panel away cannot hide it', () => {
+    assert.ok(html().includes('id="run-timer"'), 'the bar has a slot for it');
+    assert.ok(html().includes('role="timer"'), 'and announces itself as a timer');
+    const client = app();
+    assert.ok(client.includes("runTimer: $('run-timer')"), 'the client holds it');
+    assert.ok(client.includes('if (card.runId && card.runId === state.runId) showRunTimer(text);'));
+    assert.ok(
+      client.includes('if (card.runId && card.runId === state.runId) showRunTimer(null);'),
+      'and the finished task clears it',
+    );
+    assert.ok(client.includes('if (!on) showRunTimer(null);'), 'a stopped task never leaves one ticking');
+    assert.ok(css().includes('.run-timer'), 'set in the same figures as the panel clock');
+  });
+
+  test('the tab shows the time, because the operator leaves the tab', () => {
+    const client = app();
+    assert.ok(
+      client.includes("document.title = text ? `${text} · WAIS` : 'WAIS';"),
+      'the tab says the time while the task runs and the product name when it is done',
+    );
+  });
+
+  test('an old card replaying does not drive the clock', () => {
+    // The trap: a reopened conversation replays cards from finished tasks, and
+    // each one has its own clock. Only the live run owns the bar and the tab.
+    const client = app();
+    assert.ok(
+      client.includes('card.runId === state.runId'),
+      'ownership is checked, not assumed',
+    );
+    const css2 = css();
+    assert.ok(!css2.includes('.run-timer { animation'), 'and the number does not twitch');
+  });
+});
+
 describe('a picture in the composer', () => {
   test('the picker offers images, and the client carries them as base64', () => {
     assert.ok(html().includes('image/*'), 'the file picker offers pictures');
