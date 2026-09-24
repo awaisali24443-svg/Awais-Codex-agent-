@@ -273,6 +273,78 @@ describe('a task still working survives a look at another chat', () => {
   });
 });
 
+describe('the conversation reads like a conversation', () => {
+  test('the operator\u2019s message is a bubble, the answer is prose at a measure', () => {
+    // A black slab of paper-white text for every question was heavier than
+    // anything else on the screen — backwards, since the answer is what is being
+    // read. Questions are a warm tint of the ink; answers are plain prose, held
+    // to a reading width so a long answer is a document and not a wall.
+    const css = read('web/styles.css');
+    const ask = css.slice(css.indexOf('.ask {'));
+    assert.ok(ask.slice(0, ask.indexOf('}')).includes('var(--bubble-user)'), 'the bubble is tinted, not solid ink');
+    const answer = css.slice(css.indexOf('.answer {'));
+    assert.ok(answer.slice(0, answer.indexOf('}')).includes('max-width: var(--measure)'), 'answers are measured');
+    const tokens = read('web/theme.css');
+    assert.ok(tokens.includes('--measure:'), 'the measure is a token');
+    assert.ok(tokens.includes('--bubble-user:'), 'and so is the bubble');
+    assert.ok(tokens.includes('color-mix(in srgb, #ffffff 9%, var(--surface))'), 'the dark theme re-mixes it rather than re-declaring a colour');
+  });
+
+  test('an assistant turn says who is speaking', () => {
+    const client = app();
+    assert.ok(client.includes('function answerHead()'), 'there is a mark');
+    assert.ok(client.includes('answerHead() + markdown(text)'), 'drawn over every answer');
+  });
+
+  test('message actions get out of the way until they are wanted', () => {
+    // Rows of bordered pills under every message made the thread look like a
+    // settings screen. They are now quiet ghost controls, revealed on hover or
+    // focus — and always visible on a touch screen, where there is no hover.
+    const css = read('web/styles.css');
+    const block = css.slice(css.indexOf('.msg-actions {'));
+    const rule = block.slice(0, block.indexOf('}'));
+    assert.ok(rule.includes('opacity: 0'), 'hidden by default');
+    assert.ok(css.includes('.ask:hover .msg-actions, .answer:hover .msg-actions'), 'shown on hover');
+    assert.ok(css.includes('.msg-actions:focus-within'), 'and when something inside has focus');
+    assert.ok(css.includes('@media (hover: none) { .msg-actions { opacity: 1; } }'), 'but never hidden from a thumb');
+  });
+
+  test('copy is one tap, with a fallback for a context without clipboard access', () => {
+    const client = app();
+    assert.ok(client.includes('async function copyToClipboard('), 'there is a copy helper');
+    assert.ok(client.includes('navigator.clipboard?.writeText'), 'the modern path');
+    assert.ok(client.includes("document.execCommand('copy')"), 'and the one that works on http');
+    assert.ok(client.includes("msgButton({ icon: 'copy'"), 'offered on every message');
+  });
+
+  test('a finished run folds its working into one line', () => {
+    const client = app();
+    assert.ok(client.includes('function foldWork('), 'there is a fold');
+    assert.ok(client.includes("line.className = 'run-summary'"), 'one line stands in for the timeline');
+    assert.ok(client.includes("card.card.classList.add('work-collapsed')"), 'and the timeline is closed');
+    assert.ok(client.includes("line.setAttribute('aria-expanded'"), 'with a state a screen reader can hear');
+    const css = read('web/styles.css');
+    assert.ok(css.includes('.run.work-collapsed .thinking'), 'the fold actually hides the working');
+  });
+
+  test('the working shows a clock while it works', () => {
+    const client = app();
+    assert.ok(client.includes('function startRunClock('), 'there is a clock');
+    assert.ok(client.includes('setInterval(tick, 1_000)'), 'ticking by the second');
+    assert.ok(client.includes('stopRunClock(card)'), 'stopped when the run ends');
+    assert.ok(client.includes('thinkingClock'), 'and drawn in the run header');
+  });
+
+  test('a message arrives rather than appears', () => {
+    const css = read('web/styles.css');
+    assert.ok(css.includes('@keyframes rise'), 'there is an entrance');
+    assert.ok(css.includes('.thread > * { animation: rise'), 'used by every turn');
+    const tokens = read('web/theme.css');
+    assert.ok(tokens.includes('@media (prefers-reduced-motion: reduce)'), 'every animation is switched off');
+    assert.ok(tokens.includes('transition-duration: .001ms !important'), 'for a device that asked for no motion');
+  });
+});
+
 describe('a kept file can actually be kept', () => {
   test('the panel and the answer both offer a Keep button', () => {
     const client = app();
@@ -304,9 +376,11 @@ describe('actions belong to the operator, not to the answer', () => {
 
   test('the operator can still edit their own message', () => {
     // attachMessageActions puts the pencil on the user's bubble — the right
-    // place for it; removing the button must not have removed that.
-    assert.ok(app().includes("editBtn.textContent = '✎ Edit'"));
-    assert.ok(app().includes('openInlineEditor('));
+    // place for it; removing the button must not have removed that. The row is
+    // icon-first now, so the assertion is on the action, not on its glyph.
+    const client = app();
+    assert.ok(client.includes("msgButton({ icon: 'pencil', title: 'Edit this message"), 'the pencil is on the user\u2019s own message');
+    assert.ok(client.includes('openInlineEditor('));
   });
 });
 

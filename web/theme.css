@@ -79,6 +79,22 @@
   --weight-medium:   500;
   --weight-semibold: 600;
 
+  /* ---- motion: one easing language for the whole app ---- */
+  --ease-out:    cubic-bezier(.22, .61, .36, 1);
+  --ease-spring: cubic-bezier(.34, 1.28, .44, 1);
+  --dur-1: 120ms;  /* a state flip   */
+  --dur-2: 220ms;  /* an entrance    */
+  --dur-3: 420ms;  /* a screen       */
+
+  /* ---- the conversation ---- */
+  --measure: 66ch;      /* the reading width of an answer            */
+  --text-chat: 15.5px;  /* the size a message is read at             */
+  --bubble-radius: 18px;
+  /* The operator's own message: a warm tint of the ink, never a black slab.
+     It has to survive both themes, so it is mixed rather than named. */
+  --bubble-user: color-mix(in srgb, var(--ink) 7%, var(--surface));
+  --bubble-user-line: color-mix(in srgb, var(--ink) 9%, transparent);
+
   /* ---- device ---- */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -107,6 +123,9 @@
   --shadow-sm:  0 1px 2px rgba(0, 0, 0, .4);
   --shadow-md:  0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px -18px rgba(0, 0, 0, .6);
   --shadow-lg:  0 12px 30px -12px rgba(0, 0, 0, .7);
+
+  --bubble-user: color-mix(in srgb, #ffffff 9%, var(--surface));
+  --bubble-user-line: color-mix(in srgb, #ffffff 12%, transparent);
 }
 
 /* ---- selection & focus: one language everywhere ---- */
@@ -118,4 +137,17 @@
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* ---- motion, switched off — not turned down ----
+   Everything the app animates is decoration; none of it carries meaning, so a
+   reader who asked their device for less motion gets none of it. The one
+   exception below is the blink of the streaming caret, which is a state. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -432,10 +432,26 @@ function renderAsk(text) {
 function renderAnswer(text) {
   const node = document.createElement('div');
   node.className = 'answer';
-  node.innerHTML = markdown(text);
+  node.innerHTML = answerHead() + markdown(text);
   el.thread.append(node);
   scrollToEnd();
   return node;
+}
+
+/**
+ * The mark over an assistant turn. One small badge and the name — the same
+ * thing every chat app does — so a thread scrolled back to the middle still
+ * says who is speaking without a name on every line.
+ */
+function answerHead() {
+  return `<div class="answer-head">
+    <svg class="mark" viewBox="0 0 100 100" aria-hidden="true">
+      <rect width="100" height="100" rx="26" fill="#1c1a2c"/>
+      <path d="M22.5 43 35.5 74.5 50 52.5 64.5 74.5 77.5 43" fill="none" stroke="#f6f2ea"
+            stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="who">WAIS</span>
+  </div>`;
 }
 
 function renderNotice(text, bad = false, icon = 'info') {
@@ -465,6 +481,12 @@ function existingCard(runId) {
   const card = cardFor(runId);
   if (!card) return createRunCard(runId);
   const thinking = card.querySelector('.thinking');
+  // A card being reused is being replayed from the start: the previous run's
+  // fold-out summary goes, and the work unfolds with it.
+  card.querySelector('.run-summary')?.remove();
+  card.classList.remove('work-collapsed');
+  thinking.open = true;
+  stopRunClock({ card });
   return {
     card,
     files: card.querySelector('.files'),
@@ -475,6 +497,7 @@ function existingCard(runId) {
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
+    thinkingClock: thinking.querySelector('.clock'),
     spinner: thinking.querySelector('.spinner'),
     steps: card.querySelector('.steps'),
     // A card being reused is being replayed from the start, so its accumulated
@@ -488,6 +511,109 @@ function existingCard(runId) {
     elapsed: null,
     startedAt: Date.now(),
   };
+}
+
+/**
+ * A small ghost control for a message's action row: an icon, an optional label,
+ * and an aria-label so an icon-only button is still a sentence to a screen
+ * reader. Everything in these rows goes through here so they cannot drift apart.
+ */
+function msgButton({ icon, label = '', title = '', aria = '' }) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'msg-btn' + (label ? '' : ' icon');
+  btn.innerHTML = iconFor(icon) + (label ? `<span></span>` : '');
+  if (label) btn.querySelector('span').textContent = label;
+  if (title) btn.title = title;
+  btn.setAttribute('aria-label', aria || label || title || icon);
+  return btn;
+}
+
+/**
+ * Copy text to the clipboard and say so on the button itself. `navigator.clipboard`
+ * needs a secure context, which a phone on a cached shell may not have — the
+ * textarea fallback is old, ugly, and the only thing that works there.
+ */
+async function copyToClipboard(text, btn) {
+  let ok = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch { /* fall through to the old way */ }
+  if (!ok) {
+    try {
+      const scratch = document.createElement('textarea');
+      scratch.value = text;
+      scratch.setAttribute('readonly', '');
+      scratch.style.position = 'fixed';
+      scratch.style.opacity = '0';
+      document.body.append(scratch);
+      scratch.select();
+      ok = document.execCommand('copy');
+      scratch.remove();
+    } catch { ok = false; }
+  }
+  if (!btn) return ok;
+  const was = btn.innerHTML;
+  btn.dataset.done = ok ? '1' : '';
+  btn.innerHTML = iconFor(ok ? 'check' : 'warn');
+  setTimeout(() => { btn.innerHTML = was; btn.dataset.done = ''; }, 1_200);
+  if (!ok) toast('Could not copy — select the text instead.');
+  return ok;
+}
+
+/**
+ * The clock in the run header. A task that has been working for two minutes and
+ * a task that has been stuck for two minutes look identical otherwise, and the
+ * number is also the only honest answer to "how long does this usually take".
+ */
+function startRunClock(card) {
+  stopRunClock(card);
+  const tick = () => {
+    const seconds = (Date.now() - card.startedAt) / 1000;
+    if (card.thinkingClock) card.thinkingClock.textContent = `${seconds.toFixed(0)}s`;
+  };
+  tick();
+  card.timer = setInterval(tick, 1_000);
+}
+
+function stopRunClock(card) {
+  if (card.timer) clearInterval(card.timer);
+  card.timer = null;
+}
+
+/**
+ * Fold the working away when a run is over.
+ *
+ * A finished task used to leave its whole timeline open — thinking, every tool
+ * call, every milestone — with the answer below it, so the thing the operator
+ * asked for was the last thing on the screen and the scroll to reach it grew
+ * with every run. Now the working becomes one line ("6 steps · 42.1s") that
+ * opens again on a tap. Nothing is deleted; it is folded.
+ */
+function foldWork(card) {
+  if (card.card.querySelector('.run-summary')) return;
+  const steps = card.steps.children.length;
+  const what = steps === 1 ? '1 step' : `${steps} steps`;
+  const line = document.createElement('button');
+  line.type = 'button';
+  line.className = 'run-summary';
+  line.innerHTML = `${iconFor('list')}<span class="what"></span><span class="when"></span>` +
+    `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
+  line.querySelector('.what').textContent = steps > 0 ? what : 'The working';
+  line.querySelector('.when').textContent = card.elapsed ?? '';
+  line.setAttribute('aria-expanded', 'false');
+  line.title = 'Show or hide what the task did';
+  line.addEventListener('click', () => {
+    const collapsed = card.card.classList.toggle('work-collapsed');
+    line.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  });
+  card.card.classList.add('work-collapsed');
+  card.card.insertBefore(line, card.card.firstChild);
+  // The reasoning collapses with the timeline; the summary is the handle back.
+  if (card.thinking) card.thinking.open = false;
 }
 
 /* A run in progress is drawn as one card: thinking, then steps, then answer. */
@@ -505,6 +631,7 @@ function createRunCard(runId = null) {
     <summary class="thinking-head">
       <span class="spinner"></span>
       <span class="label">Thinking</span>
+      <span class="clock"></span>
       <span class="meta"></span>
       <svg class="thinking-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
     </summary>
@@ -530,6 +657,7 @@ function createRunCard(runId = null) {
 
   card.append(thinking, plan, steps, answer, files);
   el.thread.append(card);
+  startRunClock(card);
   scrollToEnd();
 
   return {
@@ -542,6 +670,7 @@ function createRunCard(runId = null) {
     thinkingBody: thinking.querySelector('.thinking-body'),
     thinkingMeta: thinking.querySelector('.meta'),
     thinkingLabel: thinking.querySelector('.label'),
+    thinkingClock: thinking.querySelector('.clock'),
     spinner: thinking.querySelector('.spinner'),
     steps,
     answer,
@@ -785,6 +914,14 @@ const ICONS = {
   package: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"/><path d="M12 12l8-4.5M12 12v9M12 12 4 7.5"/>',
   spark: '<path d="M12 3v5M12 16v5M3 12h5M16 12h5"/>',
   eye: '<path d="M2 12s3.6-6.8 10-6.8S22 12 22 12s-3.6 6.8-10 6.8S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 5.5A2.5 2.5 0 0 0 12.5 3H6a2.5 2.5 0 0 0-2.5 2.5V12"/>',
+  pencil: '<path d="M4 20h4l10-10-4-4L4 16Z"/><path d="m14 6 4 4"/>',
+  refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/>',
+  play: '<path d="M7 4.5 19 12 7 19.5Z"/>',
+  share: '<path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14"/>',
+  panel: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14 4v16"/>',
+  list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  speaker: '<path d="M11 5 6.5 9H3v6h3.5L11 19Z"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10"/>',
 };
 
 function iconFor(name) {
@@ -1029,6 +1166,8 @@ function handleEvent(card, event, data) {
 
 function finishCard(card, outcome, data = {}) {
   state.runStatus = 'finished'; // nothing to watch any more; the answer is here
+  stopRunClock(card);
+  if (card.thinkingClock) card.thinkingClock.textContent = '';
   card.spinner.classList.add('done');
   card.spinner.style.animation = 'none';
   card.spinner.setAttribute('class', 'spinner done');
@@ -1078,6 +1217,7 @@ function finishCard(card, outcome, data = {}) {
     noticeNode.append(runActionButtons(card, { retry: true, share: true, outputs: true, notice: noticeNode }));
   }
 
+  foldWork(card);
   setRunning(false);
   loadBudget();
   loadConversations();
@@ -1140,25 +1280,29 @@ async function resumeRun(card, opts) {
 function attachMessageActions(node, message, linkedInDraftId = null) {
   const row = document.createElement('div');
   row.className = 'msg-actions';
-  // Every assistant answer can be heard aloud — free, via the browser.
-  if (message.role === 'assistant' && message.content && 'speechSynthesis' in window) {
-    row.append(speakButton(message.content));
+  const text = typeof message.content === 'string' ? message.content : '';
+
+  // Copy is the one action every message has, both directions: the operator's
+  // own question is as worth keeping as the answer.
+  if (text) {
+    const copyBtn = msgButton({ icon: 'copy', title: 'Copy this message' });
+    copyBtn.addEventListener('click', () => copyToClipboard(text, copyBtn));
+    row.append(copyBtn);
   }
+
+  // Every answer can be heard aloud — free, via the browser itself.
+  if (message.role === 'assistant' && text && 'speechSynthesis' in window) {
+    row.append(speakButton(text));
+  }
+
   if (message.role === 'user') {
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'msg-btn';
-    editBtn.textContent = '✎ Edit';
-    editBtn.title = 'Edit this message — forks the conversation';
+    const editBtn = msgButton({ icon: 'pencil', title: 'Edit this message — forks the conversation' });
     editBtn.addEventListener('click', () => openInlineEditor(node, message));
     row.append(editBtn);
   } else if (message.runId && message.runStatus === 'awaiting_plan') {
     // A plan waiting for approval: jump straight to its card to review it.
-    const reviewBtn = document.createElement('button');
-    reviewBtn.type = 'button';
-    reviewBtn.className = 'msg-btn';
-    reviewBtn.textContent = '☰ Review plan';
-    reviewBtn.title = 'Review the proposed plan — approve or edit it';
+    const reviewBtn = msgButton({ icon: 'list', label: 'Review plan', title: 'Approve or edit the proposed plan' });
+    reviewBtn.classList.add('primary');
     reviewBtn.addEventListener('click', async () => {
       reviewBtn.disabled = true;
       try {
@@ -1178,14 +1322,14 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
     });
     row.append(reviewBtn);
   } else if (message.runId && (message.runStatus === 'completed' || message.runStatus === 'failed' || message.runStatus === 'paused')) {
-    // A paused run, or one the server killed mid-mission, resumes from its
-    // first unfinished step. Everything else gets the plain retry.
+    // A paused run, or one the server killed mid-run, resumes from its first
+    // unfinished step. Everything else gets the plain retry.
     const resumable = message.runStatus === 'paused' || message.runErrorType === 'interrupted';
-    const actionBtn = document.createElement('button');
-    actionBtn.type = 'button';
-    actionBtn.className = 'msg-btn';
-    actionBtn.textContent = resumable ? '▶ Resume' : '↻ Retry';
-    actionBtn.title = resumable ? 'Continue from the last finished step' : 'Run this task again';
+    const actionBtn = msgButton({
+      icon: resumable ? 'play' : 'refresh',
+      label: resumable ? 'Resume' : 'Retry',
+      title: resumable ? 'Continue from the last finished step' : 'Run this task again',
+    });
     actionBtn.addEventListener('click', async () => {
       actionBtn.disabled = true;
       try {
@@ -1205,22 +1349,36 @@ function attachMessageActions(node, message, linkedInDraftId = null) {
     });
     row.append(actionBtn);
   }
+
   // The run's outputs (files, preview, plan, proof) in a slide-over panel.
   if (message.role === 'assistant' && message.runId &&
       (message.runStatus === 'completed' || message.runStatus === 'failed' || message.runStatus === 'paused')) {
-    const outputsBtn = document.createElement('button');
-    outputsBtn.type = 'button';
-    outputsBtn.className = 'msg-btn';
-    outputsBtn.textContent = '⧉ Outputs';
-    outputsBtn.title = 'Open this run\u2019s outputs in a side panel';
+    const outputsBtn = msgButton({ icon: 'panel', label: 'Outputs', title: 'Open this run\u2019s outputs in a side panel' });
     outputsBtn.addEventListener('click', () => openOutputs(message.runId));
     row.append(outputsBtn);
   }
+
   // A ```linkedin-post block the agent filed as a pending draft. Publishing
   // is always the operator's tap — never automatic.
   if (linkedInDraftId && message.role === 'assistant') row.append(linkedInPublishButton(linkedInDraftId));
+
+  // When it was said, on the same line as what can be done with it.
+  if (message.createdAt) {
+    const time = document.createElement('span');
+    time.className = 'msg-time';
+    time.textContent = clockTime(message.createdAt);
+    row.append(time);
+  }
+
   if (!row.children.length) return;
   node.append(row);
+}
+
+/** "14:32" for a timestamp the server sent, or nothing at all if it is junk. */
+function clockTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 /* Swap a user message for an editor in place. Saving forks the conversation
@@ -2104,30 +2262,23 @@ function setupVoiceInput() {
 
 /** Per-answer Listen/Stop button for assistant messages. */
 function speakButton(text) {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'msg-btn';
-  const label = '🔊 Listen';
-  btn.textContent = label;
-  btn.title = 'Hear this answer spoken';
+  const btn = msgButton({ icon: 'speaker', title: 'Hear this answer spoken' });
+  const reset = () => { btn.dataset.speaking = ''; btn.innerHTML = iconFor('speaker'); };
   btn.addEventListener('click', () => {
     if (btn.dataset.speaking === '1') {
       stopSpeaking();
-      btn.dataset.speaking = '';
-      btn.textContent = label;
+      reset();
       return;
     }
     document.querySelectorAll('.msg-btn[data-speaking="1"]').forEach((other) => {
       const o = /** @type {HTMLElement} */ (other);
       o.dataset.speaking = '';
-      o.textContent = label;
+      o.innerHTML = iconFor('speaker');
     });
     btn.dataset.speaking = '1';
-    btn.textContent = '⏹ Stop';
-    speakText(text, () => {
-      btn.dataset.speaking = '';
-      btn.textContent = label;
-    });
+    btn.innerHTML = iconFor('cross');
+    btn.setAttribute('aria-label', 'Stop reading aloud');
+    speakText(text, reset);
   });
   return btn;
 }

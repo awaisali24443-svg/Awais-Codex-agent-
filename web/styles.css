@@ -265,15 +265,24 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .hero-chips .chip { justify-content: center; text-align: center; white-space: normal; }
 
-.thread { display: flex; flex-direction: column; gap: 18px; padding: 10px 0 14px; }
+/* Between turns there is more air than inside one: 22px of separation is what
+   makes a long thread scannable, and the entrance is a 6px rise rather than a
+   fade-in-place, so a new message reads as arriving from the composer. */
+.thread { display: flex; flex-direction: column; gap: 22px; padding: 12px 0 20px; }
+.thread > * { animation: rise var(--dur-2) var(--ease-out) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 
-/* a task the user sent */
+/* The operator's own message: a warm tinted bubble, right-aligned, with the
+   tail on the bottom-right corner. It used to be a black slab of paper-white
+   text — legible, but heavier than anything else on the screen, which is
+   backwards: the answer is the thing being read. */
 .ask {
   align-self: flex-end; max-width: 86%;
-  padding: var(--space-3) var(--space-4);
-  background: var(--ink); color: var(--paper);
-  border-radius: 20px 20px 6px 20px;
-  font-size: 15.5px; line-height: 1.5;
+  padding: 11px var(--space-4);
+  background: var(--bubble-user); color: var(--ink);
+  border: 1px solid var(--bubble-user-line);
+  border-radius: var(--bubble-radius) var(--bubble-radius) 6px var(--bubble-radius);
+  font-size: var(--text-chat); line-height: 1.55;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 
@@ -291,20 +300,44 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .branch-pill.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
-/* per-message actions, Manus-style: small buttons on the message itself */
-.msg-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-2); }
+/* Per-message actions, the quiet kind: a row of small ghost controls that
+   belongs to the message above it. On a pointer device they appear when the
+   message is hovered or a control in them is focused — the thread then reads as
+   prose with nothing hovering over it. On a touch screen there is no hover, so
+   they are simply always there. */
+.msg-actions {
+  display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+.ask:hover .msg-actions, .answer:hover .msg-actions,
+.msg-actions:focus-within { opacity: 1; }
+@media (hover: none) { .msg-actions { opacity: 1; } }
+
 .ask .msg-actions { justify-content: flex-end; }
 .answer .msg-actions { justify-content: flex-start; }
+
 .msg-btn {
-  padding: var(--space-1) 11px; border-radius: var(--radius-pill); font-size: 12px; line-height: 1.4;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft);
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: 30px; padding: 5px 9px;
+  border-radius: 9px; border: 1px solid transparent;
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 12.5px; line-height: 1.3;
   cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
-.msg-btn:hover { color: var(--ink); border-color: var(--ink-soft); }
+.msg-btn svg { width: 15px; height: 15px; flex: none; }
+.msg-btn:hover { background: var(--surface-2); color: var(--ink); }
 .msg-btn:disabled { opacity: .5; cursor: default; }
-.msg-btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-.ask .msg-btn { background: transparent; border-color: color-mix(in srgb, var(--paper) 45%, transparent); color: inherit; }
-.ask .msg-btn:hover { border-color: currentColor; color: inherit; }
+.msg-btn.primary { background: var(--ink); color: var(--paper); }
+.msg-btn.primary:hover { background: var(--ink); color: var(--paper); }
+/* Icon-only controls (copy, listen) keep a 40px target without shouting. */
+.msg-btn.icon { padding: 5px; min-width: 30px; justify-content: center; }
+.msg-btn[data-done="1"] { color: var(--ok); }
+
+/* The quiet timestamp that rides with the action row. */
+.msg-time { font-size: var(--text-xs); color: var(--muted); margin: 0 4px; font-variant-numeric: tabular-nums; }
 
 /* inline editor shown in place of the message being edited */
 .inline-editor textarea {
@@ -314,8 +347,26 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .inline-editor-btns { display: flex; gap: var(--space-2); margin-top: var(--space-2); justify-content: flex-end; }
 .ask.editing { min-width: 60%; }
-/* the run card: thinking, steps, answer */
+/* The run card: thinking, steps, answer. The card carries no border of its own
+   — the work inside it does, so the answer underneath sits on the page like
+   prose rather than inside a second box. */
 .run { display: flex; flex-direction: column; gap: var(--space-3); }
+
+/* When a run is over its working is folded into one line — "6 steps · 42.1s" —
+   which is the whole point: the answer is what you came for, and the timeline
+   is one tap away. */
+.run-summary {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 9px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink-soft); font: inherit; font-size: var(--text-sm);
+  text-align: left; cursor: pointer;
+}
+.run-summary:hover { border-color: var(--ink-soft); color: var(--ink); }
+.run-summary svg { width: 15px; height: 15px; flex: none; color: var(--muted); transition: transform var(--dur-2) var(--ease-out); }
+.run-summary .when { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.run.work-collapsed .thinking, .run.work-collapsed .plan, .run.work-collapsed .steps { display: none; }
+.run.work-collapsed .run-summary svg { transform: rotate(-90deg); }
 
 .thinking {
   border: 1px solid var(--line); border-radius: var(--radius-sm);
@@ -348,10 +399,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 /* mission timeline: connected status nodes on a rail */
 .steps { display: flex; flex-direction: column; }
-.step { display: flex; gap: 11px; padding: 2px 0; }
+.step { display: flex; gap: 11px; padding: 2px 0; animation: rise var(--dur-2) var(--ease-out) both; }
 .step-rail { position: relative; width: 20px; flex: none; display: flex; justify-content: center; }
 .step-rail::before {
-  content: ""; position: absolute; top: 23px; bottom: -5px; width: 1.5px; background: var(--line);
+  content: ""; position: absolute; top: 23px; bottom: -5px; width: 1px; background: var(--line);
 }
 .step:last-child .step-rail::before { display: none; }
 .step-icon {
@@ -376,7 +427,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .step[data-status="failed"] .step-name { color: var(--danger); }
 .step-body { flex: 1; min-width: 0; padding-bottom: var(--space-2); }
 .step-head { display: flex; align-items: baseline; gap: 8px; }
-.step-name { flex: 1; min-width: 0; font-size: var(--text-md); color: var(--ink-soft); overflow-wrap: anywhere; }
+.step-name { flex: 1; min-width: 0; font-size: 14.5px; color: var(--ink); overflow-wrap: anywhere; }
+.step[data-status="running"] .step-name { color: var(--ink-soft); }
 .step-time { flex: none; font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .step-detail {
   margin-top: 2px; font-family: var(--mono); font-size: var(--text-xs);
@@ -384,6 +436,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .step.expandable .step-body { cursor: pointer; }
+.step.expandable:hover .step-name { text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 .step.expanded .step-detail {
   display: block; -webkit-line-clamp: unset; -webkit-box-orient: unset; overflow: visible;
 }
@@ -391,11 +444,19 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   .step-spin { animation: none; border-top-color: var(--line); }
 }
 
-/* the answer */
+/* The answer: not a bubble. Prose at a fixed reading measure, the way a
+   document is read — the same choice the calm assistants make, and the reason
+   the operator's tinted bubble above it reads as "yours" at a glance. */
 .answer {
-  font-size: 15.5px; line-height: var(--leading-relaxed); color: var(--ink);
+  max-width: var(--measure);
+  font-size: var(--text-chat); line-height: 1.68; color: var(--ink);
   overflow-wrap: anywhere;
 }
+/* The small mark over an answer, so a scrolled-back thread still shows who is
+   speaking without a name on every turn. */
+.answer-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: var(--muted); }
+.answer-head .mark { width: 17px; height: 17px; border-radius: 5px; flex: none; }
+.answer-head .who { font-size: var(--text-xs); letter-spacing: .04em; text-transform: uppercase; }
 .answer p { margin: 0 0 var(--space-3); }
 .answer p:last-child { margin-bottom: 0; }
 .answer h1, .answer h2, .answer h3 {
