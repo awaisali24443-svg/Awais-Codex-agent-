@@ -151,7 +151,7 @@ export async function detectBudgetSpent(deps: AlertDeps): Promise<AlertIncident 
  * as one message.
  */
 export function composeAlertMessage(incidents: AlertIncident[]): string {
-  const lines = ['⚠️ Awais Codex needs you', ''];
+  const lines = ['⚠️ WAIS needs you', ''];
   for (const incident of incidents) {
     if (incident.type === 'poller_down') {
       lines.push(

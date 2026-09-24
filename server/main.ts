@@ -61,7 +61,7 @@ async function boot(): Promise<void> {
   const startedAt = Date.now();
   const config: AppConfig = loadConfig();
 
-  console.log('[boot] Awais Codex v2');
+  console.log('[boot] WAIS v2');
   // Only the public case deserves a banner. A development box with no access
   // key is open too, but nobody deployed it to the internet by accident, and
   // config.ts has already said so once.

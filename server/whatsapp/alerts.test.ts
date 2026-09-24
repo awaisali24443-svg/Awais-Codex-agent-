@@ -141,7 +141,7 @@ describe('composeAlertMessage', () => {
       { type: 'budget_spent', detail: "today's task budget is used up (100/100)" },
     ];
     const message = composeAlertMessage(incidents);
-    assert.ok(message.startsWith('⚠️ Awais Codex needs you'));
+    assert.ok(message.startsWith('⚠️ WAIS needs you'));
     assert.ok(message.includes('WhatsApp poller down'));
     assert.ok(message.includes('Engine API key rejected'));
     assert.ok(message.includes('Daily budget spent'));

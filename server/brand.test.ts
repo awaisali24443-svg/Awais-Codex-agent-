@@ -140,9 +140,38 @@ describe('brand', () => {
   });
 
   test('no surface still says the old name', () => {
-    for (const file of ['web/index.html', 'web/app.js', 'web/welcome.js', 'web/manifest.json', 'server/share.ts']) {
+    // Every place a person can read the product's name: the app, the install
+    // prompt, the replay page, the boot banner, the messages WhatsApp sends, the
+    // commits this server writes to GitHub, and the identity the agent is told
+    // it has.
+    for (const file of [
+      'web/index.html',
+      'web/app.js',
+      'web/welcome.js',
+      'web/manifest.json',
+      'server/share.ts',
+      'server/main.ts',
+      'server/verify.ts',
+      'server/routes/github.ts',
+      'server/whatsapp/alerts.ts',
+      'memory-engine.ts',
+      'metadata.json',
+    ]) {
       assert.ok(!read(file).includes('Awais Codex'), `${file} still shows the old name`);
     }
+  });
+
+  test('the rename did not touch the three identifiers that must never change', () => {
+    // These are not brand surface, they are load-bearing:
+    //  - the AAD prefix every stored secret was encrypted under,
+    //  - the service id monitors and /healthz consumers key off,
+    //  - the deployed host baked into share links and the APK.
+    assert.ok(read('server/crypto.ts').includes("const AAD_PREFIX = 'awais-codex:secret:'"));
+    assert.ok(read('server/app.ts').includes("service: 'awais-codex'"));
+    // The host is not written in the code — it comes from APP_URL — so the guard
+    // is that the code still *takes* it from the environment rather than
+    // inventing a name of its own.
+    assert.ok(read('server/config.ts').includes("appUrl: (env.APP_URL ?? '').trim()"));
   });
 });
 

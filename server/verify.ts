@@ -470,7 +470,7 @@ export async function sendWhatsAppTestMessage(
 
   const text =
     options.text ??
-    'Awais Codex check-in: this connection works. Reply with any task and it will run.';
+    'WAIS check-in: this connection works. Reply with any task and it will run.';
 
   try {
     const client = new WhatsAppClient({
@@ -604,7 +604,7 @@ export function formatReport(results: CheckResult[]): string {
   const passed = results.length - failed - skipped;
 
   const header = [
-    'Awais Codex — credential verification',
+    'WAIS — credential verification',
     `${passed} passed · ${failed} failed · ${skipped} skipped`,
     '',
   ].join('\n');

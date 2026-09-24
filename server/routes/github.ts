@@ -235,7 +235,7 @@ export function createGitHubRoutes({ secrets, fetchImpl = fetch }: GitHubRouteDe
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          description: typeof description === 'string' ? description : `Exported from Awais Codex`,
+          description: typeof description === 'string' ? description : `Exported from WAIS`,
           private: Boolean(isPrivate),
         }),
       });
@@ -278,7 +278,7 @@ export function createGitHubRoutes({ secrets, fetchImpl = fetch }: GitHubRouteDe
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                message: `Add ${file.path} via Awais Codex`,
+                message: `Add ${file.path} via WAIS`,
                 content: Buffer.from(file.content, 'utf8').toString('base64'),
                 sha,
               }),

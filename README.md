@@ -1,9 +1,16 @@
-# Awais Codex Agent 🚀
+# WAIS 🚀
 
-> **Autonomous AI engineering agent, with a WhatsApp front door.**
+> **Your own AI agent, with a WhatsApp front door.**
 > One self-hosted workspace: send a task from the web or from your phone, watch it run live, and come back to the answer later — it remembers you either way.
 
 Powered strictly by the **Google Antigravity managed agent** (`antigravity-preview-09-2026`) running inside a remote Linux sandbox that can actually build things.
+
+**On the name.** The product is WAIS. Three identifiers deliberately keep the old
+one, because renaming them breaks something invisible: the repository and the
+deployed host (every link already shared would die), the `awais-codex` service id
+in `/healthz` and `/api/status` (monitors key off it), and the `awais-codex:secret:`
+associated-data prefix in `server/crypto.ts` (it is the AAD every stored secret was
+encrypted under — changing it makes them undecryptable).
 
 ---
 
