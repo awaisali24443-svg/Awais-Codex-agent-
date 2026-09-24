@@ -35,6 +35,25 @@
    The fetch handler is network-first regardless; this is the belt to its
    braces. */
 const VERSION = 'wais-v4';
+
+/* How long a navigation waits for the network before the cached shell is shown.
+   The service sleeps when idle on the free tier and a cold start takes the
+   better part of a minute; network-first with no ceiling means the phone shows a
+   blank page for that whole time. The request is not aborted — it carries on and
+   updates the cache — this only decides when the operator stops looking at
+   nothing. */
+const NAVIGATION_TIMEOUT_MS = 6_000;
+
+/** The promise, or null if it has not settled within `ms`. Never rejects. */
+function settleWithin(promise, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(null); },
+    );
+  });
+}
 const SHELL = [
   '/',
   '/index.html',
@@ -89,23 +108,36 @@ function onFetch(event) {
 
   event.respondWith(
     (async () => {
-      try {
-        const response = await fetch(event.request);
+      const network = fetch(event.request).then(async (response) => {
         // Only successful, non-partial responses are worth keeping.
         if (response && response.ok && response.type === 'basic') {
-          const copy = response.clone();
           const cache = await caches.open(VERSION);
-          await cache.put(event.request, copy).catch(() => undefined);
+          await cache.put(event.request, response.clone()).catch(() => undefined);
         }
         return response;
+      });
+
+      // A navigation is the one request the operator is *waiting* on, so it is
+      // the one that gets a ceiling: the cached shell after
+      // NAVIGATION_TIMEOUT_MS, and the real page whenever it arrives.
+      if (event.request.mode === 'navigate') {
+        const shell = await caches.match('/index.html');
+        if (shell) {
+          const raced = await settleWithin(network, NAVIGATION_TIMEOUT_MS);
+          return raced ?? shell;
+        }
+      }
+
+      try {
+        return await network;
       } catch (err) {
         const cached = await caches.match(event.request);
         if (cached) return cached;
         // A navigation with nothing cached for that path still gets the shell,
         // so an offline reload lands on the app rather than the dinosaur.
         if (event.request.mode === 'navigate') {
-          const shell = await caches.match('/index.html');
-          if (shell) return shell;
+          const fallback = await caches.match('/index.html');
+          if (fallback) return fallback;
         }
         throw err;
       }

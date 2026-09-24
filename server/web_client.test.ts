@@ -143,6 +143,70 @@ describe('every event the server writes is listened to', () => {
   });
 });
 
+describe('a sleeping server does not look like a broken app', () => {
+  test('the boot says so when it is slow', () => {
+    const client = app();
+    const boot = client.slice(client.indexOf('async function enter()'));
+    assert.ok(boot.includes('BOOT_NOTICE_MS'), 'there is a threshold');
+    assert.ok(/Waking the server/.test(boot), 'and something honest to say');
+    assert.ok(boot.includes('if (noticeShown) note('), 'cleared when the answer arrives, without wiping a newer note');
+  });
+
+  test('starting a task says so while the request is in flight', () => {
+    // POST /api/runs does not answer until the run exists — and a complex task
+    // drafts its plan inside that request. The operator saw their own message and
+    // then nothing, which reads exactly like the app being broken.
+    const client = app();
+    assert.ok(client.includes('function pendingRunNotice'), 'there is a placeholder');
+    assert.ok(client.includes("renderNotice('Starting the task…'"), 'with something to say');
+    assert.ok(client.includes('drafts its plan first'), 'and a reason once it is taking a while');
+    assert.ok(client.includes('pending.done()'), 'and it is taken away when the run exists');
+  });
+
+  test('a navigation never waits on the network forever', () => {
+    // Network-first with no ceiling means a blank page for the ~50 s a free-tier
+    // cold start takes. The cached shell is shown after the ceiling; the request
+    // itself is not aborted, so the cache still updates.
+    const sw = read('web/sw.js');
+    assert.ok(sw.includes('NAVIGATION_TIMEOUT_MS'), 'there is a ceiling');
+    assert.ok(sw.includes('settleWithin(network, NAVIGATION_TIMEOUT_MS)'), 'the navigation races it');
+    assert.ok(sw.includes("await caches.match('/index.html')"), 'with the shell as the fallback');
+  });
+});
+
+describe('a plan that arrived while the phone was away is recoverable', () => {
+  test('returning to the foreground replays a waiting plan into its card', () => {
+    // The run card is the only place to approve a plan. If `run.plan_ready`
+    // arrived while the phone was backgrounded, the stream carrying it died with
+    // the tab — and the card then shows no Approve button, no explanation, and a
+    // Stop button that cancels the task. Coming back has to recover it.
+    const client = app();
+    const vis = client.slice(client.indexOf("addEventListener('visibilitychange'"));
+    const handler = vis.slice(0, vis.indexOf("});", vis.indexOf('awaiting_plan')));
+    assert.ok(handler.includes("run.status === 'awaiting_plan'"), 'the waiting state is recognised');
+    assert.ok(handler.includes('attach(run.id, 0)'), 'and the run is replayed into its card');
+    assert.ok(handler.includes('setRunning(false)'), 'with the composer unlocked, since nothing is running');
+  });
+
+  test('a re-attach reuses the card instead of stacking a second one', () => {
+    const client = app();
+    assert.ok(client.includes('function cardFor(runId)'), 'cards are findable by run');
+    assert.ok(client.includes('card.dataset.runId = runId'), 'because they carry the id');
+    assert.ok(client.includes('function existingCard(runId)'), 'and a handle can be rebuilt');
+    assert.ok(client.includes('cardFor(runId) ? existingCard(runId) : createRunCard(runId)'), 'attach prefers the existing card');
+  });
+
+  test('a reused card starts its replay from a clean slate', () => {
+    // Otherwise the replayed thinking and answer append to what the card already
+    // showed, and the operator reads the same paragraph twice.
+    const client = app();
+    const existing = client.slice(client.indexOf('function existingCard'), client.indexOf('function createRunCard'));
+    assert.ok(existing.includes("thinkingText: ''"), 'thinking buffer reset');
+    assert.ok(existing.includes("answerText: ''"), 'answer buffer reset');
+    assert.ok(existing.includes('stepIndex: new Map()'), 'step index reset');
+  });
+});
+
 describe('a kept file can actually be kept', () => {
   test('the panel and the answer both offer a Keep button', () => {
     const client = app();
@@ -201,9 +265,10 @@ describe('a run that is over stops looking like a run in progress', () => {
     // stream end
     const end = client.slice(client.indexOf("source.addEventListener('end'"), client.indexOf("source.addEventListener('error'"));
     assert.ok(end.includes('TERMINAL_STATUSES.includes(run.status)'), 'the stream-end check uses the list');
-    // return to foreground
+    // return to foreground — the handler also recovers a waiting plan, so the
+    // slice reaches to the end of the block rather than a fixed number of bytes.
     const vis = client.slice(client.indexOf("addEventListener('visibilitychange'"));
-    assert.ok(vis.slice(0, 900).includes('TERMINAL_STATUSES.includes(run.status)'), 'and so does the visibility check');
+    assert.ok(vis.includes('TERMINAL_STATUSES.includes(run.status)'), 'and so does the visibility check');
   });
 });
 

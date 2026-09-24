@@ -210,7 +210,25 @@ const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'paused'];
 async function enter() {
   showApp();
   renderThread([]);
-  await Promise.allSettled([loadConversations(), loadBudget(), loadMemory(), loadSettings(), loadScheduled()]);
+
+  // The free tier sleeps when idle, and a cold start takes the better part of a
+  // minute. Silence for that long reads as "the app is broken", so after a few
+  // seconds the composer note says what is actually happening — and it says it
+  // once, because the answer is the same every time it happens.
+  const BOOT_NOTICE_MS = 4_000;
+  let noticeShown = false;
+  const bootNotice = setTimeout(() => {
+    noticeShown = true;
+    note('Waking the server — it sleeps when idle, so this can take up to a minute.');
+  }, BOOT_NOTICE_MS);
+  try {
+    await Promise.allSettled([loadConversations(), loadBudget(), loadMemory(), loadSettings(), loadScheduled()]);
+  } finally {
+    clearTimeout(bootNotice);
+    // Only the notice this timer put there is cleared: whatever the app said in
+    // the meantime ("12 of 100 runs left today") is not this code's to remove.
+    if (noticeShown) note('');
+  }
 
   try {
     const { run } = await api('/api/runs/active');
@@ -384,10 +402,55 @@ function renderNotice(text, bad = false, icon = 'info') {
   return node;
 }
 
+/* The live card showing this run, if the thread already has one. */
+function cardFor(runId) {
+  if (!runId) return null;
+  return el.thread.querySelector(`.run[data-run-id="${runId}"]`);
+}
+
+/**
+ * Rebuild the card handle for a card that is already in the thread.
+ *
+ * attach() needs the same little object either way — the spinner, the steps
+ * container, the answer, the files row. Rebuilding it from the DOM keeps a
+ * re-attach from drawing a duplicate card, which is the whole point.
+ */
+function existingCard(runId) {
+  const card = cardFor(runId);
+  if (!card) return createRunCard(runId);
+  const thinking = card.querySelector('.thinking');
+  return {
+    card,
+    files: card.querySelector('.files'),
+    runId,
+    plan: card.querySelector('.plan'),
+    planIndex: new Map(),
+    thinking,
+    thinkingBody: thinking.querySelector('.thinking-body'),
+    thinkingMeta: thinking.querySelector('.meta'),
+    thinkingLabel: thinking.querySelector('.label'),
+    spinner: thinking.querySelector('.spinner'),
+    steps: card.querySelector('.steps'),
+    // A card being reused is being replayed from the start, so its accumulated
+    // buffers are reset with it — otherwise the replayed thinking and answer
+    // would be appended to text the card already showed.
+    thinkingText: '',
+    thinkingTail: '',
+    answerText: '',
+    answerTail: '',
+    stepIndex: new Map(),
+    elapsed: null,
+    startedAt: Date.now(),
+  };
+}
+
 /* A run in progress is drawn as one card: thinking, then steps, then answer. */
 function createRunCard(runId = null) {
   const card = document.createElement('div');
   card.className = 'run';
+  // Which run this card is about, so a recovery can find it again instead of
+  // stacking a second card for the same task.
+  if (runId) card.dataset.runId = runId;
 
   const thinking = document.createElement('details');
   thinking.className = 'thinking';
@@ -1735,7 +1798,12 @@ function attach(runId, after = 0) {
   closeStream();
   state.runId = runId;
 
-  const card = createRunCard(runId);
+  // Reusing the existing card is what makes a re-attach safe: recovery paths
+  // (returning to the foreground, tapping "Review plan") replay a run the
+  // thread may already be showing, and a second card for one task would be a
+  // duplicate, not a refresh.
+  const card = cardFor(runId) ? existingCard(runId) : createRunCard(runId);
+  scrollToEnd();
   const url = `/api/runs/${runId}/stream${after ? `?after=${after}` : ''}`;
   const source = new EventSource(url, { withCredentials: true });
   state.source = source;
@@ -1804,12 +1872,29 @@ function attach(runId, after = 0) {
 // refresh the whole conversation instead of resuming the dead position.
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
-  if (!state.running || !state.runId) return;
+  if (!state.runId) return;
   let run = null;
   try {
     ({ run } = await api(`/api/runs/${state.runId}`));
   } catch { return; } // keep the stream; a later event will reconcile
-  if (run && TERMINAL_STATUSES.includes(run.status)) {
+  if (!run) return;
+
+  // A planning run waits for a human, and the run card is the only place to
+  // approve it. If the plan became ready while the phone was away, the stream
+  // that carried `run.plan_ready` died with the tab: the card sits there with no
+  // Approve button, nothing says the server is waiting, and the only visible
+  // action is Stop — which cancels the task. So replay the run into its card.
+  if (run.status === 'awaiting_plan') {
+    const streamDead = !state.source || state.source.readyState !== EventSource.OPEN;
+    if (streamDead || !cardFor(run.id)) {
+      setRunning(false); // nothing is running: the browser is waiting for a tap
+      attach(run.id, 0);
+    }
+    return;
+  }
+
+  if (!state.running) return;
+  if (TERMINAL_STATUSES.includes(run.status)) {
     // 'paused' belongs here: the run is waiting for the operator, not working,
     // and no further event is coming. Leaving the stream open and the composer
     // locked is how a paused task came to look exactly like a hung one.
@@ -2051,6 +2136,25 @@ el.composer.addEventListener('submit', async (event) => {
   await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes });
 });
 
+/**
+ * "Starting the task…" while the request is in flight, and the honest reason it
+ * is taking a while once it has. `done()` takes it away — the real card replaces
+ * it, so it must never linger as a second thing on the thread.
+ */
+function pendingRunNotice() {
+  const notice = renderNotice('Starting the task…', false, 'info');
+  const label = notice.querySelector('span');
+  const slow = setTimeout(() => {
+    if (label) label.textContent = 'Still starting — a complex task drafts its plan first, which can take a minute.';
+  }, 6_000);
+  return {
+    done() {
+      clearTimeout(slow);
+      notice.remove();
+    },
+  };
+}
+
 /* Start one run: the single path for the composer and for branch forks.
    The run is filed under the current branch, so a forked "what if" stays in
    its own branch instead of leaking back into the original thread. */
@@ -2061,6 +2165,12 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
   showHero(false);
   renderAsk(prompt);
   scrollToEnd(true);
+
+  // The POST does not return until the run exists, and a complex task drafts its
+  // plan inside that request — up to a minute on a slow model. Without this the
+  // operator sees their own message and then nothing at all, which is
+  // indistinguishable from the app being broken.
+  const pending = pendingRunNotice();
 
   try {
     const { run, budget } = await api('/api/runs', {
@@ -2100,6 +2210,8 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
       return;
     }
     renderNotice(err.message || 'Could not start the task.', true, 'warn');
+  } finally {
+    pending.done();
   }
 }
 
