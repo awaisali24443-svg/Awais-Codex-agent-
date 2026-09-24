@@ -652,8 +652,11 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     res.json({ buckets: snapshot, limit: config.dailyRunBudget });
   });
 
-  router.get('/conversations', async (_req: Request, res: Response) => {
-    res.json({ conversations: await listConversations(db) });
+  router.get('/conversations', async (req: Request, res: Response) => {
+    // `?q=` searches titles and message text, so the drawer can find an old
+    // task by what was said in it rather than only by what it was called.
+    const q = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q : null;
+    res.json({ conversations: await listConversations(db, 50, q) });
   });
 
   router.get('/conversations/:id/messages', async (req: Request, res: Response) => {

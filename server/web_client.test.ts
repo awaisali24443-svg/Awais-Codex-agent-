@@ -409,6 +409,55 @@ describe('the conversation reads like a conversation', () => {
   });
 });
 
+describe('the drawer is the front door', () => {
+  test('search is on top, one obvious way to start, actions at the foot', () => {
+    const htmlText = html();
+    const search = htmlText.indexOf('id="drawer-search"');
+    const fresh = htmlText.indexOf('id="btn-new-2"');
+    const list = htmlText.indexOf('id="convos"');
+    const foot = htmlText.indexOf('id="drawer-actions"') >= 0 || htmlText.indexOf('class="drawer-actions"');
+    assert.ok(search > 0 && search < fresh, 'search sits above the list');
+    assert.ok(fresh < list, 'and “New task” is the first thing after it');
+    assert.ok(foot > list, 'settings, theme and sign-out live at the bottom, where a thumb rests');
+    assert.ok(htmlText.includes('aria-label="Recent tasks"'), 'the list is a labelled region');
+  });
+
+  test('a row remembers the task: title, last thing said, and when', () => {
+    const client = app();
+    assert.ok(client.includes('convo.preview'), 'the row shows the last message');
+    assert.ok(client.includes("meta.className = 'convo-preview'"), 'on its own line under the title');
+    assert.ok(client.includes("date.className = 'convo-date'"), 'with the date kept to one side');
+    assert.ok(client.includes('function dayLabel('), 'and the list is grouped by day');
+  });
+
+  test('search asks the server, not just the loaded page', () => {
+    // The list is capped at fifty rows; filtering only what is in the browser
+    // would find nothing older than that.
+    const client = app();
+    assert.ok(client.includes('function searchConversations()'), 'there is a search');
+    assert.ok(client.includes('/api/conversations${q ? `?q=${encodeURIComponent(q)}`'), 'which sends the query');
+    assert.ok(client.includes('if (mine !== conversationSearchSeq) return;'), 'and drops a reply a newer keystroke has overtaken');
+  });
+
+  test('the empty state is a menu, not a sentence', () => {
+    const welcome = read('web/welcome.js');
+    assert.ok(welcome.includes('hint:'), 'every starter says what it does');
+    const client = app();
+    assert.ok(client.includes("label.className = 'chip-label'"), 'the card has a title');
+    assert.ok(client.includes("hint.className = 'chip-hint'"), 'and a line under it');
+  });
+
+  test('screen changes animate where the browser can, and not where it should not', () => {
+    const client = app();
+    assert.ok(client.includes('function switchScreen('), 'one place changes screens');
+    assert.ok(client.includes('doc.startViewTransition'), 'using the platform transition');
+    assert.ok(client.includes("matchMedia('(prefers-reduced-motion: reduce)')"), 'skipped entirely for a reader who asked for less motion');
+    const cssText = css();
+    assert.ok(cssText.includes('::view-transition-new(root)'), 'and the animation is declared');
+    assert.ok(cssText.includes('@keyframes draw'), 'the welcome mark draws itself in');
+  });
+});
+
 describe('a kept file can actually be kept', () => {
   test('the panel and the answer both offer a Keep button', () => {
     const client = app();

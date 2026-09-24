@@ -32,6 +32,13 @@ describe('welcome suggestions', () => {
     assert.ok(fills.includes('cost'), 'no plan-with-estimate suggestion');
   });
 
+  it('every starter says what it does, in one short line', () => {
+    for (const s of SUGGESTIONS) {
+      assert.ok(s.hint && s.hint.length > 0, `no hint for: ${s.label}`);
+      assert.ok(s.hint.length <= 30, `hint too long for: ${s.label}`);
+    }
+  });
+
   it('suggestionFill returns the exact composer text', () => {
     const s = SUGGESTIONS[0];
     assert.equal(suggestionFill(s), s.fill);

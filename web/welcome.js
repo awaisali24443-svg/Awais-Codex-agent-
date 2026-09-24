@@ -8,11 +8,12 @@ export const WELCOME_GREETING = 'What should I do for you today?';
 /* What the agent actually does, in the operator's words. 4–6 entries,
    short labels, no emoji — the warm minimal design carries itself. */
 export const SUGGESTIONS = Object.freeze([
-  { label: 'Research a topic', fill: 'Research this topic in depth and summarize it: ' },
-  { label: 'Check my email', fill: 'Check my Gmail for unread messages and summarize the important ones' },
-  { label: 'My calendar', fill: "What's on my calendar today?" },
-  { label: 'Plan a big task', fill: 'Help me plan this task step by step and estimate the cost: ' },
-  { label: 'Summarize a repo', fill: 'Summarize this GitHub repo for me: ' },
+  { label: 'Research a topic', hint: 'A deep pass with sources', fill: 'Research this topic in depth and summarize it: ' },
+  { label: 'Check my email', hint: 'Unread, summarized', fill: 'Check my Gmail for unread messages and summarize the important ones' },
+  { label: 'My calendar', hint: "Today's schedule", fill: "What's on my calendar today?" },
+  { label: 'Plan a big task', hint: 'Steps, time, cost', fill: 'Help me plan this task step by step and estimate the cost: ' },
+  { label: 'Summarize a repo', hint: 'What it is, how it works', fill: 'Summarize this GitHub repo for me: ' },
+  { label: 'Build a small page', hint: 'A real file you can keep', fill: 'Build a single-page website for: ' },
 ]);
 
 /** The welcome screen shows exactly when the conversation has no messages. */

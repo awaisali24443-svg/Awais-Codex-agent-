@@ -622,28 +622,59 @@ export async function finishRun(db: Db, runId: string, input: FinishRunInput): P
   return seq;
 }
 
-export async function listConversations(db: Db, limit = 50): Promise<
-  Array<{ id: string; title: string; source: string; updatedAt: string; runCount: number }>
+export async function listConversations(
+  db: Db,
+  limit = 50,
+  query: string | null = null,
+): Promise<
+  Array<{
+    id: string;
+    title: string;
+    source: string;
+    updatedAt: string;
+    runCount: number;
+    /** The last thing said in it — what the row shows under the title. */
+    preview: string | null;
+    previewRole: string | null;
+  }>
 > {
+  const capped = Math.min(Math.max(limit, 1), 200);
+  const search = query?.trim() ? `%${query.trim().toLowerCase()}%` : null;
   const rows = await db.query<{
     id: string;
     title: string;
     source: string;
     updated_at: Date | string;
     run_count: string;
+    preview: string | null;
+    preview_role: string | null;
   }>(
     `SELECT c.id, c.title, c.source, c.updated_at,
-            (SELECT count(*) FROM runs r WHERE r.conversation_id = c.id)::text AS run_count
+            (SELECT count(*) FROM runs r WHERE r.conversation_id = c.id)::text AS run_count,
+            last.content AS preview, last.role AS preview_role
        FROM conversations c
+       LEFT JOIN LATERAL (
+         SELECT m.content, m.role
+           FROM messages m
+          WHERE m.conversation_id = c.id
+          ORDER BY m.created_at DESC, m.id DESC
+          LIMIT 1
+       ) last ON true
       -- Last activity, not creation time: a conversation bubbles to the top
       -- whenever a new run lands in it. Conversations with no runs yet fall
       -- back to their creation time.
+      WHERE $2::text IS NULL
+         OR lower(c.title) LIKE $2
+         OR EXISTS (
+              SELECT 1 FROM messages m
+               WHERE m.conversation_id = c.id AND lower(m.content) LIKE $2
+            )
       ORDER BY COALESCE(
                (SELECT max(r.started_at) FROM runs r WHERE r.conversation_id = c.id),
                c.created_at
              ) DESC
       LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 200)],
+    [capped, search],
   );
   return rows.map((r) => ({
     id: r.id,
@@ -651,6 +682,10 @@ export async function listConversations(db: Db, limit = 50): Promise<
     source: r.source,
     updatedAt: toIso(r.updated_at) as string,
     runCount: Number(r.run_count),
+    // A row in a list has one line of room: newlines flatten, and a long answer
+    // is cut rather than scrolled.
+    preview: r.preview ? r.preview.replace(/\s+/g, ' ').trim().slice(0, 110) : null,
+    previewRole: r.preview_role ?? null,
   }));
 }
 

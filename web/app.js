@@ -61,6 +61,7 @@ const el = {
   drawer: $('drawer'),
   scrim: $('scrim'),
   convos: $('convos'),
+  drawerSearch: $('drawer-search'),
   budget: $('budget'),
   memory: $('memory'),
   memoryTitle: $('memory-title'),
@@ -158,19 +159,40 @@ async function api(path, options = {}) {
 
 /* --------------------------------------------------------------- screens -- */
 
+/**
+ * Run a screen change as a transition when the browser can, and as a plain
+ * change when it cannot. The View Transitions API is progressive on purpose:
+ * an older browser gets the same screens with no animation, and a reader who
+ * asked for reduced motion gets no animation either — the CSS switch in
+ * theme.css turns the pseudo-elements off.
+ */
+function switchScreen(change) {
+  const doc = /** @type {Document & { startViewTransition?: (cb: () => void) => unknown }} */ (document);
+  if (typeof doc.startViewTransition === 'function' &&
+      !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    doc.startViewTransition(change);
+    return;
+  }
+  change();
+}
+
 function showLogin() {
   closeStream();
-  el.app.hidden = true;
-  el.settingsScreen.hidden = true;
-  el.login.hidden = false;
+  switchScreen(() => {
+    el.app.hidden = true;
+    el.settingsScreen.hidden = true;
+    el.login.hidden = false;
+  });
   el.loginKey.value = '';
   setTimeout(() => el.loginKey.focus(), 60);
 }
 
 function showApp() {
-  el.login.hidden = true;
-  el.settingsScreen.hidden = true;
-  el.app.hidden = false;
+  switchScreen(() => {
+    el.login.hidden = true;
+    el.settingsScreen.hidden = true;
+    el.app.hidden = false;
+  });
 }
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -293,23 +315,46 @@ function showHero(on) {
 
 async function loadConversations() {
   try {
-    const { conversations } = await api('/api/conversations');
+    // The drawer's search box is the one filter that has to reach past the
+    // fifty rows the list is capped at, so it asks the server.
+    const q = el.drawerSearch.value.trim();
+    const { conversations } = await api(`/api/conversations${q ? `?q=${encodeURIComponent(q)}` : ''}`);
     state.conversations = conversations;
     renderConversations();
   } catch { /* silent */ }
 }
 
+/**
+ * The drawer's list.
+ *
+ * A row is how a task is recognised a week later, so it carries three things:
+ * what it was called, the last thing said in it, and when that was. The old row
+ * showed a title and a run count, which is a database row, not a memory.
+ */
 function renderConversations() {
   el.convos.innerHTML = '';
+  const searching = el.drawerSearch.value.trim().length > 0;
   if (!state.conversations.length) {
     const p = document.createElement('p');
     p.className = 'empty-note';
-    p.textContent = 'No tasks yet.';
+    p.textContent = searching ? 'Nothing matches that.' : 'No tasks yet.';
     el.convos.append(p);
     return;
   }
 
+  let group = null;
   for (const convo of state.conversations) {
+    // Grouped by day, the way every inbox does it: Today, Yesterday, then
+    // everything else under one heading.
+    const when = dayLabel(convo.updatedAt);
+    if (when !== group) {
+      group = when;
+      const head = document.createElement('p');
+      head.className = 'convo-group';
+      head.textContent = when;
+      el.convos.append(head);
+    }
+
     const button = document.createElement('button');
     button.className = 'convo' + (convo.id === state.conversationId ? ' on' : '');
 
@@ -317,16 +362,37 @@ function renderConversations() {
     title.className = 'convo-title';
     title.textContent = convo.title;
 
-    const meta = document.createElement('small');
-    meta.textContent = `${relativeTime(convo.updatedAt)} · ${convo.runCount} run${convo.runCount === 1 ? '' : 's'}`;
+    const meta = document.createElement('span');
+    meta.className = 'convo-preview';
+    const preview = convo.preview ?? `${convo.runCount} run${convo.runCount === 1 ? '' : 's'}`;
+    meta.textContent = preview;
 
-    button.append(title, meta);
+    const date = document.createElement('span');
+    date.className = 'convo-date';
+    date.textContent = relativeTime(convo.updatedAt);
+
+    const body = document.createElement('span');
+    body.className = 'convo-body';
+    body.append(title, meta);
+
+    button.append(body, date);
     button.addEventListener('click', () => {
       closeDrawer();
       openConversation(convo.id);
     });
     el.convos.append(button);
   }
+}
+
+/** "Today" / "Yesterday" / "Earlier" for the group headings. */
+function dayLabel(iso) {
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return 'Earlier';
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  if (then >= midnight) return 'Today';
+  if (then >= new Date(midnight.getTime() - 86_400_000)) return 'Yesterday';
+  return 'Earlier';
 }
 
 async function openConversation(id, branchId = null) {
@@ -2335,7 +2401,16 @@ for (const suggestion of SUGGESTIONS) {
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.className = 'chip';
-  chip.textContent = suggestion.label;
+  // A starter that says what it does is a starter someone taps. The label is
+  // the card's title; the fill it drops into the composer is the promise.
+  const label = document.createElement('span');
+  label.className = 'chip-label';
+  label.textContent = suggestion.label;
+  const hint = document.createElement('span');
+  hint.className = 'chip-hint';
+  hint.textContent = suggestion.hint ?? '';
+  chip.append(label, hint);
+  if (!hint.textContent) hint.remove();
   chip.addEventListener('click', () => {
     fillComposerFromChip(el.prompt, el.send, suggestionFill(suggestion));
     autoGrow();
@@ -3269,6 +3344,26 @@ function openDrawer() {
   requestAnimationFrame(() => el.scrim.classList.add('show'));
 }
 
+/* Typing in the drawer searches as you type, and a slow reply must not overwrite
+   a newer one: the sequence number is the whole debounce. */
+let conversationSearchSeq = 0;
+async function searchConversations() {
+  const mine = ++conversationSearchSeq;
+  try {
+    const q = el.drawerSearch.value.trim();
+    const { conversations } = await api(`/api/conversations${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+    if (mine !== conversationSearchSeq) return; // a newer keystroke won
+    state.conversations = conversations;
+    renderConversations();
+  } catch { /* silent: the list keeps what it had */ }
+}
+
+el.drawerSearch.addEventListener('input', () => {
+  clearTimeout(el.drawerSearch.dataset.timer ? Number(el.drawerSearch.dataset.timer) : 0);
+  const timer = setTimeout(searchConversations, 180);
+  el.drawerSearch.dataset.timer = String(timer);
+});
+
 function closeDrawer() {
   el.drawer.classList.remove('open');
   el.drawer.setAttribute('aria-hidden', 'true');
@@ -3301,8 +3396,10 @@ let settingsOnHistory = false;
 function openSettings() {
   closeDrawer();
   void loadSettings();
-  el.app.hidden = true;
-  el.settingsScreen.hidden = false;
+  switchScreen(() => {
+    el.app.hidden = true;
+    el.settingsScreen.hidden = false;
+  });
   el.settingsScreen.scrollTop = 0;
   if (!settingsOnHistory) {
     settingsOnHistory = true;
@@ -3314,8 +3411,10 @@ function openSettings() {
 function closeSettings({ fromHistory = false } = {}) {
   if (!settingsOnHistory) return;
   settingsOnHistory = false;
-  el.settingsScreen.hidden = true;
-  el.app.hidden = false;
+  switchScreen(() => {
+    el.settingsScreen.hidden = true;
+    el.app.hidden = false;
+  });
   if (!fromHistory) history.back();
 }
 
@@ -3521,22 +3620,27 @@ function applyTheme(pref) {
     btn.setAttribute('aria-label', `Theme: ${pref} — tap to change`);
     btn.innerHTML = THEME_ICONS[pref] || THEME_ICONS.system;
   }
+  const label = $('theme-label');
+  if (label) label.textContent = `Theme: ${pref}`;
 }
 
 function initTheme() {
   applyTheme(themePreference());
-  const btn = $('btn-theme');
-  if (btn) {
-    btn.addEventListener('click', () => {
-      const order = ['light', 'dark', 'system'];
-      const next = order[(order.indexOf(themePreference()) + 1) % order.length];
-      try {
-        localStorage.setItem(THEME_KEY, next);
-      } catch {
-        /* private mode: apply for this session only */
-      }
-      applyTheme(next);
-    });
+  const cycle = () => {
+    const order = ['light', 'dark', 'system'];
+    const next = order[(order.indexOf(themePreference()) + 1) % order.length];
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* private mode: apply for this session only */
+    }
+    applyTheme(next);
+  };
+  // Two ways in, one behaviour: the top bar's icon and the drawer's row, which
+  // says in words what the icon can only draw.
+  for (const id of ['btn-theme', 'btn-theme-2']) {
+    const btn = $(id);
+    if (btn) btn.addEventListener('click', cycle);
   }
   const mq = window.matchMedia('(prefers-color-scheme: dark)');
   const onChange = () => {

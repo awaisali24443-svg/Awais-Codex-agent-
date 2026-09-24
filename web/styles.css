@@ -263,7 +263,22 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   gap: var(--space-2); max-width: 420px;
   margin: var(--space-6) auto 0; padding: 0 var(--space-1);
 }
-.hero-chips .chip { justify-content: center; text-align: center; white-space: normal; }
+.hero-chips {
+  /* Six starters, two up on a phone: a wall of text is not a menu. */
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2); max-width: 460px; margin: var(--space-6) auto 0;
+}
+.chip {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 11px 13px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  font: inherit; text-align: left; cursor: pointer; white-space: normal;
+  transition: border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
+}
+.chip:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.chip:active { transform: scale(.985); }
+.chip-label { font-size: var(--text-md); font-weight: var(--weight-medium); }
+.chip-hint { font-size: var(--text-xs); color: var(--muted); line-height: 1.4; }
 
 /* Between turns there is more air than inside one: 22px of separation is what
    makes a long thread scannable, and the entrance is a 6px rise rather than a
@@ -1067,3 +1082,59 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   }
   .panel.open { transform: none; }
 }
+
+/* ------------------------------------------------------------- the drawer ---
+   The list is the app's front door, so it gets the front door's furniture:
+   search at the top, one obvious way to start something, the recents in the
+   middle, and everything else at the foot where a thumb rests. */
+
+.drawer-search {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-3);
+  padding: 8px 12px; border-radius: var(--radius-pill);
+  background: var(--surface-2); color: var(--muted);
+}
+.drawer-search svg { width: 16px; height: 16px; flex: none; }
+.drawer-search input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  font: inherit; font-size: 15px; color: var(--ink);
+}
+.drawer-search input::placeholder { color: var(--muted); }
+
+.cta.new-task { display: flex; align-items: center; justify-content: center; gap: var(--space-2); }
+.cta.new-task svg { width: 16px; height: 16px; }
+
+.convo-group {
+  margin: var(--space-4) var(--space-2) var(--space-1);
+  font-size: var(--text-xs); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.convo {
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  width: 100%; padding: 10px var(--space-2); border-radius: var(--radius-xs);
+  border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.convo:hover { background: var(--surface-2); }
+.convo.on { background: var(--surface-2); }
+.convo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.convo-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-preview { font-size: var(--text-xs); color: var(--muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-date { flex: none; font-size: var(--text-xs); color: var(--muted); padding-top: 2px; font-variant-numeric: tabular-nums; }
+.drawer-actions { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-1); padding-top: var(--space-3); }
+
+/* --------------------------------------------------------- screen changes ---
+   One transition for every screen change, owned by the View Transitions API
+   when it exists: the leaving screen fades and lifts, the arriving one settles
+   from just below. No library, no layout thrash, and nothing at all under
+   prefers-reduced-motion (theme.css switches every animation off). */
+
+::view-transition-old(root) { animation: screen-out var(--dur-2) var(--ease-out) both; }
+::view-transition-new(root) { animation: screen-in var(--dur-3) var(--ease-spring) both; }
+@keyframes screen-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes screen-in { from { opacity: 0; transform: translateY(10px); } }
+
+/* The mark on the welcome screen draws itself in once, when the app first
+   paints: the two strokes of the W, then the spark. */
+.badge-art .badge-w { stroke-dasharray: 100; stroke-dashoffset: 100; animation: draw 700ms var(--ease-out) 80ms forwards; }
+.badge-art .badge-spark { opacity: 0; animation: spark 520ms var(--ease-out) 620ms forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes spark { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }

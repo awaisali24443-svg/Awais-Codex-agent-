@@ -224,7 +224,15 @@ try {
       <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
   </div>
-  <button class="cta ghost" id="btn-new-2">New task</button>
+  <div class="drawer-search">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="drawer-search" type="search" placeholder="Search your tasks" autocomplete="off"
+           aria-label="Search your tasks" />
+  </div>
+  <button class="cta new-task" id="btn-new-2">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    <span>New task</span>
+  </button>
   <div class="budget" id="budget"></div>
   <section class="memory" id="memory" hidden>
     <button class="memory-head" id="memory-toggle" aria-expanded="false">
@@ -245,8 +253,14 @@ try {
     </button>
     <div class="memory-body" id="schedules-body" hidden></div>
   </section>
-  <nav class="convos" id="convos"></nav>
-  <button class="drawer-foot" id="btn-signout">Sign out</button>
+  <nav class="convos" id="convos" aria-label="Recent tasks"></nav>
+  <div class="drawer-actions">
+    <button class="drawer-row" id="btn-theme-2">
+      <svg class="drawer-row-icon" viewBox="0 0 24 24"><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>
+      <span class="drawer-row-label" id="theme-label">Theme</span>
+    </button>
+    <button class="drawer-foot" id="btn-signout">Sign out</button>
+  </div>
 </aside>
 
 <!-- ======================= settings (its own page) ======================= -->
