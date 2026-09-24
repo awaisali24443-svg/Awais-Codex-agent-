@@ -503,7 +503,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .notice.bad { background: color-mix(in srgb, var(--danger) 8%, var(--paper)); color: var(--danger); }
 .notice svg { width: 17px; height: 17px; flex: none; margin-top: 2px; }
 
-/* ------------------------------------------------------------- composer --- */
+/* --------------------------------------------- plans, notices, buttons --- */
 
 .composer-wrap {
   position: sticky; bottom: 0; z-index: 15;
@@ -520,63 +520,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .chip svg { width: 15px; height: 15px; }
 .chip:active { background: var(--line); }
-
-.composer {
-  padding: var(--space-3) 14px 10px;
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-md);
-}
-.composer textarea {
-  width: 100%; max-height: 34vh; min-height: 26px;
-  font: inherit; font-size: var(--text-base); line-height: 1.5; color: var(--ink);
-  background: transparent; border: 0; outline: none; resize: none;
-  overflow-y: auto; padding: 0;
-}
-.composer textarea::placeholder { color: var(--muted); }
-/* The row is a wrapping strip, not a rigid line: on a narrow phone the ping,
-   research and send controls together are wider than the composer, and a
-   single line of `nowrap` furniture is what used to shove the whole page
-   sideways. Anything that does not fit drops to the next line instead. */
-.composer-row {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
-  margin-top: var(--space-2);
-}
-.composer-row .icon-btn { margin-left: -6px; }
-
-/* WhatsApp "done" ping toggle. Quiet by default; lights up only when checked,
-   so an unchecked task never looks like it will make a sound. */
-.ping-toggle {
-  display: inline-flex; align-items: center; gap: var(--space-1);
-  margin-left: var(--space-1); padding: 6px var(--space-2); border-radius: var(--radius-pill);
-  color: var(--muted); font-size: 12px; cursor: pointer;
-  border: 1px solid transparent; user-select: none;
-}
-.ping-toggle svg { width: 18px; height: 18px; }
-.ping-toggle input { position: absolute; opacity: 0; pointer-events: none; }
-.ping-toggle:has(input:checked) { color: var(--wa); border-color: color-mix(in srgb, var(--wa) 33%, transparent); background: color-mix(in srgb, var(--wa) 8%, transparent); }
-.ping-toggle:has(input:focus-visible) { outline: 2px solid var(--accent); }
-
-/* Deep-research mode picker: same pill language as the ping toggle, plus a
-   duration select that only appears while the mode is on. */
-.research-toggle {
-  display: inline-flex; align-items: center; gap: var(--space-1);
-  margin-left: var(--space-1); padding: 6px var(--space-2); border-radius: var(--radius-pill);
-  color: var(--muted); font-size: 12px; cursor: pointer;
-  border: 1px solid transparent; user-select: none;
-}
-.research-toggle svg { width: 18px; height: 18px; }
-.research-toggle input[type="checkbox"] { position: absolute; opacity: 0; pointer-events: none; }
-.research-toggle:has(input[type="checkbox"]:checked) { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 33%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
-.research-toggle:has(input[type="checkbox"]:focus-visible) { outline: 2px solid var(--ok); }
-.research-toggle select,
-.research-toggle input[type="number"] {
-  font: inherit; color: inherit; background: transparent;
-  border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 2px var(--space-1);
-  max-width: 76px;
-}
-.research-toggle select option { color: initial; }
 
 /* Plan checklist for complex missions. Compact rows above the step timeline;
    a finished step gets the check and fades, the rest stay actionable. */
@@ -649,9 +592,158 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .send:active { transform: scale(.94); }
 .send[disabled] { opacity: .25; cursor: default; }
 
+/* ------------------------------------------------------------- composer --- */
+
+.composer-wrap {
+  position: sticky; bottom: 0; z-index: 15;
+  padding: 6px 14px calc(10px + var(--safe-bottom));
+  background: linear-gradient(to top, var(--paper) 62%, transparent);
+}
+
+/* One card. The field on top, one row of controls underneath — the arrangement
+   every chat app has settled on, because a row of labelled pills beside the
+   field is what squeezes it to nothing on a phone. */
+.composer {
+  display: flex; flex-direction: column; gap: 2px;
+  max-width: 680px; margin-inline: auto;
+  padding: 6px 8px 7px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+}
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: var(--shadow-md);
+}
+
+.composer textarea {
+  width: 100%; box-sizing: border-box;
+  border: 0; outline: 0; background: transparent; color: var(--ink);
+  /* 16px, always: anything smaller and iOS zooms the page when the field takes
+     focus, which slides the whole thread sideways. */
+  font: inherit; font-size: 16px; line-height: 1.5;
+  padding: 8px 10px 4px;
+  resize: none; max-height: 40vh; overflow-y: auto;
+}
+.composer textarea::placeholder { color: var(--muted); }
+
+.composer-row {
+  display: flex; align-items: center; gap: 6px;
+  /* Wrap, never overflow: the same guarantee the old chip row needed. */
+  flex-wrap: wrap;
+}
+.composer-gap { flex: 1; }
+
+/* The mode: one control, not three switches. */
+.mode-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 32px; padding: 4px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-pill);
+  background: transparent; color: var(--ink-soft);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.mode-chip:hover { background: var(--surface-2); color: var(--ink); }
+.mode-chip[data-mode="research"] {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--accent);
+}
+.mode-chip .mode-mark { width: 14px; height: 14px; flex: none; }
+.mode-chip .mode-chevron { width: 13px; height: 13px; flex: none; opacity: .7; }
+
+/* Attached files, above the field, each removable. */
+.attach-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 6px 0; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 4px 6px 4px 10px; border-radius: var(--radius-pill);
+  background: var(--surface-2); color: var(--ink-soft);
+  font-size: 12.5px; line-height: 1.3;
+}
+.attach-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42vw; }
+.attach-chip .size { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.attach-chip button {
+  display: grid; place-items: center; width: 20px; height: 20px; flex: none;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer;
+}
+.attach-chip button:hover { background: var(--line); color: var(--ink); }
+.attach-chip svg { width: 12px; height: 12px; }
+.attach-error { padding: 4px 10px 0; font-size: 12.5px; color: var(--danger); }
+
+.send {
+  display: grid; place-items: center; flex: none;
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 0; background: var(--ink); color: var(--paper); cursor: pointer;
+  transition: transform var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+.send:disabled { opacity: .35; cursor: default; }
+.send:not(:disabled):active { transform: scale(.94); }
+.send svg { width: 18px; height: 18px; }
+
+/* The trailing slot is one control that changes with the situation: ask to
+   speak while the field is empty, send once there is something to send, stop
+   while a task is running. */
+.composer .icon-btn.sm { width: 32px; height: 32px; }
+
 .composer-note {
-  margin: 9px var(--space-1) 0; font-size: 12.5px; color: var(--muted); text-align: center;
-  min-height: 17px;
+  max-width: 680px; margin: 6px auto 0; min-height: 15px;
+  font-size: var(--text-xs); color: var(--muted); text-align: center;
+}
+.composer-note:empty { min-height: 0; }
+
+/* --------------------------------------------------------- bottom sheet --- */
+
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 40;
+  background: var(--scrim);
+  animation: fade-in var(--dur-2) var(--ease-out) both;
+}
+@keyframes fade-in { from { opacity: 0; } }
+
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 41;
+  max-height: 82vh; overflow-y: auto;
+  padding: 8px var(--space-4) calc(var(--space-4) + var(--safe-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  border-radius: 22px 22px 0 0;
+  box-shadow: var(--shadow-lg);
+  transform: translateY(0);
+  animation: sheet-up var(--dur-3) var(--ease-spring) both;
+}
+@keyframes sheet-up { from { transform: translateY(102%); } }
+.sheet[hidden] { display: none; }
+.sheet-grip {
+  width: 38px; height: 4px; margin: 4px auto 10px;
+  border-radius: var(--radius-pill); background: var(--line);
+}
+.sheet-head { display: flex; align-items: center; gap: var(--space-2); }
+.sheet-title { flex: 1; font-size: var(--text-md); font-weight: var(--weight-medium); color: var(--ink); }
+.sheet-body { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+
+.mode-option {
+  position: relative; display: block; width: 100%; text-align: left;
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  font: inherit; cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+}
+.mode-option:hover { background: var(--surface-2); }
+.mode-option[aria-checked="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.mode-option-name { display: block; font-size: var(--text-md); font-weight: var(--weight-medium); }
+.mode-option-note { display: block; margin-top: 2px; font-size: var(--text-sm); color: var(--muted); line-height: 1.45; }
+.mode-detail { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.mode-option.toggle { display: flex; align-items: center; gap: var(--space-3); cursor: pointer; }
+.mode-option.toggle .mode-option-name { flex: 1; }
+.mode-option.toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+.state-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.field { display: flex; align-items: center; gap: var(--space-3); }
+.field-label { flex: 1; font-size: var(--text-sm); color: var(--ink-soft); }
+.field select, .field input {
+  font: inherit; font-size: var(--text-md); padding: 7px 9px;
+  border-radius: var(--radius-xs); border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink);
 }
 
 /* ------------------------------------------------------- settings page --- */

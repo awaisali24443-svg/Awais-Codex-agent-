@@ -60,6 +60,7 @@ import {
 } from '../runs.js';
 import { forkBranch, listBranches } from '../branches.js';
 import { getMissionSteps, resumeFromStep } from '../mission_steps.js';
+import { parseAttachments } from '../attachments.js';
 import { canShareRun, newShareToken, shareUrl } from '../share.js';
 
 export interface RunRouteDeps {
@@ -203,6 +204,15 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
       return;
     }
 
+    // Files attached in the composer. Their text rides on the wire prompt and
+    // never on the stored message, so the thread keeps reading as the operator's
+    // own words.
+    const parsed = parseAttachments((body as { attachments?: unknown }).attachments);
+    if (!parsed.ok) {
+      res.status(400).json({ error: 'invalid_attachments', message: parsed.message });
+      return;
+    }
+
     // Same rules as the phone: one task at a time, one budget, one code path.
     const result = await acceptRun(
       { db, executor, config, secrets },
@@ -216,7 +226,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         notifyWhatsapp: body.notifyWhatsapp === true,
         deepResearch: research.deepResearch,
         researchBudgetMinutes: research.researchBudgetMinutes,
-        // Optional per-mission token cap. A non-number is not a cap.
+        attachments: parsed.attachments,
       },
     );
 

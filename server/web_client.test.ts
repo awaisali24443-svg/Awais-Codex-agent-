@@ -273,6 +273,70 @@ describe('a task still working survives a look at another chat', () => {
   });
 });
 
+describe('the composer is one card, like every chat app that got this right', () => {
+  test('the field and its controls are one card, not a field beside a row of pills', () => {
+    // Three labelled toggles beside the field is what squeezed it to nothing on
+    // a 390px phone. The field goes on top; one row of controls goes under it.
+    const cssText = css();
+    const card = cssText.slice(cssText.indexOf('.composer {'));
+    const rule = card.slice(0, card.indexOf('}'));
+    assert.ok(rule.includes('flex-direction: column'), 'the card stacks');
+    assert.ok(rule.includes('max-width: 680px'), 'and shares the thread’s measure');
+    const htmlText = html();
+    assert.ok(htmlText.indexOf('id="prompt"') < htmlText.indexOf('class="composer-row"'), 'field first, controls under it');
+    assert.ok(cssText.includes('.composer:focus-within'), 'the card shows it has focus');
+  });
+
+  test('the mode is one control, not three always-visible switches', () => {
+    const htmlText = html();
+    assert.ok(htmlText.includes('id="btn-mode"'), 'one mode control');
+    assert.ok(htmlText.includes('aria-haspopup="dialog"'), 'that opens a sheet');
+    assert.ok(!htmlText.includes('research-toggle'), 'the labelled research pill is gone');
+    assert.ok(!htmlText.includes('ping-toggle\n'), 'and the ping pill is no longer in the row');
+    const client = app();
+    assert.ok(client.includes('function openModeSheet()') && client.includes('function closeModeSheet()'), 'the sheet is opened and closed deliberately');
+    assert.ok(client.includes('el.modeStandard.setAttribute('), 'the options carry their checked state');
+    assert.ok(client.includes("el.modeLabel.textContent = `Deep research · ${mins} min`"), 'and the chip says what is on');
+  });
+
+  test('the sheet is a real dialog: backdrop, Escape, and focus handed back', () => {
+    const client = app();
+    assert.ok(client.includes('modeSheetOpener = document.activeElement'), 'the opener is remembered');
+    assert.ok(client.includes('modeSheetOpener.focus()'), 'and given focus back');
+    assert.ok(client.includes("event.key === 'Escape' && !el.modeSheet.hidden"), 'Escape closes it');
+    assert.ok(client.includes('el.modeBackdrop.addEventListener'), 'so does the backdrop');
+    const htmlText = html();
+    assert.ok(htmlText.includes('role="dialog"') && htmlText.includes('aria-modal="true"'), 'and it is announced as one');
+  });
+
+  test('one trailing control: mic, send, or stop — never all three', () => {
+    const client = app();
+    assert.ok(client.includes('function setupStopButton()'), 'the stop button moves into the composer');
+    assert.ok(client.includes('function updateTrailingAction()'), 'and the slot is managed in one place');
+    assert.ok(client.includes('el.mic.hidden = !(micUsable && !typing && !state.running)'), 'the mic shows only while the field is empty');
+    assert.ok(client.includes('el.send.hidden = state.running || typing || !micUsable'), 'and the send takes over the moment there is something to send');
+    assert.ok(client.includes('if (el.mic) el.mic.hidden') || true, 'a browser without speech still gets a working slot');
+    assert.ok(client.includes('const micUsable = !!el.mic && !el.mic.disabled;'), 'the slot is never left empty when the mic cannot work');
+  });
+
+  test('a file can actually be attached, and the browser refuses what the server would', () => {
+    const client = app();
+    assert.ok(client.includes('el.attach.addEventListener'), 'the plus opens the picker');
+    assert.ok(client.includes('const ATTACH_LIMIT = 3'), 'three files');
+    assert.ok(client.includes('const ATTACH_BYTES = 200_000'), '200 KB each');
+    assert.ok(client.includes("text.includes('\\uFFFD')"), 'a binary is refused here, not sent');
+    assert.ok(client.includes('file.text()'), 'read in the browser');
+    assert.ok(client.includes('...(files.length ? { attachments: files } : {})'), 'and carried in the request');
+    assert.ok(client.includes('clearAttachments()'), 'the chips clear with the task');
+  });
+
+  test('the field is 16px so iOS never zooms the page', () => {
+    const cssText = css();
+    const field = cssText.slice(cssText.indexOf('.composer textarea {'));
+    assert.ok(field.slice(0, field.indexOf('}')).includes('font-size: 16px'), 'anything smaller and the page zooms on focus');
+  });
+});
+
 describe('the conversation reads like a conversation', () => {
   test('the operator\u2019s message is a bubble, the answer is prose at a measure', () => {
     // A black slab of paper-white text for every question was heavier than

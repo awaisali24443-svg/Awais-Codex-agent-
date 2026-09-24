@@ -24,6 +24,7 @@ import type { RunExecutor } from './executor.js';
 import type { SecretsStore } from './settings.js';
 import { BudgetExceededError, consumeRunBudget, peekDayTotal, refundRunBudget, type BudgetBucket } from './budget.js';
 import { looksComplex } from './planning.js';
+import { attachmentSummary, withAttachments, type Attachment } from './attachments.js';
 import { maybeAskPlanApproval } from './whatsapp/approvals.js';
 import { RunConflictError, createRun, emitEvent, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
 
@@ -64,6 +65,11 @@ export interface AcceptInput {
    * Scheduled tasks use this so a fired run is visibly theirs in the sidebar.
    */
   conversationTitle?: string | null;
+  /**
+   * Files the operator attached in the composer. Already validated by
+   * `parseAttachments`; their text goes to the engine only.
+   */
+  attachments?: Attachment[];
 }
 
 export type AcceptResult =
@@ -107,10 +113,15 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
   const active = await getActiveRun(db);
   if (active) return { ok: false, reason: 'in_progress', active };
 
+  const attachments = input.attachments ?? [];
+
   let run: Run;
   try {
     run = await createRun(db, {
-      prompt,
+      // The thread shows the operator's words plus a line naming the files; the
+      // engine gets the words plus the files themselves.
+      prompt: prompt + attachmentSummary(attachments),
+      enginePrompt: withAttachments(prompt, attachments),
       kind: input.kind,
       engine: config.engineName,
       conversationId: input.conversationId ?? null,
@@ -173,6 +184,9 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
     }
 
     executor.start(run);
+    // `run.prompt` now holds the wire prompt, file contents and all. Nothing
+    // outside this process should ever see that, so the caller gets the row.
+    run = (await getRun(db, run.id)) ?? run;
     console.log(`[run] ${run.id} queued (${input.kind}, ${remaining} left today)`);
     return { ok: true, run, remaining, bucket };
   } catch (err) {

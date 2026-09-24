@@ -289,6 +289,15 @@ export interface CreateRunInput {
    * it so the list reads "⏰ Morning digest" instead of the prompt text.
    */
   conversationTitle?: string | null;
+  /**
+   * What the engine is handed, when it differs from what was typed.
+   *
+   * Attached files are folded in here: the row, the title and the operator's
+   * message all keep their own words, and only the wire prompt grows. Same
+   * pattern the memory and planning blocks use — the stored prompt stays what
+   * the operator wrote.
+   */
+  enginePrompt?: string | null;
 }
 
 /**
@@ -361,7 +370,10 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
 
   const run = await getRun(db, id);
   if (!run) throw new Error(`createRun: run ${id} vanished immediately after insert`);
-  return run;
+  const enginePrompt = input.enginePrompt?.trim();
+  // The caller passes this object straight to the executor; the database row it
+  // was read from keeps the operator's own words.
+  return enginePrompt ? { ...run, prompt: enginePrompt } : run;
 }
 
 export async function setRunStatus(

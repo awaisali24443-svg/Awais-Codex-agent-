@@ -85,10 +85,24 @@ const el = {
   note: $('composer-note'),
   pingToggle: $('ping-wrap'),
   pingCheck: $('ping-check'),
-  researchWrap: $('research-wrap'),
   researchCheck: $('research-check'),
   researchMinutes: $('research-minutes'),
   researchCustom: $('research-custom'),
+  researchDetail: $('research-detail'),
+  researchCustomWrap: $('research-custom-wrap'),
+  /** Bound when voice input is set up: null in a browser without the API. */
+  mic: /** @type {HTMLButtonElement | null} */ (null),
+
+  attach: $('btn-attach'),
+  attachments: $('attachments'),
+  fileInput: $('file-input'),
+  modeChip: $('btn-mode'),
+  modeLabel: $('mode-label'),
+  modeSheet: $('mode-sheet'),
+  modeBackdrop: $('mode-backdrop'),
+  modeClose: $('mode-close'),
+  modeStandard: $('mode-standard'),
+  modeResearch: $('mode-research'),
 };
 
 const state = {
@@ -2137,6 +2151,10 @@ function setRunning(on) {
   el.stop.disabled = false;
   el.topbarTitle.textContent = on ? 'Working…' : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'WAIS');
   el.send.disabled = on || !el.prompt.value.trim();
+  // While a task runs the trailing control is Stop — in the composer's own
+  // corner, where the thumb already is, rather than only in the top bar.
+  el.stop.hidden = !on;
+  updateTrailingAction();
 }
 
 /* A runaway task blocks every new one (the server answers 409 while one is
@@ -2158,6 +2176,7 @@ el.stop.addEventListener('click', async () => {
 el.prompt.addEventListener('input', () => {
   autoGrow();
   el.send.disabled = state.running || !el.prompt.value.trim();
+  updateTrailingAction();
 });
 
 
@@ -2241,6 +2260,13 @@ function toggleListening(btn, SR) {
   setMicListening(btn, true);
 }
 
+/* The stop button lives in the composer's trailing slot: it is the control an
+   operator reaches for in a hurry, and the top bar corner is the hardest place
+   on a phone to reach. */
+function setupStopButton() {
+  if (el.stop.parentElement !== el.send.parentElement) el.send.after(el.stop);
+}
+
 function setupVoiceInput() {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -2257,7 +2283,26 @@ function setupVoiceInput() {
     btn.setAttribute('aria-label', btn.title);
     btn.addEventListener('click', () => toggleListening(btn, SR));
   }
-  $('btn-attach').after(btn);
+  // The trailing slot, not the row's left side: one control on the right that
+  // is a mic while the field is empty, a send once there is something to send,
+  // and a stop while a task runs.
+  el.send.before(btn);
+  el.mic = btn;
+  updateTrailingAction();
+}
+
+/**
+ * One trailing control, three jobs. A phone has room for one thumb-sized
+ * control at the right edge of the composer, so the app spends it on whatever
+ * the operator could want at this exact moment and never on all three at once.
+ */
+function updateTrailingAction() {
+  const typing = el.prompt.value.trim().length > 0;
+  const micUsable = !!el.mic && !el.mic.disabled;
+  if (el.mic) el.mic.hidden = !(micUsable && !typing && !state.running);
+  // Without a usable mic the slot always holds the send button: an empty slot
+  // beside an empty field is a dead end.
+  el.send.hidden = state.running || typing || !micUsable;
 }
 
 /** Per-answer Listen/Stop button for assistant messages. */
@@ -2319,19 +2364,145 @@ function researchBudgetMinutes() {
 
 function refreshResearchPicker() {
   const on = el.researchCheck.checked;
-  el.researchMinutes.hidden = !on;
-  el.researchCustom.hidden = !on || el.researchMinutes.value !== 'custom';
+  el.researchDetail.hidden = !on;
+  el.researchCustomWrap.hidden = !on || el.researchMinutes.value !== 'custom';
+  el.modeStandard.setAttribute('aria-checked', on ? 'false' : 'true');
+  el.modeResearch.setAttribute('aria-checked', on ? 'true' : 'false');
+  el.modeChip.dataset.mode = on ? 'research' : 'standard';
   if (on) {
     const mins = researchBudgetMinutes();
-    el.note.textContent = `Deep research: the agent keeps digging for up to ${mins} minute${mins === 1 ? '' : 's'}.`;
-  } else if (!el.pingCheck.checked) {
-    el.note.textContent = '';
+    el.modeLabel.textContent = `Deep research · ${mins} min`;
+    el.note.textContent = `The agent keeps digging for up to ${mins} minute${mins === 1 ? '' : 's'}.`;
+  } else {
+    el.modeLabel.textContent = 'Standard';
+    if (!el.pingCheck.checked) el.note.textContent = '';
   }
 }
 
 el.researchCheck.addEventListener('change', refreshResearchPicker);
 el.researchMinutes.addEventListener('change', refreshResearchPicker);
 el.researchCustom.addEventListener('input', refreshResearchPicker);
+
+/* ------------------------------------------------------- the mode sheet -- */
+
+/* The sheet is the only modal in the composer, and the rules are the same ones
+   the outputs panel follows: the backdrop closes it, Escape closes it, and
+   whatever was focused when it opened gets focus back — otherwise a phone
+   keyboard reappears on a field the operator has already left. */
+let modeSheetOpener = null;
+
+function openModeSheet() {
+  if (!el.modeSheet.hidden) return;
+  modeSheetOpener = document.activeElement;
+  el.modeSheet.hidden = false;
+  el.modeSheet.setAttribute('aria-hidden', 'false');
+  el.modeBackdrop.hidden = false;
+  el.modeChip.setAttribute('aria-expanded', 'true');
+  el.modeClose.focus();
+}
+
+function closeModeSheet() {
+  if (el.modeSheet.hidden) return;
+  el.modeSheet.hidden = true;
+  el.modeSheet.setAttribute('aria-hidden', 'true');
+  el.modeBackdrop.hidden = true;
+  el.modeChip.setAttribute('aria-expanded', 'false');
+  if (modeSheetOpener instanceof HTMLElement) modeSheetOpener.focus();
+  modeSheetOpener = null;
+}
+
+el.modeChip.addEventListener('click', openModeSheet);
+el.modeClose.addEventListener('click', closeModeSheet);
+el.modeBackdrop.addEventListener('click', closeModeSheet);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !el.modeSheet.hidden) closeModeSheet();
+});
+
+/* Choosing a mode closes the sheet on the spot: the choice is the whole point
+   of the sheet, so making the operator dismiss it afterwards is a second tap
+   for nothing. */
+el.modeStandard.addEventListener('click', () => {
+  el.researchCheck.checked = false;
+  refreshResearchPicker();
+  closeModeSheet();
+});
+el.modeResearch.addEventListener('click', () => {
+  el.researchCheck.checked = true;
+  refreshResearchPicker();
+});
+el.pingCheck.addEventListener('change', refreshResearchPicker);
+
+/* ---------------------------------------------------------- attachments -- */
+
+/**
+ * What the composer will send with the prompt.
+ *
+ * Text files only, read in the browser and carried inside the request: the
+ * sandbox is not needed to look at a note, and a file that never leaves the
+ * phone cannot leak. The caps are the server's caps, repeated here so the
+ * operator is told before a 200 KB upload rather than after it.
+ */
+const ATTACH_LIMIT = 3;
+const ATTACH_BYTES = 200_000;
+const ATTACH_TOTAL = 400_000;
+let attachments = [];
+
+function attachmentBytes(list = attachments) {
+  return list.reduce((sum, a) => sum + a.text.length, 0);
+}
+
+function renderAttachments(message = '') {
+  el.attachments.innerHTML = '';
+  el.attachments.hidden = attachments.length === 0 && !message;
+  if (message) {
+    const bad = document.createElement('p');
+    bad.className = 'attach-error';
+    bad.textContent = message;
+    el.attachments.append(bad);
+  }
+  for (const file of attachments) {
+    const chip = document.createElement('span');
+    chip.className = 'attach-chip';
+    chip.innerHTML = iconFor('file') + '<span class="name"></span><span class="size"></span>' +
+      '<button type="button" aria-label="Remove this file"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+    chip.querySelector('.name').textContent = file.name;
+    chip.querySelector('.size').textContent = formatBytes(file.text.length);
+    chip.querySelector('button').addEventListener('click', () => {
+      attachments = attachments.filter((a) => a !== file);
+      renderAttachments();
+    });
+    el.attachments.append(chip);
+  }
+}
+
+function clearAttachments() {
+  attachments = [];
+  el.fileInput.value = '';
+  renderAttachments();
+}
+
+el.attach.addEventListener('click', () => el.fileInput.click());
+
+el.fileInput.addEventListener('change', async () => {
+  const chosen = [...(el.fileInput.files ?? [])];
+  const refused = [];
+  for (const file of chosen) {
+    if (attachments.length >= ATTACH_LIMIT) { refused.push(`${file.name}: only ${ATTACH_LIMIT} files per task`); continue; }
+    if (file.size > ATTACH_BYTES) { refused.push(`${file.name}: larger than ${formatBytes(ATTACH_BYTES)}`); continue; }
+    if (attachmentBytes() + file.size > ATTACH_TOTAL) { refused.push(`${file.name}: the files add up to more than ${formatBytes(ATTACH_TOTAL)}`); continue; }
+    try {
+      const text = await file.text();
+      // A file that decodes to replacement characters is not text — say so
+      // rather than sending the model a page of uFFFD.
+      if (text.includes('\uFFFD')) { refused.push(`${file.name}: not a text file`); continue; }
+      attachments.push({ name: file.name.slice(0, 120), text });
+    } catch {
+      refused.push(`${file.name}: could not be read`);
+    }
+  }
+  el.fileInput.value = '';
+  renderAttachments(refused.join(' · '));
+});
 
 el.composer.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -2342,13 +2513,16 @@ el.composer.addEventListener('submit', async (event) => {
   const deepResearch = el.researchCheck.checked;
   const budgetMinutes = researchBudgetMinutes();
 
-  // The ping and the research mode are per task, not sticky preferences:
-  // reset them with the composer.
+  const files = attachments.map(({ name, text }) => ({ name, text }));
+
+  // The ping, the research mode and the files are per task, not sticky
+  // preferences: they are reset with the composer.
   el.pingCheck.checked = false;
   el.researchCheck.checked = false;
   refreshResearchPicker();
   el.note.textContent = '';
-  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes });
+  clearAttachments();
+  await submitPrompt(prompt, { notifyWhatsapp, deepResearch, budgetMinutes, files });
 });
 
 /**
@@ -2373,7 +2547,7 @@ function pendingRunNotice() {
 /* Start one run: the single path for the composer and for branch forks.
    The run is filed under the current branch, so a forked "what if" stays in
    its own branch instead of leaking back into the original thread. */
-async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15 } = {}) {
+async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = false, budgetMinutes = 15, files = [] } = {}) {
   el.prompt.value = '';
   autoGrow();
   el.send.disabled = true;
@@ -2395,6 +2569,7 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
         conversationId: state.conversationId,
         branchId: state.branchId,
         notifyWhatsapp,
+        ...(files.length ? { attachments: files } : {}),
         ...(deepResearch ? { deepResearch: true, researchBudgetMinutes: budgetMinutes } : {}),
       }),
     });
@@ -3389,6 +3564,7 @@ function registerWorker() {
 (async function start() {
   registerWorker();
   initTheme();
+  setupStopButton();
   setupVoiceInput();
   try {
     await api('/api/auth/session');

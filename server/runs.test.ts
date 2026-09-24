@@ -77,6 +77,7 @@ class SwappableEngine implements Engine {
 
 const engine = new SwappableEngine();
 
+
 /** Each test gets a fresh script so delays do not leak between cases. */
 function useEngine(next: Engine): void {
   engine.target = next;
@@ -161,6 +162,56 @@ async function startRun(prompt: string, kind = 'chat'): Promise<ApiResult> {
     body: JSON.stringify({ prompt: `${prompt} #${runCounter}`, kind }),
   });
 }
+
+describe('attached files', () => {
+  test('a file reaches the engine but the file text never reaches the thread', async () => {
+    // The recorder every deep-research case already uses: it keeps the prompt
+    // the engine was handed, which is the only place the file text may appear.
+    const recording = new RecordingEngine();
+    useEngine(recording);
+    const secret = 'SENSITIVE-CSV-CONTENT';
+    const { status, body } = await api('/api/runs', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: 'Summarise the attached numbers',
+        kind: 'chat',
+        attachments: [{ name: 'numbers.csv', text: `a,b\n1,2\n${secret}` }],
+      }),
+    });
+    assert.equal(status, 201);
+    assert.ok(
+      recording.calls.some((c) => c.prompt.includes(secret) && c.prompt.includes('--- numbers.csv ---')),
+      'the engine is handed the file, fenced with its name',
+    );
+
+    // What the operator sees in the thread: their own words, plus one line
+    // naming the file. Never the contents.
+    const messages = await waitFor(async () => {
+      const res = await api(`/api/conversations/${body.run.conversationId}/messages`);
+      return res.body.messages.length ? res.body.messages : null;
+    });
+    const mine = messages.find((m: { role: string; content: string }) => m.role === 'user');
+    assert.ok(mine.content.includes('Summarise the attached numbers'), 'the question is the record');
+    assert.ok(mine.content.includes('numbers.csv'), 'the file is named');
+    assert.ok(!mine.content.includes(secret), 'and its contents are not pasted into the conversation');
+    useEngine(new ScriptedEngine({ steps: INSTANT, speed: 0 }));
+  });
+
+  test('a refused attachment is explained, and nothing starts', async () => {
+    const { status, body } = await api('/api/runs', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: 'This should not start',
+        attachments: [{ name: 'huge.txt', text: 'x'.repeat(200_001) }],
+      }),
+    });
+    assert.equal(status, 400);
+    assert.equal(body.error, 'invalid_attachments');
+    assert.match(body.message, /huge\.txt is larger than 200 KB/);
+    const active = await api('/api/runs/active');
+    assert.equal(active.body.run, null, 'a refused request starts nothing');
+  });
+});
 
 async function waitFor<T>(fn: () => Promise<T | null>, timeoutMs = 4_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
