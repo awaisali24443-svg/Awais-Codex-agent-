@@ -493,6 +493,73 @@ describe('a heavy user walks the app', () => {
     assert.equal((await fetch(`${base}/share/${token}`)).status, 404, 'and a revoked link stops working');
   });
 
+  test('a big task answers first, and plans afterwards in the open', async () => {
+    // The complaint, end to end: "it takes a couple of minutes without showing
+    // any live stream". The acceptance used to wait for the planning pass, so
+    // the browser had no task to attach to while the model thought. Now the
+    // answer must name a task that is streaming, before the plan exists.
+    const slowPlan = await startApp(
+      new ScriptedEngine({
+        steps: SCRIPT.map((step) => ({ ...step, delayMs: 60 })),
+        speed: 1,
+      }),
+    );
+    try {
+      const startedAt = Date.now();
+      const accepted = await fetch(`${slowPlan.base}/api/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ prompt: COMPLEX_PROMPT }),
+      });
+      const took = Date.now() - startedAt;
+      const { run } = (await accepted.json()) as { run: { id: string; status: string } };
+      assert.equal(accepted.status, 201);
+      assert.equal(run.status, 'planning', 'the answer names a task that exists, not a finished plan');
+      assert.ok(took < 400, `the acceptance came back in ${took}ms, before the plan did`);
+
+      // A phone that reloads mid-planning has to find it, or the card it was
+      // watching is gone for good.
+      const active = (await (await fetch(`${slowPlan.base}/api/runs/active`, { headers: { cookie } })).json()) as {
+        run: { id: string } | null;
+      };
+      assert.equal(active.run?.id, run.id, 'the task being planned is visible as active');
+
+      // And the stream has something to say from the first moment: the run
+      // announces the planning, streams the milestones as they are written, and
+      // only then asks for approval.
+      const controller = new AbortController();
+      const stream = await fetch(`${slowPlan.base}/api/runs/${run.id}/stream`, {
+        headers: { cookie, accept: 'text/event-stream' },
+        signal: controller.signal,
+      });
+      const reader = stream.body!.getReader();
+      const decoder = new TextDecoder();
+      let seen = '';
+      const readUntil = async (marker: string, ms: number) => {
+        const deadline = Date.now() + ms;
+        while (Date.now() < deadline && !seen.includes(marker)) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          seen += decoder.decode(value, { stream: true });
+        }
+      };
+      await readUntil('run.plan_ready', 8_000);
+      assert.match(seen, /event: run\.plan_started/, 'the stream says the plan is being written');
+      assert.match(seen, /event: plan\.milestone/, 'and carries the steps as the model names them');
+      assert.match(seen, /event: log/, 'with the engine lines while it works');
+      assert.ok(seen.indexOf('run.plan_started') < seen.indexOf('run.plan_ready'), 'in that order');
+
+      const approved = await fetch(`${slowPlan.base}/api/runs/${run.id}/approve`, { method: 'POST', headers: { cookie } });
+      assert.equal(approved.status, 200);
+      await readUntil('run.completed', 10_000);
+      controller.abort();
+      assert.match(seen, /event: run\.completed/, 'and the task finishes once it is approved');
+      assert.ok(seen.indexOf('run.plan_ready') < seen.indexOf('run.completed'), 'plan first, execution after');
+    } finally {
+      await slowPlan.close();
+    }
+  });
+
   test('one task at a time, and a running task can be stopped', async () => {
     // A task that is genuinely still working: the fast script finishes before a
     // cancel could ever reach it, which would make this test a lie.
