@@ -703,6 +703,13 @@ export async function listMessages(
   runErrorType: string | null;
   /** What the operator said about this answer, if he said anything. */
   feedback: { rating: string; reason: string | null; note: string | null } | null;
+  /**
+   * What the run behind this message cost:: the tokens the engine reported and
+   * the wall clock between start and finish. Present on both rows of a run
+   * (the question wrote the run into existence); the screen draws it under the
+   * answer, where it is a statement about the answer.
+   */
+  usage: { tokensIn: number | null; tokensOut: number | null; seconds: number | null } | null;
   createdAt: string;
 }>> {
   const capped = Math.min(Math.max(limit, 1), 500);
@@ -712,6 +719,8 @@ export async function listMessages(
     ? `WITH RECURSIVE ${chainCte('$3')}
        SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type,
               f.rating AS feedback_rating, f.reason AS feedback_reason, f.note AS feedback_note,
+              r.tokens_in, r.tokens_out,
+              EXTRACT(EPOCH FROM (r.finished_at - r.started_at)) AS run_seconds,
               m.created_at
          FROM messages m
          JOIN chain c ON m.branch_id = c.id
@@ -723,6 +732,8 @@ export async function listMessages(
         LIMIT $2`
     : `SELECT m.id, m.role, m.content, m.run_id, r.status AS run_status, r.error_type AS run_error_type,
               f.rating AS feedback_rating, f.reason AS feedback_reason, f.note AS feedback_note,
+              r.tokens_in, r.tokens_out,
+              EXTRACT(EPOCH FROM (r.finished_at - r.started_at)) AS run_seconds,
               m.created_at
          FROM messages m
          LEFT JOIN runs r ON r.id = m.run_id
@@ -740,6 +751,9 @@ export async function listMessages(
     feedback_rating: string | null;
     feedback_reason: string | null;
     feedback_note: string | null;
+    tokens_in: number | null;
+    tokens_out: number | null;
+    run_seconds: string | number | null;
     created_at: Date | string;
   }>(branchFilter, branchId ? [conversationId, capped, branchId] : [conversationId, capped]);
   return rows.map((r) => ({
@@ -754,6 +768,17 @@ export async function listMessages(
     feedback: r.feedback_rating
       ? { rating: r.feedback_rating, reason: r.feedback_reason, note: r.feedback_note }
       : null,
+    // A cancelled or still-running answer has no finish time, and an engine
+    // that does not report usage leaves nulls: unknown is a value, and the
+    // footer says nothing rather than zero.
+    usage:
+      r.tokens_in === null && r.tokens_out === null && r.run_seconds === null
+        ? null
+        : {
+            tokensIn: r.tokens_in,
+            tokensOut: r.tokens_out,
+            seconds: r.run_seconds === null ? null : Math.round(Number(r.run_seconds) * 10) / 10,
+          },
     createdAt: toIso(r.created_at) as string,
   }));
 }

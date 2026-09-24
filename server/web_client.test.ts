@@ -535,6 +535,35 @@ describe('reading while it works', () => {
   });
 });
 
+describe('an answer says what it cost', () => {
+  test('one quiet line, only under the answer, only with real numbers', () => {
+    const client = app();
+    assert.ok(client.includes('function usageLine('), 'there is one place that draws it');
+    assert.ok(client.includes("usageLine(node, message.usage ?? null, undefined, true);"), 'a reopened answer keeps its numbers');
+    assert.ok(client.includes('usageLine(card.card, card.usage ?? null, card.startedAt, true);'), 'and a live one gets them as it closes');
+    // The line lives inside the answer branch of the message loop, not the
+    // question branch: a cost line under "make me a landing page" would be a
+    // number about someone else's work.
+    const answerBranch = client.slice(
+      client.indexOf("if (message.role === 'assistant') {"),
+      client.indexOf('attachMessageActions(node, message'),
+    );
+    assert.ok(answerBranch.includes('usageLine(node, message.usage ?? null, undefined, true);'), 'the cost line is inside the answer branch');
+    const questionBranch = client.slice(client.indexOf('const node = message.role'), client.indexOf("if (message.role === 'assistant') {"));
+    assert.ok(!questionBranch.includes('usageLine('), 'and not in the question branch');
+    // Unknown is drawn as nothing at all: an engine that reports no tokens
+    // must not produce a footer claiming zero.
+    assert.ok(client.includes('if (parts.length === 0) return;'), 'no numbers, no line');
+    assert.ok(client.includes("if (value === null || value === undefined) return '—';"), 'and an unknown half is a dash, never a zero');
+  });
+
+  test('seconds are seconds, minutes are minutes', () => {
+    const client = app();
+    assert.ok(client.includes('seconds >= 90 ?'), 'a long run switches to minutes');
+    assert.ok(css().includes('.msg-usage'), 'and the line is styled as the quietest thing on the card');
+  });
+});
+
 describe('a task that goes looking says where', () => {
   test('the rail fills during the run, from the run\u2019s own events', () => {
     const client = app();

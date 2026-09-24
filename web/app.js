@@ -459,6 +459,9 @@ async function openConversation(id, branchId = null) {
         slot.className = 'sources-slot';
         node.append(slot);
         renderSources({ answerText: message.content, answerTail: '', sources: slot, deadSources: [], sourcesChecked: 0 });
+        // What it cost, from the run the answer came from — the same line the
+        // live card showed, so reopening an answer does not lose it.
+        usageLine(node, message.usage ?? null, undefined, true);
       }
       attachMessageActions(node, message, draftByRun.get(message.runId));
     }
@@ -938,6 +941,49 @@ function updatePlan(card, data) {
   if (data.label) row.querySelector('.plan-label').textContent = String(data.label);
   if (data.done) row.classList.add('done');
   scrollToEnd();
+}
+
+/* --------------------------------------------------------- answer cost -- */
+
+/**
+ * What the answer cost, in one quiet line under it.
+ *
+ * Borrowed from the response metadata every model playground prints and no
+ * chat app does: tokens in, tokens out, and how long it took. It earns its
+ * place here because the operator is on a free tier — a number he can watch
+ * while it is still explainable beats a quota warning at the end of the month.
+ * Only what is actually known is shown: an engine that reports nothing prints
+ * no line, and a live card counts its own seconds while the stored one uses
+ * the server's.
+ */
+function usageLine(node, usage, startedAt, finished = true) {
+  if (!node) return;
+  node.querySelector?.('.msg-usage')?.remove();
+  if (!usage && !startedAt) return;
+  const parts = [];
+  const seconds =
+    typeof usage?.seconds === 'number'
+      ? usage.seconds
+      : typeof startedAt === 'number' && finished
+        ? (Date.now() - startedAt) / 1000
+        : null;
+  if (typeof seconds === 'number' && seconds > 0) {
+    parts.push(seconds >= 90 ? `${(seconds / 60).toFixed(1)} min` : `${seconds.toFixed(1)}s`);
+  }
+  const tin = typeof usage?.tokensIn === 'number' ? usage.tokensIn : null;
+  const tout = typeof usage?.tokensOut === 'number' ? usage.tokensOut : null;
+  if (tin !== null || tout !== null) parts.push(`${count(tin)} in · ${count(tout)} out`);
+  if (parts.length === 0) return;
+  const line = document.createElement('p');
+  line.className = 'msg-usage';
+  line.textContent = parts.join(' · ');
+  node.append(line);
+}
+
+/** 1240 -> "1.2k". Token counts are read, not audited. */
+function count(value) {
+  if (value === null || value === undefined) return '—';
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
 }
 
 /* -------------------------------------------------------- source rail -- */
@@ -1601,6 +1647,7 @@ function handleEvent(card, event, data) {
       break;
 
     case 'run.completed':
+      card.usage = data?.usage ?? null;
       finishCard(card, 'done');
       // The agent filed a LinkedIn draft: one tap publishes, nothing auto-posts.
       if (data.linkedInDraft) card.answer.append(linkedInPublishButton(data.linkedInDraft));
@@ -1631,6 +1678,9 @@ function finishCard(card, outcome, data = {}) {
   card.thinkingLabel.textContent = 'Thinking';
   drawThinking(card);
   drawAnswer(card, false);
+  // The card's own numbers: the seconds it has been counting, and whatever the
+  // engine reported as the run closed.
+  usageLine(card.card, card.usage ?? null, card.startedAt, true);
 
   // The rail stops moving with the task: it folds to one honest line —
   // "Where it looked · 8 sites" — because from here on the answer is the news,

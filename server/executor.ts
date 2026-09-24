@@ -697,7 +697,15 @@ export class RunExecutor {
       bus.publish(run.id, {
         seq,
         type: 'run.completed',
-        payload: { status: 'completed', linkedInDraft: linkedInDraft ?? null, verification },
+        payload: {
+          status: 'completed',
+          linkedInDraft: linkedInDraft ?? null,
+          verification,
+          // What the answer cost, when the engine says. The client shows it
+          // under the answer the way a lab notebook shows the run conditions:
+          // the operator's quota is the reason to care.
+          usage: { tokensIn: result.tokensIn ?? null, tokensOut: result.tokensOut ?? null },
+        },
       });
       this.afterTerminal(run, 'completed');
       console.log(

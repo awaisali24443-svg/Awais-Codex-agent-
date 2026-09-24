@@ -1537,3 +1537,13 @@ kbd {
   .rail-row { animation: rail-in .18s var(--ease-out); }
   @keyframes rail-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 }
+
+/* ------------------------------------------------------- what it cost ---
+   One quiet line under a finished answer: how long it ran, and what it spent.
+   It is deliberately the smallest text on the card — information you go
+   looking for, not information that competes with the answer. */
+
+.msg-usage {
+  margin: 6px 0 0; font-size: 11.5px; color: var(--muted);
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+}

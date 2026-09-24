@@ -306,6 +306,39 @@ describe('a heavy user walks the app', () => {
     assert.ok(replay.some((e) => e.name === 'run.completed'), 'including the end of the run');
   });
 
+  test('the answer says when it ran and what it spent', async () => {
+    // The metadata a playground prints and a chat app does not: how long it
+    // took, and the tokens the run reported. It matters here because the
+    // operator's engine is a free tier — a number you can watch while it is
+    // still explainable beats a quota warning at the end of the month.
+    const created = (await (await api('/api/runs', {
+      method: 'POST',
+      body: JSON.stringify({ prompt: 'say hello in one short sentence' }),
+    })).json()) as { run: { id: string; conversationId: string } };
+    const runId = created.run.id;
+    await readStream(runId);
+
+    const listed = (await (await api(`/api/conversations/${created.run.conversationId}/messages`)).json()) as {
+      messages: Array<{ role: string; usage: { tokensIn: number | null; tokensOut: number | null; seconds: number | null } | null }>;
+    };
+    const answer = listed.messages.find((m) => m.role === 'assistant');
+    assert.ok(answer, 'the answer is stored');
+    assert.ok(answer.usage, 'and it carries its cost');
+    assert.ok(typeof answer.usage.seconds === 'number' && answer.usage.seconds >= 0, 'with the wall clock the run took');
+    // And the tokens the engine reported, passed through untouched: the
+    // scripted engine estimates them from the text, so they are small but real.
+    assert.ok(
+      typeof answer.usage.tokensIn === 'number' && answer.usage.tokensIn > 0,
+      'the numbers the engine reported survive the trip to the screen',
+    );
+    assert.ok(typeof answer.usage.tokensOut === 'number' && answer.usage.tokensOut > 0);
+    // Both rows belong to the same run, so both carry its cost — the screen
+    // draws the line under the answer only (web_client.test.ts holds that).
+    const question = listed.messages.find((m) => m.role === 'user');
+    assert.ok(question?.usage, 'the run that answered is the run that spent, whichever row you read');
+    assert.equal(question.usage.tokensIn, answer.usage.tokensIn, 'one run, one number');
+  });
+
   test('the file it produced can be listed, opened and kept', async () => {
     const conversations = (await (await api('/api/conversations')).json()) as { conversations: Array<{ id: string }> };
     const conversationId = conversations.conversations[0].id;
