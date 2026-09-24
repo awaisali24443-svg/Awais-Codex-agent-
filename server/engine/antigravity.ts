@@ -76,6 +76,15 @@ export interface AntigravityEngineOptions {
   maxTotalTokens?: number;
   /** Give up on a socket that has produced nothing for this long. */
   idleTimeoutMs?: number;
+  /**
+   * How often to check whether the model has gone quiet, and after how long of
+   * silence to say so. A thinking model can legitimately stream nothing for
+   * minutes; a card that shows nothing for minutes is indistinguishable from a
+   * dead one, and that is exactly how a working three-minute task got reported
+   * as "no live stream". Tests set these small.
+   */
+  heartbeatMs?: number;
+  heartbeatSilenceMs?: number;
   /** How long to keep polling a stored interaction after a cut stream. */
   recoveryAttempts?: number;
   /** Backoff between short retries of a retryable non-rate-limit 5xx. Tests set 0. */
@@ -103,6 +112,9 @@ const DEFAULT_RECOVERY_ATTEMPTS = 4;
  * has slid out of a rolling window, and crosses at least one boundary of a
  * fixed window. Later waits keep doubling from here (capped below).
  */
+/** How often the silence watchdog looks, and how much silence is worth a word. */
+const DEFAULT_HEARTBEAT_MS = 15_000;
+const DEFAULT_HEARTBEAT_SILENCE_MS = 30_000;
 const DEFAULT_RATE_LIMIT_BASE_DELAY_MS = 65_000;
 const DEFAULT_RATE_LIMIT_MAX_WAIT_MS = 30 * 60_000;
 /** Longest single wait between rate-limit retries. TPM windows clear per minute. */
@@ -532,11 +544,32 @@ export class AntigravityEngine implements Engine {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // The silence watchdog. Everything else in this class is reactive: it can
+    // only tell the operator about a thing that already happened. A model that
+    // is thinking has happened *nothing*, so silence is all this stream has —
+    // and for the first minutes of a hard task it is all the operator sees. So
+    // the engine says the true thing in words: still open, still nothing back.
+    let lastWordAt = Date.now();
+    const heartbeatMs = this.options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+    const silenceMs = this.options.heartbeatSilenceMs ?? DEFAULT_HEARTBEAT_SILENCE_MS;
+    const beat = setInterval(() => {
+      const silentMs = Date.now() - lastWordAt;
+      if (silentMs < silenceMs) return;
+      // Rounded to whole seconds, and never "0s": in production this fires on a
+      // half-minute, and in tests the interval is milliseconds.
+      const silent = Math.max(1, Math.round(silentMs / 1000));
+      emit.log(`Nothing from the model yet — ${silent}s in. The request is open and thinking.`, 'info');
+    }, heartbeatMs);
+    // A timer must never hold the process open at shutdown, and must never
+    // outlive the socket it is talking about.
+    beat.unref?.();
+
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         touch();
+        lastWordAt = Date.now();
         buffer += decoder.decode(value, { stream: true });
 
         const blocks = buffer.split(/\r?\n\r?\n/);
@@ -671,6 +704,7 @@ export class AntigravityEngine implements Engine {
         !interactionId,
       );
     } finally {
+      clearInterval(beat);
       reader.releaseLock?.();
     }
 

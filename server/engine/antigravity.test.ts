@@ -362,6 +362,58 @@ describe('reading the stream', () => {
   });
 });
 
+describe('the silence watchdog', () => {
+  test('says the model has gone quiet, and says it in words', async () => {
+    // The complaint this answers: three minutes on a hard task with nothing on
+    // screen but a retrying line. A thinking model streams nothing for minutes
+    // at a time — legitimate, and indistinguishable from a hung card unless the
+    // engine says so. "Nothing from the model yet — 45s in" is that sentence.
+    fake = await startFake((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`event: interaction.start\ndata: ${JSON.stringify({ interaction: { id: 'int_quiet' } })}\n\n`);
+      // ...and then the model thinks about it for a while.
+      setTimeout(() => {
+        res.write(`data: ${JSON.stringify({ delta: { text: 'Late answer.' } })}\n\n`);
+        res.write(
+          `data: ${JSON.stringify({ interaction: { id: 'int_quiet', status: 'completed', output_text: 'Late answer.' } })}\n\n`,
+        );
+        res.end();
+      }, 220);
+    });
+    const engine = engineFor(fake.base, { heartbeatMs: 40, heartbeatSilenceMs: 60 });
+    const { ctx, seen } = makeCtx();
+
+    const result = await engine.run('think hard about this', ctx);
+
+    assert.equal(result.text, 'Late answer.');
+    const beats = seen.logs.filter((l) => l.startsWith('Nothing from the model yet — '));
+    assert.ok(beats.length >= 1, `expected a heartbeat, got ${JSON.stringify(seen.logs)}`);
+    assert.match(beats[0]!, /The request is open and thinking\.$/);
+  });
+
+  test('stays quiet while the model is talking', async () => {
+    // A heartbeat on a working stream is noise, and noise is what makes people
+    // stop reading the timeline. Deltas reset the silence clock.
+    fake = await startFake(async (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (let i = 0; i < 6; i += 1) {
+        res.write(`data: ${JSON.stringify({ delta: { text: `word${i} ` } })}\n\n`);
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      res.write(
+        `data: ${JSON.stringify({ interaction: { id: 'int_busy', status: 'completed', output_text: 'word0 word1 word2 word3 word4 word5 ' } })}\n\n`,
+      );
+      res.end();
+    });
+    const engine = engineFor(fake.base, { heartbeatMs: 30, heartbeatSilenceMs: 60 });
+    const { ctx, seen } = makeCtx();
+
+    await engine.run('say something', ctx);
+
+    assert.equal(seen.logs.filter((l) => l.startsWith('Nothing from the model')).length, 0, `uneasy heartbeat: ${JSON.stringify(seen.logs)}`);
+  });
+});
+
 describe('failures', () => {
   const statusCase = async (status: number, message: string, expected: string) => {
     fake = await startFake((_req, res) => {

@@ -763,6 +763,24 @@ describe('the card tells the truth while the model is silent', () => {
     assert.ok(!client.includes('addStep(card, `log:${card.steps.children.length}`'), 'not by their position in the list');
     assert.ok(css().includes('.step[data-status="note"]'), 'a note is drawn without the tick styling');
   });
+
+  test('the heartbeat is one row that is rewritten, not a row per beat', () => {
+    const client = app();
+    assert.ok(client.includes('const HEARTBEAT_RE = /^Nothing from the model yet — /'), 'the engine\'s silence line is recognised');
+    assert.ok(
+      client.includes("addStep(card, 'heartbeat', { name: message, icon: 'info', status: 'note' });"),
+      'and it has a fixed key, so three minutes of silence is one line, not twelve',
+    );
+  });
+
+  test('the engine says when the model has gone quiet', () => {
+    // The server half of that: a model that is thinking streams nothing, and
+    // silence used to be the only thing the operator got for minutes.
+    const engine = read('server/engine/antigravity.ts');
+    assert.ok(engine.includes('heartbeatMs?: number;'), 'the interval is configurable for tests');
+    assert.ok(engine.includes('Nothing from the model yet — ${silent}s in.'), 'the line is emitted from the read loop');
+    assert.ok(engine.includes('clearInterval(beat);'), 'and the timer dies with the socket');
+  });
 });
 
 describe('a running task cannot hide from you', () => {

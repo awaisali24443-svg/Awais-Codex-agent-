@@ -1419,6 +1419,9 @@ async function savePlan(card, labels) {
 /* A mission step drawn as one node on the timeline. The node on the rail
    shows the step's status (spinner while running, check/dash/cross after);
    the body shows the name, a small timestamp, and an expandable detail. */
+/** The engine's line while the model is silent. One row, always overwritten. */
+const HEARTBEAT_RE = /^Nothing from the model yet — /;
+
 function addStep(card, key, { name, detail = '', icon = 'dot', done = false, status = null }) {
   let step = card.stepIndex.get(key);
   if (!step) {
@@ -1544,6 +1547,13 @@ function handleEvent(card, event, data) {
       }
       const waiting = card.stepIndex.get('rate-limit');
       if (waiting && data.level !== 'warn') setStepStatus(waiting, 'done');
+      // The engine's heartbeat while the model has said nothing. It is one row
+      // that is rewritten, not a row per beat: "still working, 45s" is a state,
+      // and forty-five rows in a timeline is not information either.
+      if (HEARTBEAT_RE.test(message)) {
+        addStep(card, 'heartbeat', { name: message, icon: 'info', status: 'note' });
+        break;
+      }
       // Keyed by the message, not by position: an engine that retries says the
       // same sentence every time, and five identical rows is not five pieces of
       // information. A warning is also not a result — it gets the `note`
