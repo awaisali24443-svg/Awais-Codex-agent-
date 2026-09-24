@@ -854,8 +854,9 @@ export class RunExecutor {
    * The standard (non-deep-research) engine path with Google reads. After
    * each pass, fenced read requests in the engine's answer are executed and
    * the results fed back in a follow-up pass — at most MAX_GOOGLE_READ_ROUNDS
-   * rounds, so the loop always terminates. Streaming buffers are shared
-   * across passes, so the token-budget watchdog keeps watching the total.
+   * rounds, so the loop always terminates. Streaming buffers are shared across
+   * passes, so a read round appends to the answer the operator already sees
+   * rather than starting a second one.
    */
   private async runWithGoogleReads(
     run: Run,

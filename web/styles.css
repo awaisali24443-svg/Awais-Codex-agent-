@@ -37,6 +37,14 @@ html, body {
   overflow-x: clip;
 }
 
+/* Engines older than Safari 16 / Chrome 90 do not know `clip`. They get
+   `hidden` on `html` only — there it propagates to the viewport, which leaves
+   `position: sticky` working. `hidden` on `body` would make body the scroll
+   container and freeze the composer mid-screen, so it is never set there. */
+@supports not (overflow: clip) {
+  html { overflow-x: hidden; }
+}
+
 body { display: flex; flex-direction: column; }
 .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 [hidden] { display: none !important; }
@@ -586,6 +594,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 
 /* ------------------------------------------------------- settings page --- */
+
+/* Which build the phone is running: the last line of Settings, quiet enough to
+   ignore and specific enough to settle an argument. */
+.build-line {
+  margin: var(--space-6) 0 0; padding-top: var(--space-4);
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--text-xs); color: var(--muted); text-align: center;
+  font-family: var(--mono); letter-spacing: .02em;
+}
 
 /* Settings used to be a collapsible section inside the drawer, which is not
    how a phone app works: keys, the WhatsApp link and the account connections

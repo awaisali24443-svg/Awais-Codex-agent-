@@ -2,8 +2,10 @@
  * Crash-resume on boot. A run left 'running' (or 'queued') by a restart used
  * to be failed outright and its partial work lost. Now:
  *
- * - 'paused' runs are left alone — pausing was the operator's (or the token
- *   budget's) decision, and resuming it unasked would be wrong.
+ * - 'paused' runs are left alone. Nothing pauses a run automatically any more
+ *   — the per-task token cap that used to is gone — so a 'paused' row is either
+ *   an operator pause or a leftover from before that change, and resuming it
+ *   unasked would be wrong either way.
  * - The newest orphan with finished checkpoints resumes automatically, from
  *   its first unfinished step. One at a time: the rest wait for the operator.
  * - Every other orphan is failed as 'interrupted' — resumable by tap, not

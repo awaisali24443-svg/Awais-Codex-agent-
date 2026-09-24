@@ -66,6 +66,17 @@ describe('the composer fits a phone', () => {
       'body clips horizontal overflow (clip, not hidden: hidden breaks the sticky composer)',
     );
   });
+
+  test('the older-engine fallback does not break the sticky composer', () => {
+    // `overflow-x: hidden` on body turns it into a scroll container and freezes
+    // `position: sticky`; on html it propagates to the viewport and is safe. So
+    // the fallback must be scoped to engines without `clip`, and must name html.
+    const cssText = css();
+    const scoped = cssText.slice(cssText.indexOf('@supports not (overflow: clip)'));
+    const rule = scoped.slice(0, scoped.indexOf('}'));
+    assert.ok(rule.includes('html { overflow-x: hidden'), 'the fallback is html-scoped');
+    assert.ok(!rule.includes('body'), 'and never touches body');
+  });
 });
 
 describe('settings is a page, not a drawer section', () => {

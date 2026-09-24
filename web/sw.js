@@ -30,7 +30,11 @@
  * @property {(response: Promise<Response> | Response) => void} [respondWith]
  */
 
-const VERSION = 'codex-v3';
+/* Bumped whenever the shell changes: `activate` deletes every other cache, so
+   an installed phone cannot keep serving the previous UI from the offline copy.
+   The fetch handler is network-first regardless; this is the belt to its
+   braces. */
+const VERSION = 'wais-v4';
 const SHELL = [
   '/',
   '/index.html',

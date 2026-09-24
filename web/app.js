@@ -2142,7 +2142,38 @@ async function loadSettings() {
     renderSettings();
     renderLinkedInCard();
     renderGoogleCard();
+    void renderBuildLine();
   } catch { /* the app works without the panel */ }
+}
+
+/**
+ * The last row of Settings: which build this page is running.
+ *
+ * The operator spent an afternoon reporting bugs that had been fixed and
+ * deployed hours earlier, because the phone was still executing the previous
+ * build — and there was nothing on screen that could have told either of us
+ * that. Now there is: the commit the server was built from, straight out of
+ * /api/status. Rendered last and beside the app's own name, where a version
+ * belongs.
+ */
+async function renderBuildLine() {
+  document.getElementById('build-line')?.remove();
+  let status;
+  try {
+    status = await api('/api/status');
+  } catch {
+    return;
+  }
+  const line = document.createElement('p');
+  line.className = 'build-line';
+  line.id = 'build-line';
+  const commit = typeof status.commit === 'string' && status.commit !== 'unknown'
+    ? status.commit
+    : null;
+  line.textContent = commit
+    ? `WAIS · build ${commit}`
+    : 'WAIS · development build';
+  el.settingsBody.append(line);
 }
 
 /* The LinkedIn connection card in Settings. Plain language, because the

@@ -371,9 +371,9 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
   /**
    * Resume a run: same run row, continued from the first unfinished step.
    *
-   * Qualifies: a run 'paused' by its token budget, or 'failed' with
-   * error_type 'interrupted' (the server restarted mid-mission). Anything
-   * else is a retry, not a resume. A resume does not spend a new daily run —
+   * Qualifies: a run 'paused' by the operator, or 'failed' with error_type
+   * 'interrupted' (the server restarted mid-task). Anything else is a retry,
+   * not a resume. A resume does not spend a new daily run —
    * the mission was already counted when it first started — but it still
    * obeys one-at-a-time.
    */

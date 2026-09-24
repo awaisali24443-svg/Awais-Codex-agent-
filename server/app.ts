@@ -36,6 +36,21 @@ import {
 } from './auth.js';
 import path from 'node:path';
 
+/**
+ * Which build this process is.
+ *
+ * Render exports `RENDER_GIT_COMMIT` on every deploy, so the answer is free in
+ * production and the literal "unknown" everywhere else. It exists because of a
+ * real afternoon: the operator reported six bugs that had already been fixed and
+ * deployed, while his phone was still running the previous hour's JavaScript.
+ * With the commit in /healthz and on the Settings page, "am I looking at the
+ * fix?" is a question with an answer.
+ */
+function buildCommit(): string {
+  const raw = (process.env.RENDER_GIT_COMMIT ?? process.env.GIT_COMMIT ?? '').trim();
+  return raw ? raw.slice(0, 7) : 'unknown';
+}
+
 export interface AppDeps {
   config: AppConfig;
   db: Db;
@@ -148,6 +163,7 @@ export function createApp(deps: AppDeps): Express {
       ok: true,
       service: 'awais-codex',
       version: 2,
+      commit: buildCommit(),
       startedAt: new Date(status.startedAt).toISOString(),
       uptimeSeconds: Math.round((Date.now() - status.startedAt) / 1000),
     });
@@ -265,6 +281,7 @@ export function createApp(deps: AppDeps): Express {
     res.json({
       service: 'awais-codex',
       version: 2,
+      commit: buildCommit(),
       startedAt: new Date(status.startedAt).toISOString(),
       migrationsApplied: status.migrationsApplied,
       poller: pollerHealth(),
@@ -320,6 +337,12 @@ export function createApp(deps: AppDeps): Express {
     app.use(
       express.static(webRoot, {
         index: false,
+        // Images (the home-screen icons) keep the long cache; the *shell* — the
+        // HTML, the client, the stylesheet — revalidates on every load. An hour
+        // of `max-age` on app.js means a deploy reaches a phone an hour late,
+        // and the operator spends that hour reporting bugs that are already
+        // fixed. Revalidation costs a 304 and removes the whole class of
+        // confusion. `express.static` still sends its ETag.
         maxAge: '1h',
         setHeaders: (res, filePath) => {
           // The service worker must never be cached, or an update can be
@@ -334,6 +357,10 @@ export function createApp(deps: AppDeps): Express {
           if (filePath.endsWith('manifest.json')) {
             res.setHeader('Content-Type', 'application/manifest+json');
             res.setHeader('Cache-Control', 'no-cache');
+            return;
+          }
+          if (/\.(?:html|js|css|json|webmanifest)$/i.test(filePath)) {
+            res.setHeader('Cache-Control', 'no-cache');
           }
         },
       }),
@@ -345,6 +372,8 @@ export function createApp(deps: AppDeps): Express {
       if (req.path.startsWith('/api') || req.path === '/healthz' || req.path === '/readyz') {
         return next();
       }
+      // The shell, by another name: same revalidation rule as the file above.
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(webRoot, 'index.html'));
     });
   }
