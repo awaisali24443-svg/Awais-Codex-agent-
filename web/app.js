@@ -3680,6 +3680,22 @@ const SECRET_STATE = {
   }),
 };
 
+/**
+ * Which shelf a connection sits on.
+ *
+ * A directory does not hand you four hundred cards in one column; that is what
+ * the categories are for. Eight keys is not four hundred, but the same is true
+ * of eight — "what is this for?" is answered by the heading before it is
+ * answered by the label. Anything the server sends that is not named here still
+ * renders, under "More connections", so a new secret cannot vanish silently.
+ */
+const SECRET_GROUPS = [
+  { title: 'The engine', names: ['gemini_api_key'] },
+  { title: 'Your phone', names: ['whatsapp_token', 'whatsapp_to'] },
+  { title: 'Code and files', names: ['github_pat'] },
+  { title: 'Accounts you link', names: ['linkedin_client_id', 'linkedin_client_secret', 'google_client_id', 'google_client_secret'] },
+];
+
 /** The delegated settings listener is bound once per page load (see below). */
 let settingsClickBound = false;
 
@@ -3997,7 +4013,31 @@ function renderSettings() {
       </div>
     </article>`;
   };
-  const connections = data.secrets.map(connectionFor);
+  const byName = new Map(data.secrets.map((secret) => [secret.name, secret]));
+  const grouped = new Set(SECRET_GROUPS.flatMap((group) => group.names));
+  const groups = [
+    ...SECRET_GROUPS.map((group) => ({
+      title: group.title,
+      secrets: group.names.map((name) => byName.get(name)).filter(Boolean),
+    })),
+    // Whatever the server knows about and this list does not: still shown.
+    { title: 'More connections', secrets: data.secrets.filter((secret) => !grouped.has(secret.name)) },
+  ];
+  const connectionRows = groups.map((group) => ({
+    title: group.title,
+    rows: group.secrets.map(connectionFor).filter(Boolean),
+    set: group.secrets.filter((secret) => secret.source === 'stored' || secret.source === 'environment').length,
+  }));
+  const visibleConnections = connectionRows.flatMap((group) => group.rows);
+  const connectionGroups = connectionRows
+    .filter((group) => group.rows.length)
+    .map(
+      (group) => `<div class="settings-group">
+        <h3 class="settings-group-heading">${escapeHtml(group.title)} · ${group.set} of ${group.rows.length} set</h3>
+        <div class="settings-list">${group.rows.join('')}</div>
+      </div>`,
+    )
+    .join('');
 
   const whatsapp = data.whatsapp;
   const whatsappPill = !whatsapp
@@ -4021,7 +4061,6 @@ function renderSettings() {
 
   const keysSet = data.secrets.filter((s) => s.source === 'stored' || s.source === 'environment').length;
   const visibleSettings = settingRows.filter(Boolean);
-  const visibleConnections = connections.filter(Boolean);
 
   const emptyNote = '<p class="settings-empty">Nothing matches that.</p>';
 
@@ -4034,10 +4073,7 @@ function renderSettings() {
         )
       : query ? '' : '') +
     (visibleConnections.length
-      ? section(
-          `Connections · ${keysSet} of ${data.secrets.length} set`,
-          `<div class="settings-list">${visibleConnections.join('')}</div>` + encryptionNote,
-        )
+      ? section(`Connections · ${keysSet} of ${data.secrets.length} set`, connectionGroups + encryptionNote)
       : query ? '' : '') +
     (matches('whatsapp', 'phone', whatsappNote) && !query
       ? section('The phone channel', `<div class="settings-list"><div class="setting-row">${whatsappPill ? `<div class="connection-head"><span class="connection-name">WhatsApp</span><span class="pill ${whatsappPill.className}">${whatsappPill.short}</span></div>` : ''}${whatsappNote}</div></div>`)

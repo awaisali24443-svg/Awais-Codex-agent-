@@ -11,9 +11,10 @@ Two requests came in together:
 One of them was a real bug with a real root, and this file records it. The other
 is a design change, and this file records the rules it was built on.
 
-Build: `068580c` is the tip (live). Root-cause fix `5344818`; Settings
-`b82342f`; the focus-ring repair `6ba9cba` and `068580c`. Suite at the tip: 216
-suites, 884 passing, 0 failing; lint clean. Every claim below has a test that fails if it comes back.
+Build: `05c4945` is the tip. Root-cause fix `5344818`; Settings `b82342f`; the
+focus-ring repair `6ba9cba`; the older-shell guard and the render/end-to-end
+verification `93f1dd8`, `05c4945`. Suite at the tip: 219 suites, 895 passing, 0
+failing; lint clean. Every claim below has a test that fails if it comes back.
 
 ---
 
@@ -145,6 +146,33 @@ stylesheet.
   edge, so recents stop reading as a wall of identical rows.
 
 ---
+
+## 3b. Two things verification turned up, and one it added
+
+**The release could have broken the phones one version behind.** The Settings
+filter box is part of the shell, and its wiring ran unguarded at boot:
+`el.settingsSearch.addEventListener(...)`. `$()` returns null for an element
+that is not in the document, and the shell a phone is actually running can be
+the previous one for a load — the service worker is network-first, but when the
+free-tier server is cold a navigation falls back to the cached page after six
+seconds and the real one arrives afterwards. On that phone the line threw, and
+the throw took every listener bound after it with it: the app looked untouched
+because it had stopped booting. The binding is now guarded, and the service
+worker's cache name is bumped to `wais-v5` — the documented rule for a shell
+change. `shell_cache.test.ts` pins both.
+
+**The connections are shelved.** "The engine", "Your phone", "Code and files",
+"Accounts you link" — each with its own count, and a "More connections" shelf
+for any key the map has not heard of, so a new secret cannot silently vanish.
+
+**And the page is now tested by running it.** `server/settings_render.test.ts`
+executes the real render functions against a real `/api/settings` payload in a
+vm with a four-member DOM stub, and asserts the HTML has no holes, the three
+honest states appear, the primary action is worded correctly, and the filter
+narrows the page. The heavy-user walk gained an end-to-end measurement of the
+fix in section 1: a complex task accepted in under 400ms while still
+'planning', findable at `/api/runs/active`, streaming `run.plan_started` and its
+milestones before `run.plan_ready`.
 
 ## 4. Still open, and said plainly
 

@@ -919,6 +919,19 @@ describe('Settings is a directory, not a form', () => {
     assert.ok(client.includes('class="connection-detail"'), 'with the fingerprint, never the key');
   });
 
+  test('connections are shelved, and nothing can fall off the shelf', () => {
+    const client = app();
+    assert.ok(client.includes('const SECRET_GROUPS = ['), 'there is a category map');
+    assert.ok(client.includes("{ title: 'The engine', names: ['gemini_api_key'] }"), 'the engine');
+    assert.ok(client.includes("{ title: 'Your phone', names: ['whatsapp_token', 'whatsapp_to'] }"), 'the phone channel');
+    assert.ok(client.includes("{ title: 'Code and files', names: ['github_pat'] }"), 'the code host');
+    assert.ok(client.includes("{ title: 'Accounts you link'"), 'and the accounts people link');
+    // A secret added on the server must still render, or it would be invisible.
+    assert.ok(client.includes("{ title: 'More connections', secrets: data.secrets.filter((secret) => !grouped.has(secret.name)) }"),
+      'anything unnamed by the map still has a shelf');
+    assert.ok(client.includes('class="settings-group-heading"'), 'and each shelf is labelled');
+  });
+
   test('each item offers one primary action', () => {
     const client = app();
     assert.ok(client.includes('<button class="primary" data-act="set"'), 'the one thing to do is the loud one');

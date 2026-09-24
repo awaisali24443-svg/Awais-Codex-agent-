@@ -91,6 +91,16 @@ function payload() {
         updatedAt: twoHoursAgo,
       },
       {
+        name: 'whatsapp_token',
+        label: 'WhatsApp Agent Platform token',
+        description: 'Lets the poller read and answer messages from your phone.',
+        envVar: 'WHATSAPP_TOKEN',
+        usedBy: 'server/whatsapp/poller.ts',
+        source: 'missing',
+        fingerprint: null,
+        updatedAt: null,
+      },
+      {
         name: 'github_pat',
         label: 'GitHub personal access token',
         description: 'Connects the GitHub integration.',
@@ -157,7 +167,7 @@ describe('the Settings page renders what it promises', () => {
     assert.ok(!/undefined|NaN|\[object Object\]/.test(html), `a hole in the page: ${html.match(/.{0,40}(undefined|NaN|\[object Object\]).{0,40}/)?.[0]}`);
     for (const text of [
       'How it runs · 3',
-      'Connections · 1 of 3 set',
+      'Connections · 1 of 4 set',
       'Everything on this page applies the moment you change it',
       'About this build',
     ]) {
@@ -189,6 +199,21 @@ describe('the Settings page renders what it promises', () => {
     assert.ok(!html.includes('data-act="test" data-name="github_pat"'), 'and not offered for a key that is not there');
     assert.ok(html.includes('data-act="remove" data-name="gemini_api_key"'), 'removing is offered only for a stored key');
     assert.ok(!html.includes('data-act="remove" data-name="google_client_secret"'), 'including one that cannot be decrypted');
+  });
+
+  test('the connections are shelved by what they are for', () => {
+    // A directory is grouped: the heading answers "what is this for?" before the
+    // label does, and a key the list has never heard of still has a home.
+    const html = render();
+    assert.ok(html.includes('class="settings-group-heading"'), 'the shelves are rendered');
+    assert.ok(html.includes('The engine · 1 of 1 set'), 'the engine key is shelved with its count');
+    assert.ok(html.includes('Your phone · 0 of 1 set'), 'the phone keys are together');
+    assert.ok(html.includes('Code and files · 0 of 1 set'), 'and the code host has its own');
+    assert.ok(html.includes('Accounts you link · 0 of 1 set'), 'as do the linked accounts');
+
+    const github = render('github');
+    assert.ok(github.includes('Code and files'), 'a filtered page keeps the shelf it is filtering to');
+    assert.ok(!github.includes('The engine ·'), 'and drops the shelves that have nothing left on them');
   });
 
   test('the phone channel says who it is connected as', () => {
