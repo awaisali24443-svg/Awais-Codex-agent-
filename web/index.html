@@ -134,6 +134,14 @@ try {
     <div class="thread" id="thread"></div>
   </main>
 
+  <!-- Reading while it works. The stream stops following the bottom the moment
+       the operator scrolls up, and this is how they get back: it appears above
+       the composer, where the eye already is, and says what is happening. -->
+  <button type="button" class="jump" id="jump-latest" hidden>
+    <span class="jump-spin" aria-hidden="true"></span>
+    <span id="jump-label">Jump to latest</span>
+  </button>
+
   <!-- One input card: the field, then a single row of controls. The mode is one
        compact control rather than a row of labelled pills — three always-visible
        toggles is what makes a composer read like a settings screen. -->

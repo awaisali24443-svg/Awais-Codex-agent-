@@ -484,6 +484,27 @@ describe('a kept file can actually be kept', () => {
   });
 });
 
+describe('reading while it works', () => {
+  test('the stream stops following the bottom when the operator scrolls up', () => {
+    // Auto-scrolling through a paragraph somebody is reading is the single most
+    // common way a chat UI becomes unusable.
+    const client = app();
+    assert.ok(client.includes('pinned = distance < 90;'), 'a scroll away from the bottom unpins the stream');
+    assert.ok(client.includes('if (!force && !pinned) return;'), 'and nothing drags it back while they read');
+  });
+
+  test('there is one tap back to the bottom, and it says what is happening', () => {
+    const client = app();
+    assert.ok(client.includes('function updateJumpPill()'), 'the pill has one owner');
+    assert.ok(client.includes("el.jumpLabel.textContent = done ? 'New answer — jump to it' : 'Working… jump to latest'"), 'it reports the truth');
+    assert.ok(client.includes('function jumpToLatest()'), 'and one tap returns');
+    assert.ok(client.includes("el.stream.scrollTo({ top: el.stream.scrollHeight, behavior: 'smooth' })"), 'smoothly, to the end');
+    assert.ok(client.includes('state.freshAnswer = !pinned;'), 'a finish while reading up there is news');
+    assert.ok(html().includes('id="jump-latest"'), 'and the pill is in the markup');
+    assert.ok(css().includes('.jump {'), 'with a style of its own');
+  });
+});
+
 describe('the decision points are the loudest thing on the screen', () => {
   test('a waiting plan says what it is and what happens next', () => {
     // Approving is the only irreversible tap in the app, and a plan waiting for

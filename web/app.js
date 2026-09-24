@@ -63,6 +63,8 @@ const el = {
   scrim: $('scrim'),
   convos: $('convos'),
   drawerSearch: $('drawer-search'),
+  jump: $('jump-latest'),
+  jumpLabel: $('jump-label'),
   budget: $('budget'),
   memory: $('memory'),
   memoryTitle: $('memory-title'),
@@ -115,6 +117,10 @@ const state = {
   // is in flight, and the operator is free to open another chat to read
   // something while it works — knowing whose run this is keeps the two linked.
   runConversationId: null,
+  // Set when a run finishes while the operator is reading further up, cleared
+  // when they come back down. It is what turns the jump pill into news
+  // ("New answer") instead of a position ("Jump to latest").
+  freshAnswer: false,
   // 'running' | 'awaiting_plan' | 'finished' — the client's own view of the run
   // the header is reporting on.
   runStatus: null,
@@ -1421,7 +1427,10 @@ function finishCard(card, outcome, data = {}) {
 
   foldWork(card);
   renderSources(card);
+  // If they are reading further up, this is news rather than a position.
+  state.freshAnswer = !pinned;
   setRunning(false);
+  updateJumpPill();
   loadBudget();
   loadConversations();
   loadArtifacts(card);
@@ -2389,6 +2398,7 @@ function setRunning(on) {
   // corner, where the thumb already is, rather than only in the top bar.
   el.stop.hidden = !on;
   updateTrailingAction();
+  updateJumpPill();
 }
 
 /* A runaway task blocks every new one (the server answers 409 while one is
@@ -3613,6 +3623,7 @@ el.panelClose.addEventListener('click', closeOutputs);
 el.panelBackdrop.addEventListener('click', closeOutputs);
 
 function newTask() {
+  state.freshAnswer = false;
   closeDrawer();
   closeStream();
   state.conversationId = null;
@@ -3642,7 +3653,37 @@ let pinned = true;
 el.stream.addEventListener('scroll', () => {
   const distance = el.stream.scrollHeight - el.stream.scrollTop - el.stream.clientHeight;
   pinned = distance < 90;
+  updateJumpPill();
 }, { passive: true });
+
+/**
+ * The way back to the bottom.
+ *
+ * Following the stream stops the moment the operator scrolls up — otherwise
+ * reading a paragraph while a task works is impossible. That made the bottom
+ * unreachable except by hand-scrolling, which on a phone is a long drag. This
+ * pill appears where the eye already is, says what is happening up there, and
+ * returns in one tap.
+ */
+function updateJumpPill() {
+  const pill = el.jump;
+  if (!pill) return;
+  const away = !pinned && (state.running || state.freshAnswer);
+  pill.hidden = !away;
+  if (!away) return;
+  const done = !state.running;
+  pill.classList.toggle('done', done);
+  el.jumpLabel.textContent = done ? 'New answer — jump to it' : 'Working… jump to latest';
+}
+
+function jumpToLatest() {
+  pinned = true;
+  state.freshAnswer = false;
+  el.jump.hidden = true;
+  el.stream.scrollTo({ top: el.stream.scrollHeight, behavior: 'smooth' });
+}
+
+el.jump?.addEventListener('click', jumpToLatest);
 
 function scrollToEnd(force = false) {
   if (!force && !pinned) return;
