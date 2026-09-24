@@ -899,7 +899,11 @@ function updatePlan(card, data) {
     // Insert in numeric order.
     const keys = [...card.planIndex.keys()].sort((a, b) => a - b);
     const next = keys[keys.indexOf(index) + 1];
-    card.plan.insertBefore(row, next !== undefined ? card.planIndex.get(next) : null);
+    // After the header, before the next row — and before the Approve / Edit
+    // buttons when this is the last row, so the actions stay at the bottom.
+    const actions = card.plan.querySelector('.plan-actions');
+    const anchor = next !== undefined ? card.planIndex.get(next) : actions;
+    card.plan.insertBefore(row, anchor ?? null);
   }
 
   row.querySelector('.plan-num').textContent = `${index}/${total}`;
@@ -920,19 +924,36 @@ function renderPlanPreview(card, plan) {
   card.plan.hidden = false;
   card.planIndex.clear();
   card.plan.innerHTML = '';
+  card.plan.classList.add('plan-card');
+
+  // The one moment in the app where doing nothing is the safe option, so the
+  // card says what it is and what is about to happen: a task that is waiting
+  // for a tap looks identical to a task that is working, and only one of those
+  // has an Approve button on it.
+  const head = document.createElement('div');
+  head.className = 'plan-head';
+  head.innerHTML = iconFor('list') +
+    '<span class="plan-title"></span><span class="plan-note"></span>';
+  head.querySelector('.plan-title').textContent = steps.length === 1 ? 'One step' : `The plan · ${steps.length} steps`;
+  head.querySelector('.plan-note').textContent = 'Nothing has run yet — approve to start, or edit it first.';
+  card.plan.append(head);
+
   for (const step of steps) {
     updatePlan(card, { index: step.index, total: step.total, label: step.label, done: false });
   }
+
   const actions = document.createElement('div');
   actions.className = 'plan-actions';
   const approve = document.createElement('button');
   approve.type = 'button';
-  approve.className = 'msg-btn primary';
-  approve.textContent = '✓ Approve & start';
+  approve.className = 'msg-btn primary plan-approve';
+  approve.innerHTML = iconFor('play') + '<span></span>';
+  approve.querySelector('span').textContent = 'Approve & start';
   const edit = document.createElement('button');
   edit.type = 'button';
   edit.className = 'msg-btn';
-  edit.textContent = '✎ Edit plan';
+  edit.innerHTML = iconFor('pencil') + '<span></span>';
+  edit.querySelector('span').textContent = 'Edit';
   actions.append(approve, edit);
   card.plan.append(actions);
   approve.addEventListener('click', () => approvePlan(card, approve));
@@ -3129,6 +3150,14 @@ async function renderGoogleCard() {
   });
 }
 
+/** A titled block on the settings page. */
+function section(title, body) {
+  return `<section class="settings-section">
+    <h2 class="settings-heading">${escapeHtml(title)}</h2>
+    ${body}
+  </section>`;
+}
+
 function renderSettings() {
   const data = state.settings;
   if (!data) return;
@@ -3190,7 +3219,15 @@ function renderSettings() {
     ? `<p class="setting-note">Keys are encrypted with MASTER_KEY before they are stored, and are never sent back to this screen — only a short fingerprint is.</p>`
     : `<p class="setting-note bad">${escapeHtml(data.encryption.hint || 'Storing secrets is unavailable.')}</p>`;
 
-  el.settingsBody.innerHTML = `${rows.join('')}<p class="setting-note">Changes apply immediately — no redeploy.</p>${secrets.join('')}${whatsappNote}${encryptionNote}`;
+  // The page used to be one undifferentiated list: three settings, then keys,
+  // then the phone channel, with a note in between. Grouping it costs nothing
+  // and answers the only question a settings page is ever asked — "where is the
+  // thing I came here for".
+  el.settingsBody.innerHTML =
+    section('How it runs', `<div class="settings-list">${rows.join('')}</div>` +
+      '<p class="setting-note">Changes apply immediately — no redeploy.</p>') +
+    section('Keys', `<div class="settings-list">${secrets.join('')}</div>` + encryptionNote) +
+    section('The phone channel', whatsappNote);
 
   for (const input of el.settingsBody.querySelectorAll('.setting-input')) {
     input.addEventListener('change', () => saveSetting(input));

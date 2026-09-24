@@ -128,6 +128,18 @@ describe('share data redaction', () => {
     const html = renderSharePage(await buildShareData(db, (await getRun(db, run.id)) as Run));
     assert.ok(!/mission/i.test(html), 'the replay page must say task');
     assert.ok(html.includes('<h1>Task replay</h1>'), 'and say it where it counts');
+
+    // The replay wears the app's own clothes — warm paper, the mark, cards —
+    // and still makes no network request of its own: someone opens a shared
+    // link on a metered phone, so the page has to be complete as served.
+    assert.ok(html.includes('--paper:#f5f3ef'), 'the app\u2019s own palette');
+    assert.ok(html.includes('prefers-color-scheme: dark'), 'and it follows the reader\u2019s theme');
+    assert.ok(html.includes('class="mark"'), 'the mark is drawn inline');
+    // The card rules are in the page's own stylesheet; whether this particular
+    // run has steps to put in one depends on the run.
+    assert.ok(html.includes('.card{'), 'and cards are part of its own styles');
+    assert.ok(!/<link[^>]+href="http/.test(html), 'no external stylesheet');
+    assert.ok(!/<script/.test(html), 'and no script at all');
   });
 });
 

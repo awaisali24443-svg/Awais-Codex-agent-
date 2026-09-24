@@ -1255,3 +1255,37 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .badge-art .badge-spark { opacity: 0; animation: spark 520ms var(--ease-out) 620ms forwards; }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes spark { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
+
+/* --------------------------------------------------------- settings page ---
+   Grouped into blocks with headings, the same card language as everywhere else
+   — a settings page is a list of questions, not a list of keys. */
+
+.settings-section { margin-bottom: var(--space-6); }
+.settings-heading {
+  margin: 0 0 var(--space-3); font-size: var(--text-xs);
+  letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
+  font-family: var(--sans); font-weight: var(--weight-medium);
+}
+.settings-list {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); overflow: hidden;
+}
+.settings-list > * + * { border-top: 1px solid var(--line-soft); }
+.setting-row { padding: var(--space-3) var(--space-3); }
+.setting-note { margin: var(--space-3) 2px 0; }
+
+/* ------------------------------------------------------------ the plan ---
+   The one card that is a decision rather than a report. */
+
+.plan-card {
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  padding: 10px 12px 12px;
+}
+.plan-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; padding-bottom: 8px; }
+.plan-head svg { width: 15px; height: 15px; color: var(--accent); align-self: center; }
+.plan-head .plan-title { font-size: var(--text-md); font-weight: var(--weight-medium); color: var(--ink); }
+.plan-head .plan-note { font-size: var(--text-xs); color: var(--muted); }
+.plan-card .plan-actions { padding-top: var(--space-3); }
+.plan-approve { padding: 9px 16px; font-size: var(--text-sm); }

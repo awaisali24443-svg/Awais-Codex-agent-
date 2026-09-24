@@ -484,6 +484,45 @@ describe('a kept file can actually be kept', () => {
   });
 });
 
+describe('the decision points are the loudest thing on the screen', () => {
+  test('a waiting plan says what it is and what happens next', () => {
+    // Approving is the only irreversible tap in the app, and a plan waiting for
+    // one looked exactly like a plan being worked on.
+    const client = app();
+    assert.ok(client.includes("card.plan.classList.add('plan-card')"), 'the plan is its own card');
+    assert.ok(client.includes('plan-head'), 'with a heading');
+    assert.ok(client.includes('Nothing has run yet'), 'that says nothing has started');
+    assert.ok(client.includes('`The plan · ${steps.length} steps`'), 'and how big the plan is');
+    assert.ok(client.includes("approve.className = 'msg-btn primary plan-approve'"), 'approve is the primary action');
+    assert.ok(client.includes("edit.querySelector('span').textContent = 'Edit'"), 'with edit beside it, not equal to it');
+  });
+
+  test('plan rows stay in order, above the buttons', () => {
+    // The rows are inserted by number, and the actions moved to the bottom —
+    // a step appended after Approve would read as a footnote to the button.
+    const client = app();
+    assert.ok(client.includes("const actions = card.plan.querySelector('.plan-actions');"), 'the anchor is found');
+    assert.ok(client.includes('const anchor = next !== undefined ? card.planIndex.get(next) : actions;'), 'and rows go before it');
+  });
+
+  test('settings is grouped by question, not listed by key', () => {
+    const client = app();
+    assert.ok(client.includes('function section(title, body)'), 'there are sections');
+    assert.ok(client.includes("section('How it runs'"), 'how it runs');
+    assert.ok(client.includes("section('Keys'"), 'the keys');
+    assert.ok(client.includes("section('The phone channel'"), 'and the phone channel');
+    assert.ok(css().includes('.settings-heading'), 'with a heading style of its own');
+  });
+
+  test('a shared replay looks like the app it came from', () => {
+    const share = read('server/share.ts');
+    assert.ok(share.includes('--paper:#f5f3ef'), 'the same palette');
+    assert.ok(share.includes('prefers-color-scheme: dark'), 'that follows the reader\u2019s theme');
+    assert.ok(share.includes('class="mark"'), 'and the same mark');
+    assert.ok(!/<script/.test(share), 'with no script at all: a shared link is opened by strangers');
+  });
+});
+
 describe('a produced file is a card, and an answer shows its sources', () => {
   test('the card says what the file is, how big, and what can be done with it', () => {
     const client = app();
