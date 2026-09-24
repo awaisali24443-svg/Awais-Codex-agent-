@@ -34,7 +34,7 @@
    an installed phone cannot keep serving the previous UI from the offline copy.
    The fetch handler is network-first regardless; this is the belt to its
    braces. */
-const VERSION = 'wais-v4';
+const VERSION = 'wais-v5';
 
 /* How long a navigation waits for the network before the cached shell is shown.
    The service sleeps when idle on the free tier and a cold start takes the

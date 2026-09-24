@@ -4447,14 +4447,21 @@ function closeSettings({ fromHistory = false } = {}) {
   if (!fromHistory) history.back();
 }
 
-el.settingsSearch.addEventListener('input', () => {
-  state.settingsQuery = el.settingsSearch.value;
-  renderSettings();
-});
+// The filter box is part of the shipped shell, but a phone can still be running
+// the previous shell from the service worker's cache for one load after a
+// deploy. `$()` returns null for an element that is not in the document, and an
+// unguarded `.addEventListener` on null threw here — which took the rest of
+// boot with it, silently, on exactly the phones that were one version behind.
+if (el.settingsSearch) {
+  el.settingsSearch.addEventListener('input', () => {
+    state.settingsQuery = el.settingsSearch.value;
+    renderSettings();
+  });
+}
 // Leaving the page clears the filter, so coming back never hides rows behind a
 // search the operator has forgotten about.
 el.settingsOpen.addEventListener('click', () => {
-  el.settingsSearch.value = '';
+  if (el.settingsSearch) el.settingsSearch.value = '';
   state.settingsQuery = '';
 });
 el.settingsBack.addEventListener('click', () => closeSettings());

@@ -159,10 +159,27 @@ describe('the client shows it', () => {
     assert.ok(client.includes('build-line'), 'with an id, so it is replaced rather than stacked');
   });
 
+  test('a missing element cannot kill the boot', async () => {
+    // A phone can be one shell behind for a single load: the service worker's
+    // navigation timeout shows the cached page when the free-tier server is
+    // cold, and the real one arrives after. The cached shell does not have the
+    // Settings filter box — and an unguarded `el.settingsSearch.addEventListener`
+    // threw there, which took every listener bound after it with it. The app
+    // looked untouched because it was: it had stopped booting.
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const client = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf-8');
+    assert.ok(client.includes('if (el.settingsSearch) {'), 'the filter binding is guarded');
+    assert.ok(client.includes("if (el.settingsSearch) el.settingsSearch.value = '';"), 'and so is the clear');
+  });
+
   test('the service worker cache name was bumped for this shell', async () => {
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
     const sw = readFileSync(fileURLToPath(new URL('../web/sw.js', import.meta.url)), 'utf-8');
-    assert.match(sw, /const VERSION = 'wais-v4'/, 'a new cache name drops the old shell on activate');
+    // v5: the Settings page gained a filter box and a new layout, so the shell
+    // changed and the old cache has to go — `activate` deletes every cache that
+    // is not the current name.
+    assert.match(sw, /const VERSION = 'wais-v5'/, 'a new cache name drops the old shell on activate');
   });
 });
