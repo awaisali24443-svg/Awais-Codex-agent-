@@ -113,7 +113,10 @@ describe('the layers are in the right order', () => {
     // It is the app's only voice. Under the panel and the palette, it spoke to
     // nobody exactly when it mattered.
     const toast = zIndexOf('.toast');
-    for (const selector of ['.palette', '.palette-backdrop', '.panel', '.panel-backdrop', '.drawer', '.sheet', '.scrim']) {
+    // `.sheet` left this list with the mode modal it belonged to: the sheet
+    // became an inline tray in the composer, so there is no overlay left for
+    // the toast to hide under.
+    for (const selector of ['.palette', '.palette-backdrop', '.panel', '.panel-backdrop', '.drawer', '.scrim']) {
       assert.ok(toast > zIndexOf(selector), `the toast is above ${selector}`);
     }
   });

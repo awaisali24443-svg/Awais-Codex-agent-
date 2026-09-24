@@ -116,8 +116,7 @@ const el = {
   fileInput: $('file-input'),
   modeChip: $('btn-mode'),
   modeLabel: $('mode-label'),
-  modeSheet: $('mode-sheet'),
-  modeBackdrop: $('mode-backdrop'),
+  modeTray: $('composer-tray'),
   modeClose: $('mode-close'),
   modeStandard: $('mode-standard'),
   modeResearch: $('mode-research'),
@@ -3156,10 +3155,15 @@ function setupVoiceInput() {
 function updateTrailingAction() {
   const typing = el.prompt.value.trim().length > 0;
   const micUsable = !!el.mic && !el.mic.disabled;
-  if (el.mic) el.mic.hidden = !(micUsable && !typing && !state.running);
-  // Without a usable mic the slot always holds the send button: an empty slot
-  // beside an empty field is a dead end.
-  el.send.hidden = state.running || typing || !micUsable;
+  // The mic has the slot only while there is nothing to send and nothing
+  // running. The send button then takes it the moment there is something to
+  // send — including the moment the operator starts typing, which is the whole
+  // point of the button.
+  const micHasSlot = micUsable && !typing && !state.running;
+  if (el.mic) el.mic.hidden = !micHasSlot;
+  // The bug this line was: `|| typing` hid the send button exactly when it was
+  // needed, so a typed task had no visible way out of the field.
+  el.send.hidden = state.running || micHasSlot;
 }
 
 /** Per-answer Listen/Stop button for assistant messages. */
@@ -3249,48 +3253,45 @@ el.researchCheck.addEventListener('change', refreshResearchPicker);
 el.researchMinutes.addEventListener('change', refreshResearchPicker);
 el.researchCustom.addEventListener('input', refreshResearchPicker);
 
-/* ------------------------------------------------------- the mode sheet -- */
+/* ------------------------------------------------------ how hard it works -- */
 
-/* The sheet is the only modal in the composer, and the rules are the same ones
-   the outputs panel follows: the backdrop closes it, Escape closes it, and
-   whatever was focused when it opened gets focus back — otherwise a phone
-   keyboard reappears on a field the operator has already left. */
-let modeSheetOpener = null;
+/* The mode controls live in the composer and unfold in place.
+   They used to be a bottom sheet over the page, which is a modal for a
+   two-option choice — the kind of thing that arrives uninvited, traps focus,
+   and makes the operator dismiss something before they can type. Nothing here
+   opens on its own; the chip is the only way in, and the tray closes when a
+   mode is chosen or the chip is tapped again. */
 
-function openModeSheet() {
-  if (!el.modeSheet.hidden) return;
-  modeSheetOpener = document.activeElement;
-  el.modeSheet.hidden = false;
-  el.modeSheet.setAttribute('aria-hidden', 'false');
-  el.modeBackdrop.hidden = false;
+function openModeTray() {
+  if (!el.modeTray.hidden) return;
+  el.modeTray.hidden = false;
   el.modeChip.setAttribute('aria-expanded', 'true');
-  el.modeClose.focus();
 }
 
-function closeModeSheet() {
-  if (el.modeSheet.hidden) return;
-  el.modeSheet.hidden = true;
-  el.modeSheet.setAttribute('aria-hidden', 'true');
-  el.modeBackdrop.hidden = true;
+function closeModeTray() {
+  if (el.modeTray.hidden) return;
+  el.modeTray.hidden = true;
   el.modeChip.setAttribute('aria-expanded', 'false');
-  if (modeSheetOpener instanceof HTMLElement) modeSheetOpener.focus();
-  modeSheetOpener = null;
 }
 
-el.modeChip.addEventListener('click', openModeSheet);
-el.modeClose.addEventListener('click', closeModeSheet);
-el.modeBackdrop.addEventListener('click', closeModeSheet);
+function toggleModeTray() {
+  if (el.modeTray.hidden) openModeTray();
+  else closeModeTray();
+}
+
+el.modeChip.addEventListener('click', toggleModeTray);
+el.modeClose.addEventListener('click', closeModeTray);
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !el.modeSheet.hidden) closeModeSheet();
+  if (event.key === 'Escape' && !el.modeTray.hidden) closeModeTray();
 });
 
-/* Choosing a mode closes the sheet on the spot: the choice is the whole point
-   of the sheet, so making the operator dismiss it afterwards is a second tap
-   for nothing. */
+/* Standard is a complete choice, so it folds the tray away. Deep research is
+   not — it asks for a budget — so the tray stays open until the budget is set
+   or the chip is tapped again. */
 el.modeStandard.addEventListener('click', () => {
   el.researchCheck.checked = false;
   refreshResearchPicker();
-  closeModeSheet();
+  closeModeTray();
 });
 el.modeResearch.addEventListener('click', () => {
   el.researchCheck.checked = true;
@@ -3843,6 +3844,9 @@ function renderSettings() {
       : `<input class="setting-input" data-setting="${escapeHtml(setting.key)}"
         type="${typeof setting.value === 'number' ? 'number' : 'text'}"
         value="${escapeHtml(String(setting.value))}" />`;
+    // The label is the question, the note is where the answer comes from, and
+    // the control is a whole row of its own on a phone. Side by side, an input
+    // beside a long label is a two-line label, a clipped field, or both.
     return `
     <label class="setting-row">
       <span class="setting-label">
@@ -3862,9 +3866,9 @@ function renderSettings() {
           <span class="secret-state ${state_.className}">${escapeHtml(state_.text)}</span>
         </div>
         <div class="secret-actions">
-          <button class="primary" data-act="set" data-name="${escapeHtml(secret.name)}">Replace</button>
+          <button class="primary" data-act="set" data-name="${escapeHtml(secret.name)}">${secret.source === 'stored' ? 'Replace key' : 'Add key'}</button>
           ${secret.name === 'gemini_api_key'
-            ? `<button data-act="test" data-name="${escapeHtml(secret.name)}">Test</button>`
+            ? `<button data-act="test" data-name="${escapeHtml(secret.name)}">Test it</button>`
             : ''}
           ${secret.source === 'stored'
             ? `<button class="danger" data-act="remove" data-name="${escapeHtml(secret.name)}">Remove</button>`
@@ -3895,10 +3899,10 @@ function renderSettings() {
   // and answers the only question a settings page is ever asked — "where is the
   // thing I came here for".
   el.settingsBody.innerHTML =
-    section('How it runs', `<div class="settings-list">${rows.join('')}</div>` +
-      '<p class="setting-note">Changes apply immediately — no redeploy.</p>') +
+    '<p class="settings-lead">Everything on this page applies the moment you change it. Nothing here needs a restart.</p>' +
+    section('How it runs', `<div class="settings-list">${rows.join('')}</div>`) +
     section('Keys', `<div class="settings-list">${secrets.join('')}</div>` + encryptionNote) +
-    section('The phone channel', whatsappNote);
+    section('The phone channel', `<div class="settings-list">${whatsappNote}</div>`);
 
   for (const input of el.settingsBody.querySelectorAll('.setting-input')) {
     input.addEventListener('change', () => saveSetting(input));
@@ -4082,7 +4086,13 @@ function renderScheduled() {
       </span>
     </div>`);
 
+  // The list first, the create-form behind a tap. Opening "Scheduled" used to
+  // land the operator in six empty inputs — a form where the tasks should be —
+  // which is most of why the drawer read as broken.
   el.schedulesBody.innerHTML = `
+    ${rows.join('') || '<p class="memory-note">Nothing scheduled yet.</p>'}
+    <button type="button" class="cta subtle" id="sch-new-toggle">New schedule</button>
+    <div id="sch-form-wrap" hidden>
     <form id="sch-new" class="setting-note">
       <input class="setting-input" id="sch-name" maxlength="80" placeholder="Name — e.g. Morning news" />
       <textarea class="setting-input" id="sch-prompt" maxlength="2000" rows="2"
@@ -4113,7 +4123,7 @@ function renderScheduled() {
       </div>
       <button class="primary" type="submit">Schedule it</button>
     </form>
-    ${rows.join('') || '<p class="memory-note">Nothing scheduled yet.</p>'}`;
+    </div>`;
 
   const cadence = el.schedulesBody.querySelector('#sch-cadence');
   const interval = el.schedulesBody.querySelector('#sch-interval');
@@ -4156,6 +4166,7 @@ function renderScheduled() {
     } catch (err) {
       toast(err.message || 'Could not schedule that.');
     }
+    // loadScheduled re-renders the panel, which closes the form by itself.
   });
 
   // Bound once: renderScheduled re-runs on every change, and a second binding
@@ -4167,6 +4178,14 @@ function renderScheduled() {
 }
 
 async function onScheduledClick(event) {
+  const reveal = /** @type {HTMLElement | null} */ (event.target.closest('#sch-new-toggle'));
+  if (reveal) {
+    const wrap = el.schedulesBody.querySelector('#sch-form-wrap');
+    if (wrap) wrap.hidden = !wrap.hidden;
+    reveal.textContent = wrap && !wrap.hidden ? 'Cancel' : 'New schedule';
+    if (wrap && !wrap.hidden) el.schedulesBody.querySelector('#sch-name')?.focus();
+    return;
+  }
   const button = event.target.closest('button[data-sch-act]');
   if (!button) return;
   const { schAct: act, id } = button.dataset;

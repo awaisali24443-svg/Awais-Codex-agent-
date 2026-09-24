@@ -717,35 +717,29 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .composer-note:empty { min-height: 0; }
 
-/* --------------------------------------------------------- bottom sheet --- */
+/* ------------------------------------------------------- the mode tray ---
+   The mode controls used to be a bottom sheet: a modal, over the page, with a
+   backdrop, for a two-option choice. It now unfolds inside the composer, which
+   is both where the choice belongs and the reason nothing can pop up over a
+   task the operator did not ask about. */
 
-.sheet-backdrop {
-  position: fixed; inset: 0; z-index: 40;
-  background: var(--scrim);
-  animation: fade-in var(--dur-2) var(--ease-out) both;
+.composer-tray {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  margin: 2px 0 var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  animation: tray-in var(--dur-2) var(--ease-out) both;
 }
-@keyframes fade-in { from { opacity: 0; } }
+@keyframes tray-in { from { opacity: 0; transform: translateY(4px); } }
 
-.sheet {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 41;
-  max-height: 82vh; overflow-y: auto;
-  padding: 8px var(--space-4) calc(var(--space-4) + var(--safe-bottom));
-  background: var(--surface);
-  border-top: 1px solid var(--line);
-  border-radius: 22px 22px 0 0;
-  box-shadow: var(--shadow-lg);
-  transform: translateY(0);
-  animation: sheet-up var(--dur-3) var(--ease-spring) both;
+.tray-head { display: flex; align-items: center; gap: var(--space-2); }
+.tray-title {
+  flex: 1; font-size: var(--text-sm); color: var(--ink-soft);
 }
-@keyframes sheet-up { from { transform: translateY(102%); } }
-.sheet[hidden] { display: none; }
-.sheet-grip {
-  width: 38px; height: 4px; margin: 4px auto 10px;
-  border-radius: var(--radius-pill); background: var(--line);
-}
-.sheet-head { display: flex; align-items: center; gap: var(--space-2); }
-.sheet-title { flex: 1; font-size: var(--text-md); font-weight: var(--weight-medium); color: var(--ink); }
-.sheet-body { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.tray-modes { display: grid; gap: var(--space-2); }
+@media (min-width: 560px) { .tray-modes { grid-template-columns: 1fr 1fr; } }
 
 .mode-option {
   position: relative; display: block; width: 100%; text-align: left;
@@ -758,6 +752,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .mode-option[aria-checked="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
 .mode-option-name { display: block; font-size: var(--text-md); font-weight: var(--weight-medium); }
 .mode-option-note { display: block; margin-top: 2px; font-size: var(--text-sm); color: var(--muted); line-height: 1.45; }
+.composer-tray .mode-option { padding: var(--space-3); }
+.composer-tray .mode-option-name { font-size: var(--text-sm); }
 .mode-detail { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
 .mode-option.toggle { display: flex; align-items: center; gap: var(--space-3); cursor: pointer; }
 .mode-option.toggle .mode-option-name { flex: 1; }
@@ -1047,6 +1043,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   display: flex; flex-direction: column; gap: 5px;
   padding: 9px 0; border-top: 1px solid var(--line-soft);
 }
+/* A flex child defaults to its content's width and refuses to shrink below it,
+   which is how a long label pushed a field off the card. */
+.setting-row > *, .secret > *, .settings-list > * { min-width: 0; }
 .setting-label { font-size: 12.5px; color: var(--ink-soft); }
 .setting-label em {
   display: block; margin-top: 2px; font-style: normal;
@@ -1064,14 +1063,18 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 
 .secret { padding: 9px 0; border-top: 1px solid var(--line-soft); }
-.secret-main { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.secret-main { display: flex; align-items: baseline; justify-content: space-between; gap: 2px var(--space-2); flex-wrap: wrap; }
 .secret-name { font-size: var(--text-sm); color: var(--ink-soft); }
 .secret-state { font-size: 11px; color: var(--muted); text-align: right; }
 .secret-state.ok { color: var(--ok); }
 .secret-state.bad { color: var(--danger); }
-.secret-actions { display: flex; gap: var(--space-2); margin-top: 7px; }
+.secret-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: 7px; }
 .secret-actions button {
-  flex: 1; padding: 7px 10px; font: inherit; font-size: 12.5px; color: var(--ink-soft);
+  /* `flex: 1` let three actions share a phone's width and clipped the longest
+     label — "Replace" was cut in half. A control shrinks only down to its own
+     text, and wraps to the next line instead of losing letters. */
+  flex: 1 1 auto; min-width: fit-content; white-space: nowrap;
+  padding: 8px 12px; font: inherit; font-size: 13px; color: var(--ink-soft);
   background: transparent; border: 1px solid var(--line); border-radius: var(--radius-xs); cursor: pointer;
 }
 .secret-actions button.primary { color: var(--surface); background: var(--ink); border-color: var(--ink); }
@@ -1224,6 +1227,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
    — a settings page is a list of questions, not a list of keys. */
 
 .settings-section { margin-bottom: var(--space-6); }
+.settings-lead {
+  margin: 0 2px var(--space-5); font-size: var(--text-sm); color: var(--muted); line-height: 1.55;
+}
+.cta.subtle {
+  margin-top: var(--space-3); padding: 12px var(--space-4);
+  font-size: var(--text-sm); font-weight: var(--weight-normal);
+  color: var(--ink-soft); background: transparent; border: 1px dashed var(--line);
+}
+.cta.subtle:active { transform: scale(.99); }
 .settings-heading {
   margin: 0 0 var(--space-3); font-size: var(--text-xs);
   letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
@@ -1572,6 +1584,10 @@ kbd {
   .feedback-chip { min-height: 36px; padding: 8px 12px; }
   .rail-toggle { min-height: 32px; padding: 5px 10px; }
   .mode-option { min-height: 56px; }
+  /* Keys and schedules are two-button rows that were 30px tall. */
+  .secret-actions button { min-height: 44px; padding: 10px 14px; }
+  /* 16px inputs keep iOS from zooming the page when the field is focused. */
+  .setting-input, .secret-input { font-size: 16px; }
 }
 
 /* ------------------------------------------------------- the cheat sheet ---

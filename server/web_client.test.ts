@@ -287,35 +287,36 @@ describe('the composer is one card, like every chat app that got this right', ()
     assert.ok(cssText.includes('.composer:focus-within'), 'the card shows it has focus');
   });
 
-  test('the mode is one control, not three always-visible switches', () => {
+  test('the mode is one control that unfolds in the composer — there is no modal', () => {
     const htmlText = html();
     assert.ok(htmlText.includes('id="btn-mode"'), 'one mode control');
-    assert.ok(htmlText.includes('aria-haspopup="dialog"'), 'that opens a sheet');
-    assert.ok(!htmlText.includes('research-toggle'), 'the labelled research pill is gone');
-    assert.ok(!htmlText.includes('ping-toggle\n'), 'and the ping pill is no longer in the row');
+    assert.ok(htmlText.includes('aria-controls="composer-tray"'), 'that unfolds the tray it names');
+    assert.ok(htmlText.includes('id="composer-tray"'), 'which lives in the composer');
+    // The complaint that retired the sheet: it arrived on its own over a task
+    // the operator had not asked a question about. A modal cannot arrive if
+    // there is no modal.
+    assert.ok(!htmlText.includes('id="mode-sheet"'), 'the modal sheet is gone');
+    assert.ok(!htmlText.includes('sheet-backdrop'), 'and so is its backdrop');
+    assert.ok(!htmlText.includes('aria-haspopup="dialog"'), 'the chip no longer promises a dialog');
+    assert.ok(!htmlText.includes('research-toggle'), 'the labelled research pill is still gone');
     const client = app();
-    assert.ok(client.includes('function openModeSheet()') && client.includes('function closeModeSheet()'), 'the sheet is opened and closed deliberately');
+    assert.ok(client.includes('function toggleModeTray()'), 'the tray opens and closes on the chip');
+    assert.ok(!client.includes('openModeSheet'), 'nothing else can open it');
     assert.ok(client.includes('el.modeStandard.setAttribute('), 'the options carry their checked state');
     assert.ok(client.includes("el.modeLabel.textContent = `Deep research · ${mins} min`"), 'and the chip says what is on');
+    assert.ok(css().includes('.composer-tray'), 'the tray is a block in the composer, not an overlay');
   });
 
-  test('the sheet is a real dialog: backdrop, Escape, and focus handed back', () => {
-    const client = app();
-    assert.ok(client.includes('modeSheetOpener = document.activeElement'), 'the opener is remembered');
-    assert.ok(client.includes('modeSheetOpener.focus()'), 'and given focus back');
-    assert.ok(client.includes("event.key === 'Escape' && !el.modeSheet.hidden"), 'Escape closes it');
-    assert.ok(client.includes('el.modeBackdrop.addEventListener'), 'so does the backdrop');
-    const htmlText = html();
-    assert.ok(htmlText.includes('role="dialog"') && htmlText.includes('aria-modal="true"'), 'and it is announced as one');
-  });
-
-  test('one trailing control: mic, send, or stop — never all three', () => {
+  test('one trailing control: mic, send, or stop — and the send button is never missing', () => {
     const client = app();
     assert.ok(client.includes('function setupStopButton()'), 'the stop button moves into the composer');
     assert.ok(client.includes('function updateTrailingAction()'), 'and the slot is managed in one place');
-    assert.ok(client.includes('el.mic.hidden = !(micUsable && !typing && !state.running)'), 'the mic shows only while the field is empty');
-    assert.ok(client.includes('el.send.hidden = state.running || typing || !micUsable'), 'and the send takes over the moment there is something to send');
-    assert.ok(client.includes('if (el.mic) el.mic.hidden') || true, 'a browser without speech still gets a working slot');
+    assert.ok(client.includes('const micHasSlot = micUsable && !typing && !state.running;'), 'the mic holds the slot only while there is nothing to send');
+    assert.ok(client.includes('el.send.hidden = state.running || micHasSlot;'), 'so typing brings the send button out, where it used to vanish');
+    // The old line hid the button *because* the operator was typing. It was
+    // covered by a test that asserted the same wrong sentence, which is how a
+    // missing send button survived a round of its own bug fixes.
+    assert.ok(!client.includes('el.send.hidden = state.running || typing'), 'the inverted rule is gone for good');
     assert.ok(client.includes('const micUsable = !!el.mic && !el.mic.disabled;'), 'the slot is never left empty when the mic cannot work');
   });
 
@@ -780,6 +781,53 @@ describe('the card tells the truth while the model is silent', () => {
     assert.ok(engine.includes('heartbeatMs?: number;'), 'the interval is configurable for tests');
     assert.ok(engine.includes('Nothing from the model yet — ${silent}s in.'), 'the line is emitted from the read loop');
     assert.ok(engine.includes('clearInterval(beat);'), 'and the timer dies with the socket');
+  });
+});
+
+describe('the drawer is a front door, not a form', () => {
+  test('the tasks come before the plumbing', () => {
+    const htmlText = html();
+    const convos = htmlText.indexOf('id="convos"');
+    const schedules = htmlText.indexOf('id="schedules"');
+    const settingsRow = htmlText.indexOf('id="btn-settings"');
+    assert.ok(convos > 0 && schedules > 0 && settingsRow > 0, 'all three exist');
+    // Recent tasks are what the drawer is for; they used to sit under two
+    // collapsed panels and a settings row, below the fold on a phone.
+    assert.ok(convos < schedules, 'tasks above Scheduled');
+    assert.ok(convos < settingsRow, 'and above Settings');
+  });
+
+  test('opening Scheduled shows tasks, not six empty inputs', () => {
+    const client = app();
+    assert.ok(client.includes('id="sch-new-toggle"'), 'the create-form is behind a button');
+    assert.ok(client.includes('<div id="sch-form-wrap" hidden>'), 'and closed when the panel renders');
+    // The list has to be written before the form's wrapper, or the form is the
+    // first thing the eye lands on.
+    const body = client.slice(client.indexOf('el.schedulesBody.innerHTML'));
+    assert.ok(body.indexOf('rows.join') < body.indexOf('sch-new-toggle'), 'rows first, form after');
+  });
+});
+
+describe('Settings is a page you can read on a phone', () => {
+  test('nothing in a settings card is clipped', () => {
+    const cssText = css();
+    // `.settings-list` clips to keep its rounded corners, so every child has to
+    // be allowed to shrink; and the three key actions wrap instead of compressing
+    // "Replace" until it loses letters.
+    assert.ok(cssText.includes('.setting-row > *, .secret > *, .settings-list > * { min-width: 0; }'), 'rows can shrink');
+    const actions = cssText.slice(cssText.indexOf('.secret-actions {'));
+    assert.ok(actions.slice(0, actions.indexOf('}')).includes('flex-wrap: wrap'), 'key actions wrap');
+    const button = cssText.slice(cssText.indexOf('.secret-actions button {'));
+    assert.ok(button.slice(0, button.indexOf('}')).includes('min-width: fit-content'), 'and a button is never narrower than its label');
+  });
+
+  test('each block says what it is, and the page says when it applies', () => {
+    const client = app();
+    assert.ok(client.includes("section('How it runs'"), 'the settings block');
+    assert.ok(client.includes("section('Keys'"), 'the keys block');
+    assert.ok(client.includes("section('The phone channel'"), 'the WhatsApp block');
+    assert.ok(client.includes('class="settings-lead"'), 'with a line saying changes apply immediately');
+    assert.ok(client.includes("? 'Replace key' : 'Add key'"), 'and a key action that says what it replaces');
   });
 });
 
