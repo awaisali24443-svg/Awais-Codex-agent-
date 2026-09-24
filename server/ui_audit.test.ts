@@ -144,7 +144,10 @@ describe('the keyboard can see where it is', () => {
     const offenders: string[] = [];
     for (const block of blocks()) {
       if (/:focus-visible/.test(block.selector)) continue;
-      if (block.decls.some(([prop, value]) => prop === 'outline' && value === 'none')) {
+      // `outline: none` and `outline: 0` are the same declaration, and the
+      // composer's textarea and the drawer's search box both used the second
+      // spelling to hide the ring on the two fields people type into most.
+      if (block.decls.some(([prop, value]) => prop === 'outline' && /^(none|0|0px)$/.test(value.trim()))) {
         offenders.push(`${block.selector} (${block.media ?? 'top level'})`);
       }
     }

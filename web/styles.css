@@ -652,7 +652,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 
 .composer textarea {
   width: 100%; box-sizing: border-box;
-  border: 0; outline: 0; background: transparent; color: var(--ink);
+  border: 0; background: transparent; color: var(--ink);
+  /* No outline suppression: the global :focus:not(:focus-visible) rule already
+     keeps the ring away from a mouse, and a keyboard user needs it here — this
+     is the field the whole app is typed into. */
   /* 16px, always: anything smaller and iOS zooms the page when the field takes
      focus, which slides the whole thread sideways. */
   font: inherit; font-size: 16px; line-height: 1.5;
@@ -1115,7 +1118,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .drawer-search svg { width: 16px; height: 16px; flex: none; }
 .drawer-search input {
-  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  flex: 1; min-width: 0; border: 0; background: transparent;
   font: inherit; font-size: 15px; color: var(--ink);
 }
 .drawer-search input::placeholder { color: var(--muted); }
@@ -1133,6 +1136,16 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
 }
 .convo:hover { background: var(--surface-2); }
+/* Where you are, at a glance. The row you are reading carries a hairline of the
+   accent on its leading edge, so the list stops being a wall of identical
+   rows — the active one is legible even with the drawer half-width. */
+.convo { position: relative; }
+.convo.on::before {
+  content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px;
+  border-radius: var(--radius-pill); background: var(--accent);
+}
+/* (The active row's background and title weight already live in the two .convo
+   rules above — only the marker is new here.) */
 .convo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .convo-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .convo-preview { font-size: var(--text-xs); color: var(--muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

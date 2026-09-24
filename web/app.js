@@ -707,6 +707,11 @@ function startRunClock(card) {
 function stopRunClock(card) {
   if (card.timer) clearInterval(card.timer);
   card.timer = null;
+  // The drafting clock is part of the same contract: whatever ends the run ends
+  // every timer on its card, so a finished task cannot keep ticking in the
+  // background of a page that has moved on.
+  if (card.planClock) clearInterval(card.planClock);
+  card.planClock = null;
 }
 
 /**

@@ -862,6 +862,25 @@ describe('the drawer is a front door, not a form', () => {
   });
 });
 
+describe('the drawer reads like a list, not a wall', () => {
+  test('the row you are on is marked', () => {
+    const cssText = css();
+    assert.ok(cssText.includes('.convo.on::before'), 'the active row carries a marker');
+    const rule = cssText.slice(cssText.indexOf('.convo.on::before'));
+    assert.ok(rule.slice(0, rule.indexOf('}')).includes('background: var(--accent)'), 'in the accent colour');
+    assert.ok(cssText.includes('.convo-group'), 'and recents are grouped under day headings');
+  });
+
+  test('the two fields people type into keep their keyboard ring', () => {
+    // `outline: 0` is `outline: none`: it hid the focus ring on the composer and
+    // the drawer search box, and the older scan only looked for the second
+    // spelling. ui_audit.test.ts now catches both; this pins the fix.
+    const cssText = css();
+    assert.ok(!/\.composer textarea \{[^}]*outline: 0/.test(cssText), 'the composer');
+    assert.ok(!/\.drawer-search input \{[^}]*outline: 0/.test(cssText), 'and the drawer search box');
+  });
+});
+
 describe('Settings is a directory, not a form', () => {
   // The redesign takes its shape from a connectors directory (Claude's, and the
   // ones it borrowed from): one searchable list, each item showing what it is,
