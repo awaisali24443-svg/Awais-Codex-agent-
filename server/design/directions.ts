@@ -479,6 +479,33 @@ export function chipDirections(brief: string, count = 3): readonly Direction[] {
   return ranked.filter((d) => d.id !== chosen?.id).slice(0, count);
 }
 
+/**
+ * Everything a run needs to announce its direction, and to offer alternatives.
+ *
+ * One payload, built from the registry, so the step the operator sees, the
+ * alternates they are offered, and the recipe the model was handed all come
+ * from the same eight definitions — a "different direction" chip cannot offer a
+ * direction whose recipe does not exist.
+ */
+export function directionPayload(brief: string): {
+  id: DirectionId;
+  name: string;
+  blurb: string;
+  why: string;
+  chips: Array<{ id: DirectionId; name: string; blurb: string }>;
+} {
+  const chosen = pickDirection(brief);
+  return {
+    id: chosen.id,
+    name: chosen.name,
+    blurb: chosen.blurb,
+    why: briefChoseDirection(brief)
+      ? 'the brief points here'
+      : 'nothing in the brief pointed anywhere, so this is the default',
+    chips: chipDirections(brief).map((d) => ({ id: d.id, name: d.name, blurb: d.blurb })),
+  };
+}
+
 /** One line for the plan: what the operator reads before any file exists. */
 export function describeDirection(direction: Direction): string {
   return `${direction.name} — ${direction.blurb}`;

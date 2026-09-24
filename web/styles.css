@@ -440,6 +440,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 }
+/* ------------------------------------------ refining a finished build ---
+   The chips a built page offers once it is done: bolder, calmer, more motion,
+   another direction. They reuse the composer's pill style — a chip looks the
+   same wherever it appears — and wrap, because there can be seven of them. */
+
+.refine { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
 /* Which channel the words came from, on the panel head. */
 .thinking[data-kind="reasoning"] .label { color: var(--ink); }
 

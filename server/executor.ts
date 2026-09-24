@@ -34,7 +34,7 @@ import { applyMemory, extractAndStoreMemories, sourceForKind, type MemoryProfile
 import { recordArtifact } from './artifacts.js';
 import { parseMilestone, withGoogle, withLinkedIn, withPlanning, planOnlyPrompt, buildPlanPreamble } from './planning.js';
 import { looksLikeUiMission, withDesignGuide } from './design.js';
-import { briefChoseDirection, describeDirection, pickDirection } from './design/directions.js';
+import { directionPayload, pickDirection } from './design/directions.js';
 import { DecisionScanner, stripDecisions, wantsDecisions, withDecisions } from './decisions.js';
 import type { ThinkingKind } from './engine/types.js';
 import { MAX_SEEN_URLS, extractUrls, checkSources, searchQueryOf, urlsIn } from './sources.js';
@@ -650,10 +650,12 @@ export class RunExecutor {
         // everything else the task did.
         const direction = looksLikeUiMission(memory.prompt) ? pickDirection(memory.prompt) : null;
         if (direction) {
-          const why = briefChoseDirection(memory.prompt)
-            ? 'the brief points here'
-            : 'nothing in the brief pointed anywhere, so this is the default';
-          ctx.log(`Direction: ${describeDirection(direction)} — ${why}.`);
+          // Durable, and structured rather than a log line: the direction is
+          // part of what the task did, so a reconnect replays it, and the three
+          // alternates it carries are what the refinement chips offer once the
+          // page is finished. A chip can therefore never offer a direction
+          // whose recipe does not exist.
+          await writer.write('design.direction', directionPayload(memory.prompt));
         }
         const mission =
           resumePreamble +

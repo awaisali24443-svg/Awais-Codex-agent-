@@ -16,6 +16,7 @@ import {
   waitLine,
   pushFrame,
 } from './timeline.js';
+import { directionLine, refinementChips } from './refine.js';
 import {
   PANEL_DOCK_MIN_WIDTH,
   PANEL_SECTIONS,
@@ -992,6 +993,30 @@ function setThinkingKind(card, kind) {
   card.thinking.dataset.kind = kind;
 }
 
+/**
+ * The refinement chips on a finished build.
+ *
+ * A page is never finished on the first pass — the last 20% is reworking what
+ * is already there — and without these the only move available on a finished
+ * card was to describe the whole page again and hope. Every chip fills the
+ * composer as editable text, exactly like the welcome starters: nothing is sent
+ * by tapping a chip, because the operator reviews before sending.
+ */
+function refineRow(card) {
+  const row = document.createElement('div');
+  row.className = 'refine';
+  for (const chip of refinementChips(card.direction)) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chip refine-chip';
+    btn.textContent = chip.label;
+    btn.dataset.prompt = chip.prompt;
+    btn.title = chip.prompt;
+    row.append(btn);
+  }
+  return row;
+}
+
 /** One row on the trace: a thought, or a decision with its flag. */
 function addTraceRow(card, text, kind = 'thought', at = null) {
   const row = document.createElement('div');
@@ -1961,6 +1986,18 @@ function handleEvent(card, event, data) {
       break;
     }
 
+    case 'design.direction': {
+      // The direction is a decision the task made, so it reads like one: a row
+      // in the same list as the work, not a banner.
+      card.direction = data;
+      addStep(card, 'design', {
+        name: directionLine(data),
+        icon: 'spark',
+        status: 'note',
+      });
+      break;
+    }
+
     case 'decision': {
       // A reason, in the model's own words, said just before it acted. It gets
       // its own row: a decision is not a thought and must not read like one.
@@ -2160,6 +2197,8 @@ function finishCard(card, outcome, data = {}) {
     // re-sent.
     const noticeNode = renderNotice('Done.', false, 'check');
     noticeNode.append(runActionButtons(card, { retry: true, share: true, outputs: true, notice: noticeNode }));
+    // A build offers its next moves where the result is, not in a menu.
+    if (card.direction) noticeNode.append(refineRow(card));
   }
 
   // A task the operator just watched deserves the same thumbs as a reopened
@@ -3229,6 +3268,10 @@ function attach(runId, after = 0) {
     // A decision is part of what the task did, so a reconnect replays it onto
     // the trace instead of losing the reason behind steps already on screen.
     'decision',
+    // Which direction the page is being built in, and the three it was offered
+    // instead. Durable because a finished card offers the alternates as
+    // refinement chips — after a reload, that offer has to still be there.
+    'design.direction',
     'artifact', 'memory.recall', 'plan.milestone',
     'run.plan_started', 'run.plan_ready', 'run.plan_updated', 'run.plan_approved',
     'research.started', 'research.pass', 'verification.checked',
@@ -4786,6 +4829,19 @@ window.addEventListener('popstate', () => closeSettings({ fromHistory: true }));
  */
 document.addEventListener('click', (e) => {
   const target = /** @type {HTMLElement} */ (e.target);
+  // A refinement chip drops its prompt into the composer for review. It is
+  // never sent from here: the operator reads it first, the same rule the voice
+  // transcripts and the welcome starters follow.
+  const refine = /** @type {HTMLElement | null} */ (target.closest('.refine-chip'));
+  if (refine) {
+    const prompt = refine.dataset.prompt || '';
+    if (prompt) {
+      fillComposerFromChip(el.prompt, el.send, prompt);
+      el.prompt.focus();
+      autoGrow();
+    }
+    return;
+  }
   const toggle = target.closest('.trace-raw-toggle');
   if (!toggle) return;
   e.preventDefault();

@@ -862,6 +862,33 @@ describe('the drawer is a front door, not a form', () => {
   });
 });
 
+describe('a built page says its direction and offers its next moves', () => {
+  test('the direction arrives as an event, not a log line', () => {
+    const client = app();
+    // Structured, so the alternates it carries can be offered later; a log line
+    // is a sentence the client could only print.
+    assert.ok(client.includes("case 'design.direction':"), 'the client listens for it');
+    assert.ok(client.includes("'design.direction',"), 'and it is durable, so a reload still knows the direction');
+    assert.ok(client.includes("addStep(card, 'design', {"), 'it reads as a row among the work, not a banner');
+    assert.ok(client.includes("icon: 'spark',"), 'with its own mark');
+    assert.ok(client.includes("import { directionLine, refinementChips } from './refine.js';"), 'and the sentences come from the pure module, not from here');
+    assert.ok(client.includes("name: directionLine(data),"), 'so the row and the tests cannot disagree');
+  });
+
+  test('a finished build offers its next moves where the result is', () => {
+    const client = app();
+    assert.ok(client.includes('function refineRow(card)'), 'the chips are built in one place');
+    assert.ok(client.includes("if (card.direction) noticeNode.append(refineRow(card));"), 'only for a build, and only when done');
+    assert.ok(client.includes("btn.className = 'chip refine-chip';"), 'they reuse the composer pill');
+    assert.ok(client.includes('btn.dataset.prompt = chip.prompt;'), 'each carrying its prepared prompt');
+    // A chip fills the composer; nothing is sent by tapping it.
+    assert.ok(client.includes("const refine = /** @type {HTMLElement | null} */ (target.closest('.refine-chip'));"), 'the click is delegated');
+    assert.ok(client.includes('fillComposerFromChip(el.prompt, el.send, prompt);'), 'and it only fills');
+    assert.ok(!/sendMessage\(|requestSubmit\(\);[\s\S]{0,80}refine-chip/.test(client), 'never auto-sent');
+    assert.ok(css().includes('.refine {'), 'the row wraps');
+  });
+});
+
 describe('the wait line, and the raw view behind it', () => {
   test('an empty panel says what is happening, for how long, and whether the model is talking', () => {
     const client = app();
