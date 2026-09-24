@@ -41,7 +41,7 @@ export interface ScriptedEngineOptions {
 }
 
 const DEFAULT_SCRIPT: ScriptStep[] = [
-  { log: 'Mission received', delayMs: 120 },
+  { log: 'Task received', delayMs: 120 },
   { thinking: 'Reading the request and deciding what actually needs doing.', delayMs: 200 },
   { thinking: ' Checking what already exists in the project.', delayMs: 160 },
   { tool: 'read_project', toolArgs: { path: '.' }, delayMs: 180 },
@@ -60,7 +60,7 @@ const DEFAULT_SCRIPT: ScriptStep[] = [
     delayMs: 90,
   },
   {
-    text: 'Close the tab mid-mission and reopen it — the stream replays from the last ',
+    text: 'Close the tab mid-task and reopen it — the stream replays from the last ',
     delayMs: 90,
   },
   {
@@ -72,7 +72,7 @@ const DEFAULT_SCRIPT: ScriptStep[] = [
     delayMs: 110,
   },
   { text: 'Nothing above it changes.', delayMs: 90 },
-  { log: 'Mission complete', logLevel: 'info', delayMs: 100 },
+  { log: 'Task complete', logLevel: 'info', delayMs: 100 },
 ];
 
 export class ScriptedEngine implements Engine {

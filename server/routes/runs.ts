@@ -399,7 +399,7 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
     if (active && active.id !== run.id) {
       res.status(409).json({
         error: 'in_progress',
-        message: 'Another mission is already running — wait for it to finish, then resume.',
+        message: 'Another task is already running — wait for it to finish, then resume.',
       });
       return;
     }

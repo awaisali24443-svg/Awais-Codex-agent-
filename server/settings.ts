@@ -73,7 +73,7 @@ export const SETTINGS: Record<SettingKey, SettingSpec> = {
     label: 'Daily run budget',
     description:
       'Hard cap on agent runs per day, across every channel and each channel separately. ' +
-      'Takes effect on the next mission — no redeploy.',
+      'Takes effect on the next task — no redeploy.',
     envVar: 'DAILY_RUN_BUDGET',
     validate: (raw) => intInRange(raw, 1, 10_000),
     apply: (config, value) => {
@@ -145,7 +145,7 @@ export const KNOWN_SECRETS: Record<SecretName, SecretSpec> = {
   gemini_api_key: {
     name: 'gemini_api_key',
     label: 'Google AI Studio key',
-    description: 'Authorises the agent engine. Without it, every mission fails with auth_failed.',
+    description: 'Authorises the agent engine. Without it, every task fails with auth_failed.',
     envVar: 'GEMINI_API_KEY',
     usedBy: 'server/engine/antigravity.ts',
   },

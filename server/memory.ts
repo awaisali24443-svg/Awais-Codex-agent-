@@ -769,7 +769,7 @@ export async function extractAndStoreMemories(
       if (created) stored.push(item);
     }
     if (stored.length > 0) {
-      console.log(`[memory] learned ${stored.length} item(s) from a ${source} mission`);
+      console.log(`[memory] learned ${stored.length} item(s) from a ${source} task`);
     }
   } catch (err) {
     console.warn('[memory] extraction skipped:', (err as Error).message);

@@ -95,6 +95,13 @@ const state = {
   conversationId: null,
   branchId: null,
   runId: null,
+  // Which chat the live run belongs to. The header says "Working…" while a run
+  // is in flight, and the operator is free to open another chat to read
+  // something while it works — knowing whose run this is keeps the two linked.
+  runConversationId: null,
+  // 'running' | 'awaiting_plan' | 'finished' — the client's own view of the run
+  // the header is reporting on.
+  runStatus: null,
   source: null,
   running: false,
   conversations: [],
@@ -204,6 +211,14 @@ el.loginForm.addEventListener('submit', async (event) => {
    did not, so a run that paused while the phone was backgrounded left the app
    saying "Working…" with a live stream that could never speak again. */
 const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'paused'];
+
+/* A run the operator can still watch or act on: either working, or waiting for
+   a plan to be approved. Anything else is over, and its answer is on the
+   thread already — so opening the chat it belongs to must not replay it. */
+const LIVE_RUN_STATUSES = ['running', 'awaiting_plan'];
+function liveRun() {
+  return !!state.runId && LIVE_RUN_STATUSES.includes(state.runStatus);
+}
 
 /* ----------------------------------------------------------------- boot -- */
 
@@ -327,16 +342,47 @@ async function openConversation(id, branchId = null) {
     const { drafts } = await api(`/api/linkedin/drafts?conversationId=${encodeURIComponent(id)}`);
     for (const d of drafts ?? []) draftByRun.set(d.runId, d.id);
   } catch { /* LinkedIn not connected or not configured — no buttons */ }
+  let ownsLiveRun = false;
   try {
     const { messages } = await api(`/api/conversations/${id}/messages${qs}`);
     for (const message of messages) {
+      // The question that started the live run is written down the moment the
+      // run exists (the answer is not, until the run closes), so its runId is
+      // how a thread knows the streaming card belongs to it.
+      if (message.runId && message.runId === state.runId) ownsLiveRun = true;
       const node = message.role === 'user' ? renderAsk(message.content) : renderAnswer(message.content);
       attachMessageActions(node, message, draftByRun.get(message.runId));
     }
   } catch { /* silent */ }
 
+  // Opening a chat is what removes the live card from the page — it is a DOM
+  // node in the thread that just got replaced. So coming back has to put it
+  // back: without this the operator returns to their finished question, no
+  // answer arriving, no spinner, "Working…" in the header, and a locked
+  // composer. The task looked lost while it was still running.
+  if (liveRun()) {
+    if (ownsLiveRun) attach(state.runId, 0);
+    else renderLiveRunElsewhere();
+  }
+
   renderConversations();
   scrollToEnd(true);
+}
+
+/* "Working…" belongs to a run, not to the chat on screen. When those are two
+   different chats, say so and offer the way back to the card. */
+function renderLiveRunElsewhere() {
+  const owner = state.conversations.find((c) => c.id === state.runConversationId);
+  const where = owner ? `in "${owner.title}"` : 'in another chat';
+  const what = state.runStatus === 'awaiting_plan' ? 'is waiting for your approval' : 'is still running';
+  const notice = renderNotice(`A task ${where} ${what}.`, false, 'info');
+  if (!owner) return;
+  const show = document.createElement('button');
+  show.type = 'button';
+  show.className = 'retry-btn';
+  show.textContent = 'Show it';
+  show.addEventListener('click', () => openConversation(owner.id));
+  notice.append(show);
 }
 
 async function fetchBranches(id) {
@@ -764,6 +810,10 @@ function handleEvent(card, event, data) {
   switch (event) {
     case 'run.started':
       note('');
+      // Every run replays its own start, so this is where the client learns
+      // which chat the card belongs to — however the run was started.
+      if (typeof data.conversationId === 'string') state.runConversationId = data.conversationId;
+      state.runStatus = 'running';
       card.prompt = typeof data.prompt === 'string' ? data.prompt : '';
       // The definitive budget line arrives on 'research.started' below; this
       // early mark means a replay that starts mid-run still shows the mode.
@@ -803,12 +853,14 @@ function handleEvent(card, event, data) {
       // The planning pass proposed steps (or the operator edited them): the
       // run waits in 'awaiting_plan' and the card shows Approve / Edit. The
       // mission does not start until the operator taps Approve.
+      state.runStatus = 'awaiting_plan'; // waiting for a human, not working
       renderPlanPreview(card, data.plan);
       break;
 
     case 'run.plan_approved':
       // The wait is over; 'run.started' follows on this same stream and the
       // execution milestones tick the approved steps off in place.
+      state.runStatus = 'running';
       closePlanPreview(card);
       note('Plan approved — starting…');
       break;
@@ -976,6 +1028,7 @@ function handleEvent(card, event, data) {
 }
 
 function finishCard(card, outcome, data = {}) {
+  state.runStatus = 'finished'; // nothing to watch any more; the answer is here
   card.spinner.classList.add('done');
   card.spinner.style.animation = 'none';
   card.spinner.setAttribute('class', 'spinner done');
@@ -1797,6 +1850,9 @@ function closeStream() {
 function attach(runId, after = 0) {
   closeStream();
   state.runId = runId;
+  // Optimistic: the replay that follows corrects it the moment the run turns
+  // out to be waiting for approval, or already over.
+  state.runStatus = 'running';
 
   // Reusing the existing card is what makes a re-attach safe: recovery paths
   // (returning to the foreground, tapping "Review plan") replay a run the
@@ -1821,6 +1877,11 @@ function attach(runId, after = 0) {
     'sources.checked',
     'google.read',
     'run.completed', 'run.failed', 'run.cancelled',
+    // Pausing is a declared run status — `setRunStatus` accepts 'paused' and
+    // writes `run.${status}` — and the handler below has always been here. What
+    // was missing was this line: without it a paused task would sit there
+    // looking like a hung one, exactly the bug `sources.checked` had.
+    'run.paused',
   ];
   for (const name of durable) {
     source.addEventListener(name, (message) => {
@@ -1909,6 +1970,9 @@ document.addEventListener('visibilitychange', async () => {
 
 function setRunning(on) {
   state.running = on;
+  // A finished run owns no chat: the answer is on the thread by then, and a
+  // stale owner would point the next "still running" note at the wrong one.
+  if (!on) state.runConversationId = null;
   if (on) stopSpeaking(); // A new answer replaces whatever was being read.
   el.statusDot.hidden = !on;
   el.stop.hidden = !on;

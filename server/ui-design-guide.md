@@ -1,6 +1,6 @@
 # UI Design Guide
 
-Follow this when a mission asks you to design or build a user interface —
+Follow this when a task asks you to design or build a user interface —
 a web page, app screen, landing page, dashboard, or mockup. Aim for a
 warm, minimal, quiet interface — one that disappears so the content can
 speak.

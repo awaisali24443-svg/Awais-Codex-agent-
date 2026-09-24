@@ -93,8 +93,8 @@ export class RunConflictError extends Error {
   constructor(readonly activeRunId: string | null) {
     super(
       activeRunId
-        ? `Another mission is already running (${activeRunId}); one at a time protects the daily quota`
-        : 'Another mission is already active',
+        ? `Another task is already running (${activeRunId}); one at a time protects the daily quota`
+        : 'Another task is already active',
     );
     this.name = 'RunConflictError';
   }
@@ -223,7 +223,7 @@ export async function createConversation(
   source: RunKind = 'chat',
 ): Promise<string> {
   const id = newId('cnv');
-  const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 72) || 'New mission';
+  const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 72) || 'New task';
   await db.query(
     'INSERT INTO conversations (id, title, source) VALUES ($1, $2, $3)',
     [id, title, source === 'whatsapp' ? 'whatsapp' : source === 'api' ? 'api' : 'web'],

@@ -266,7 +266,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   if (authMode === 'open' && !isProduction) {
     console.warn(
-      '[config] AUTH_MODE=open — anyone who finds this URL can run missions and spend the daily quota',
+      '[config] AUTH_MODE=open — anyone who finds this URL can run tasks and spend the daily quota',
     );
   }
 

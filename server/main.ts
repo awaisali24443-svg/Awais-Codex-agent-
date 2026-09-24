@@ -39,7 +39,7 @@ import { maybeSendBreakageAlerts } from './whatsapp/alerts.js';
  */
 function createEngine(config: AppConfig, secrets: SecretsStore): Engine {
   if (config.engineName === 'scripted') {
-    console.warn('[boot] ENGINE=scripted — missions will not reach the real agent');
+    console.warn('[boot] ENGINE=scripted — tasks will not reach the real agent');
     return new ScriptedEngine();
   }
 
@@ -68,7 +68,7 @@ async function boot(): Promise<void> {
   if (config.authMode === 'open' && config.isProduction) {
     console.warn('[boot] **********************************************************');
     console.warn('[boot] AUTH_MODE=open — this deployment is PUBLIC.');
-    console.warn('[boot] Anyone with the URL can run missions on your quota.');
+    console.warn('[boot] Anyone with the URL can run tasks on your quota.');
     console.warn('[boot] **********************************************************');
   }
   console.log(`[boot] env=${config.nodeEnv} port=${config.port} budget=${config.dailyRunBudget}/day`);

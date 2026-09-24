@@ -197,7 +197,7 @@ export function createApp(deps: AppDeps): Express {
     checks.auth =
       config.authMode === 'open'
         ? config.isProduction
-          ? 'open in PRODUCTION — anyone who finds the URL can run missions and spend the daily quota'
+          ? 'open in PRODUCTION — anyone who finds the URL can run tasks and spend the daily quota'
           : 'open — no access check (fine locally, not on the public internet)'
         : 'key — an access key or session is required';
 

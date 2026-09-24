@@ -129,7 +129,7 @@ export async function buildResumePreamble(db: Db, runId: string, fromStep: numbe
     (s) => `- Step ${s.seq}/${s.total} done: ${s.resultSummary || s.label}`,
   );
   return (
-    `[You are RESUMING an interrupted mission — the server restarted while it was running. ` +
+    `[You are RESUMING an interrupted task — the server restarted while it was running. ` +
     `Do not redo finished steps; their results are below. Continue from step ${fromStep}.\n` +
     (lines.length > 0 ? `Finished steps:\n${lines.join('\n')}\n` : `No steps had finished yet.\n`) +
     `]\n\n`

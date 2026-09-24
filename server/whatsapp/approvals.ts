@@ -335,7 +335,7 @@ async function applyPlanVerdict(
     await emitEvent(deps.db, run.id, 'run.plan_approved', { via: 'whatsapp' });
     const approved = await getRun(deps.db, run.id);
     if (approved) deps.executor.start(approved);
-    return '✅ Plan approved — the mission is running now.';
+    return '✅ Plan approved — the task is running now.';
   }
 
   if (verdict === 'reject') {
@@ -355,7 +355,7 @@ async function applyPlanVerdict(
         payload: { status: 'cancelled', errorType: 'operator_rejected' },
       });
     }
-    return '🛑 Plan rejected — the mission will not run.';
+    return '🛑 Plan rejected — the task will not run.';
   }
 
   const note = stripChangePrefix(text);

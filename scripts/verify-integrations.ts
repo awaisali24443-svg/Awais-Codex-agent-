@@ -104,13 +104,13 @@ function parseArgs(argv: string[]): Args {
 
 const HELP = `npm run verify — check the credentials against the real providers
 
-  --key-only          only the Gemini key: one GET, no mission (spends nothing)
+  --key-only          only the Gemini key: one GET, no task (spends nothing)
   --agent-only        the key and the agent, no WhatsApp (spends one run)
-  --whatsapp-only     only the WhatsApp token (no mission, spends nothing)
-  --github-only       only the GitHub token (no mission, spends nothing)
+  --whatsapp-only     only the WhatsApp token (no task, spends nothing)
+  --github-only       only the GitHub token (no task, spends nothing)
   --send              also send a test message into the agent's chat
   --text "..."        wording for that message
-  --prompt "..."      prompt for the smoke-test mission
+  --prompt "..."      prompt for the smoke-test task
   --json              machine-readable output
 `;
 

@@ -162,9 +162,9 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
       res.status(404).json({
         error: 'artifact_unavailable',
         message: run?.environmentId
-          ? `"${artifact.name}" is recorded for this mission but is not in the sandbox snapshot any more. ` +
+          ? `"${artifact.name}" is recorded for this task but is not in the sandbox snapshot any more. ` +
             'Remote environments expire, and a file that was never built cannot be collected.'
-          : `"${artifact.name}" is recorded, but the mission that produced it no longer has a sandbox to read it from.`,
+          : `"${artifact.name}" is recorded, but the task that produced it no longer has a sandbox to read it from.`,
         artifact: { id: artifact.id, name: artifact.name, path: artifact.path },
       });
       return;
@@ -236,9 +236,9 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
       res.status(404).json({
         error: 'artifact_unavailable',
         message: run?.environmentId
-          ? `"${artifact.name}" is recorded for this mission but is not in the sandbox snapshot any more. ` +
+          ? `"${artifact.name}" is recorded for this task but is not in the sandbox snapshot any more. ` +
             'Remote environments expire, and a file that was never built cannot be collected.'
-          : `"${artifact.name}" is recorded, but the mission that produced it no longer has a sandbox to read it from.`,
+          : `"${artifact.name}" is recorded, but the task that produced it no longer has a sandbox to read it from.`,
         artifact: { id: artifact.id, name: artifact.name, path: artifact.path },
       });
       return;
@@ -351,7 +351,7 @@ export function createArtifactRoutes({ db, config, secrets, fetchImpl }: Artifac
     if (!run || !canShareRun(run)) {
       res.status(400).json({
         error: 'not_finished',
-        message: 'Only a finished mission\u2019s files can get a public link',
+        message: 'Only a finished task\u2019s files can get a public link',
       });
       return;
     }

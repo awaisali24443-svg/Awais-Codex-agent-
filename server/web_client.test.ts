@@ -141,6 +141,25 @@ describe('every event the server writes is listened to', () => {
       assert.ok(handled.has(name), `the client listens for ${name} but has no case for it`);
     }
   });
+
+  test('no case is left without a listener', () => {
+    // The same bug from the other end. `run.paused` had a handler and a status
+    // the server declares it can emit — `setRunStatus` takes 'paused' and writes
+    // `run.${status}`, and the resume endpoint treats a paused run as
+    // resumable — but nothing subscribed to it, so pausing a task would have
+    // looked exactly like a hang.
+    const fsmod = read('web/app.js');
+    const durable = fsmod.slice(fsmod.indexOf('const durable = ['), fsmod.indexOf('for (const name of durable)'));
+    const listened = new Set([
+      ...[...durable.matchAll(/'([\w.]+)'/g)].map((m) => m[1]),
+      ...[...fsmod.matchAll(/source\.addEventListener\('([\w.]+)'/g)].map((m) => m[1]),
+    ]);
+    const handled = [...fsmod.matchAll(/case '([a-z][\w.]*\.[\w.]+)':/g)].map((m) => m[1]);
+    assert.ok(handled.length >= 15, `the scan found the client's cases (${handled.length})`);
+    for (const name of handled) {
+      assert.ok(listened.has(name), `handleEvent handles ${name} but nothing listens for it`);
+    }
+  });
 });
 
 describe('a sleeping server does not look like a broken app', () => {
@@ -204,6 +223,53 @@ describe('a plan that arrived while the phone was away is recoverable', () => {
     assert.ok(existing.includes("thinkingText: ''"), 'thinking buffer reset');
     assert.ok(existing.includes("answerText: ''"), 'answer buffer reset');
     assert.ok(existing.includes('stepIndex: new Map()'), 'step index reset');
+  });
+});
+
+describe('a task still working survives a look at another chat', () => {
+  test('reopening the chat its card belongs to brings the card back', () => {
+    // The live card is a DOM node, and opening a chat replaces the whole thread
+    // — so walking to another chat and back left the operator with their own
+    // question, no answer arriving, no spinner, "Working…" in the header and a
+    // locked composer. A running task that looks lost is worse than one that
+    // looks stuck: there is nothing to press either.
+    const client = app();
+    assert.ok(client.includes('function liveRun()'), 'there is one definition of "still live"');
+    assert.ok(
+      client.includes('if (message.runId && message.runId === state.runId) ownsLiveRun = true;'),
+      'the thread recognises the run it owns',
+    );
+    assert.ok(client.includes('if (ownsLiveRun) attach(state.runId, 0);'), 'and replays it into a card again');
+    assert.ok(client.includes('if (liveRun()) {'), 'the guard asks whether the run is live, not whether the composer is locked');
+  });
+
+  test('waiting for a plan to be approved counts as live', () => {
+    // A plan waiting for a tap is not "running", but it is not over either: its
+    // card is the only place to approve it.
+    const client = app();
+    assert.ok(client.includes("const LIVE_RUN_STATUSES = ['running', 'awaiting_plan'];"), 'both states are live');
+    assert.ok(/state\.runStatus = 'awaiting_plan';/.test(client), 'a waiting plan is recorded');
+    assert.ok(/state\.runStatus = 'finished';/.test(client), 'and finishing clears it');
+  });
+
+  test('another chat says where the running task is, and offers the way back', () => {
+    const client = app();
+    assert.ok(client.includes('function renderLiveRunElsewhere()'), 'there is a note for it');
+    assert.ok(client.includes('is waiting for your approval'), 'worded for a plan that waits');
+    assert.ok(client.includes('is still running'), 'and for one that works');
+    assert.ok(client.includes("show.textContent = 'Show it'"), 'with a way to reach the card');
+    assert.ok(client.includes('openConversation(owner.id)'), 'which opens the chat that owns the run');
+  });
+
+  test('the card learns which chat owns it from the run itself', () => {
+    // Every path that goes live — first send, retry, resume, plan approval,
+    // recovery — replays `run.started`, so the owner is never guessed.
+    const client = app();
+    const started = client.slice(client.indexOf("case 'run.started'"), client.indexOf("case 'log'"));
+    assert.ok(
+      started.includes("if (typeof data.conversationId === 'string') state.runConversationId = data.conversationId;"),
+      'the owning chat comes from the run, not from wherever the operator happens to be',
+    );
   });
 });
 

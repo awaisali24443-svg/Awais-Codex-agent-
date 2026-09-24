@@ -237,7 +237,7 @@ describe('logo', () => {
 });
 
 /**
- * One word, everywhere.
+ * One word, everywhere — over the whole shipped surface, not a list of files.
  *
  * "Mission" is the word this product used before it was called WAIS: the model
  * is *told* to plan "this mission", names its notes "Mission:", and then echoes
@@ -245,42 +245,95 @@ describe('logo', () => {
  * interface while leaving the wire prompts alone produced exactly that — an
  * answer that talked about missions while the button underneath said task.
  *
- * So the assertions here are on the prompts the model receives and on the copy
- * the operator reads. Internal identifiers (`mission_steps.ts`, `getMissionSteps`)
- * are deliberately left alone: renaming files is churn nobody sees.
+ * The first version of this block listed the files it checked by hand: four
+ * wire prompts, five client files. The server had sixty-odd by then, and
+ * everything the list missed kept saying "mission" where people could read it —
+ * the Settings copy, the download errors, the WhatsApp plan replies, the boot
+ * banners, and the UI design guide the model is handed before it builds a page.
+ * A list maintained by hand is a list that falls behind, so this test walks the
+ * tree instead: every non-test source under `server/` and `web/`, plus the
+ * operator's own CLI, plus the shipped docs the model reads.
+ *
+ * Internal identifiers (`mission_steps.ts`, `getMissionSteps`, the SQL that
+ * selects from the `mission_steps` table) are deliberately left alone: renaming
+ * files and tables is churn nobody reads.
  */
 describe('the product says task, never mission', () => {
-  const WIRE_PROMPTS = [
-    'server/planning.ts',
-    'server/executor.ts',
-    'server/design.ts',
-    'server/engine/antigravity.ts',
+  /** Every non-test file under `dir` whose name matches `exts`. */
+  function shippedSources(dir: string, exts: RegExp): string[] {
+    return fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
+      const rel = path.join(dir, entry.name);
+      if (entry.isDirectory()) return shippedSources(rel, exts);
+      // Tests are allowed to name the old word: they are how anyone finds out
+      // it is gone. They never ship.
+      if (/\.test\.[cm]?ts$/.test(entry.name)) return [];
+      return exts.test(entry.name) ? [rel] : [];
+    });
+  }
+
+  const SCANNED = [
+    ...shippedSources('server', /\.(ts|md)$/),
+    ...shippedSources('web', /\.(js|html|json)$/),
+    'scripts/verify-integrations.ts',
   ];
-  const CLIENT_FILES = ['web/index.html', 'web/app.js', 'web/welcome.js', 'web/panel.js', 'web/timeline.js'];
 
   /**
-   * Every string literal in a file, comments already gone and `${…}`
-   * interpolations removed — the *value* of an interpolation is a variable,
-   * and a variable called `mission` is code, not copy.
+   * Every string in a file, comments already gone and `${…}` interpolations
+   * removed — the *value* of an interpolation is a variable, and a variable
+   * called `mission` is code, not copy. Markdown is prose all the way down, so
+   * a `.md` file is scanned whole.
    */
   function literals(file: string): string[] {
-    const code = stripComments(read(file));
+    const raw = read(file);
+    if (file.endsWith('.md')) return [raw];
+    const code = stripComments(raw);
     return [...code.matchAll(STRING_RE)].map((m) => m[0].slice(1, -1).replace(/\$\{[^}]*\}/g, ''));
   }
 
-  test('no prompt the model receives says mission', () => {
-    for (const file of WIRE_PROMPTS) {
+  /**
+   * Code rather than copy: a bare identifier (`recordMissionStep`), a module
+   * path (`./mission_steps.js`), or a query that names an internal table. None
+   * of these is prose, and a query starts with a SQL verb.
+   */
+  function isInternal(literal: string): boolean {
+    const t = literal.trim();
+    if (/^[A-Za-z_$][\w$.]*$/.test(t)) return true;
+    if (/^\.{1,2}\/[\w./-]+$/.test(t)) return true;
+    return /^(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER)\b/i.test(t);
+  }
+
+  test('nothing a person or the model can read says mission', () => {
+    const offenders: string[] = [];
+    for (const file of SCANNED) {
       for (const literal of literals(file)) {
-        // Identifiers and module paths are code, not copy: `recordMissionStep`,
-        // `verifyMission`, `./mission_steps.js`. Neither reaches a model.
-        if (/^[A-Za-z_$][\w$.]*$/.test(literal.trim())) continue;
-        if (/^\.{1,2}\/[\w./-]+$/.test(literal.trim())) continue;
-        assert.ok(
-          !/mission/i.test(literal),
-          `${file} sends the model the word "mission": ${literal.slice(0, 90)}`,
-        );
+        if (isInternal(literal)) continue;
+        if (/mission/i.test(literal)) {
+          offenders.push(`${file}: ${literal.trim().replace(/\s+/g, ' ').slice(0, 90)}`);
+        }
       }
     }
+    assert.deepEqual(
+      offenders,
+      [],
+      `${offenders.length} file(s) still say "mission" where they can be read:\n${offenders.join('\n')}`,
+    );
+  });
+
+  test('the files that carry the wording are actually in the scan', () => {
+    // A tree walk that silently lists nothing would pass the test above, so
+    // hold a few of the surfaces that have to be covered.
+    for (const file of [
+      'server/runs.ts',
+      'server/settings.ts',
+      'server/whatsapp/approvals.ts',
+      'server/ui-design-guide.md',
+      'server/routes/artifacts.ts',
+      'web/app.js',
+      'scripts/verify-integrations.ts',
+    ]) {
+      assert.ok(SCANNED.includes(file), `${file} should be scanned for wording`);
+    }
+    assert.ok(SCANNED.length > 55, `expected the whole shipped surface, got ${SCANNED.length} files`);
   });
 
   test('the exact sentences that used to say mission now say task', () => {
@@ -292,6 +345,12 @@ describe('the product says task, never mission', () => {
     assert.ok(read('server/executor.ts').includes('Continue the task with these results'));
     assert.ok(read('server/executor.ts').includes('Task:\\n${mission}'));
     assert.ok(read('server/design.ts').includes('this task involves designing'));
+    // The guide the model reads before it builds a page, and the two places the
+    // operator meets the same word: Settings and the WhatsApp plan replies.
+    assert.ok(read('server/ui-design-guide.md').includes('when a task asks you to design'));
+    assert.ok(read('server/settings.ts').includes('Takes effect on the next task'));
+    assert.ok(read('server/whatsapp/approvals.ts').includes('the task is running now'));
+    assert.ok(read('server/mission_steps.ts').includes('RESUMING an interrupted task'));
   });
 
   test('what the operator reads after a failure says task too', () => {
@@ -299,14 +358,6 @@ describe('the product says task, never mission', () => {
     assert.ok(engine.includes('The task was closed so the slot stays free'));
     assert.ok(engine.includes('rate-limited the task'));
     assert.ok(engine.includes('refused the task or hit a limit'));
-  });
-
-  test('the client carries no mission wording at all', () => {
-    for (const file of CLIENT_FILES) {
-      for (const literal of literals(file)) {
-        assert.ok(!/mission/i.test(literal), `${file} shows the operator "mission": ${literal.slice(0, 80)}`);
-      }
-    }
   });
 });
 
