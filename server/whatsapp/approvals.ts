@@ -41,6 +41,9 @@ import {
   type PlanStep,
   type Run,
 } from '../runs.js';
+import { directionById, directionPayload, parseDirectionReply } from '../design/directions.js';
+import { looksLikeUiMission } from '../design.js';
+import { saveRunDirection } from '../runs.js';
 import { markDraftFailed, publishLinkedInDraft } from '../linkedin.js';
 import { WhatsAppClient, type InboundMessage } from './api.js';
 import { WhatsAppSender } from './sender.js';
@@ -251,12 +254,28 @@ export async function maybeAskPlanApproval(
     const shown = steps.slice(0, 12);
     const lines = shown.map((s, i) => `${i + 1}. ${s.label.slice(0, 120)}`);
     if (steps.length > shown.length) lines.push(`…and ${steps.length - shown.length} more`);
+    // A build is the one plan whose look is still open at this moment, and the
+    // owner reading this on a phone cannot open the app to choose it. So the
+    // ask carries the direction: the proposal, its alternates, and a one-tap
+    // way to keep the proposal without choosing anything.
+    const direction = looksLikeUiMission(run.prompt) ? directionPayload(run.prompt) : null;
+    const directionLines = direction
+      ? [
+          '',
+          `🎨 Direction: ${direction.name} — ${direction.blurb}`,
+          ...direction.chips.map((chip, i) => `${i + 1}. ${chip.name} — ${chip.blurb}`),
+        ]
+      : [];
+    const replyLine = direction
+      ? 'Reply YES to approve, NO to reject, CHANGE: <edits>, or 1/2/3 for another direction — or CHOOSE to keep this one.'
+      : 'Reply YES to approve, NO to reject, or CHANGE: <your edits>';
     const message = [
       `📋 Plan ready — "${titleOf(run.prompt)}"`,
       '',
       ...lines,
+      ...directionLines,
       '',
-      'Reply YES to approve, NO to reject, or CHANGE: <your edits>',
+      replyLine,
     ].join('\n');
     return await directSend(deps, message);
   } catch (err) {
@@ -440,6 +459,35 @@ export async function maybeHandleApprovalReply(
   if (!owner || message.from !== owner) return notHandled;
 
   const text = (message.text ?? '').trim();
+  // The direction reply is read before the verdict, and that order is the whole
+  // point: `parseApprovalReply` maps anything that is not yes/no to 'changes',
+  // so a bare "2" would otherwise be appended to the plan as "Operator change:
+  // 2" and the direction would never be chosen.
+  if (approval.kind === 'plan') {
+    const run = await getRun(deps.db, approval.refId);
+    if (run && run.status === 'awaiting_plan' && looksLikeUiMission(run.prompt)) {
+      const payload = directionPayload(run.prompt);
+      const picked = parseDirectionReply(text, payload.chips, payload.id);
+      if (picked) {
+        const id = 'auto' in picked ? payload.id : picked.id;
+        const direction = directionById(id);
+        if (direction) {
+          const saved = await saveRunDirection(deps.db, run.id, direction.id);
+          await emitEvent(deps.db, run.id, 'design.direction', {
+            ...directionPayload(run.prompt, direction.id),
+            chosenBy: 'auto' in picked ? 'auto' : 'operator',
+          });
+          await markProcessed(deps.db, message.id, null).catch(() => undefined);
+          return {
+            handled: true,
+            reply: saved
+              ? `🎨 Direction: ${direction.name} — ${direction.blurb}\nReply YES to approve and I will build it that way.`
+              : 'That task is not waiting for me anymore — nothing to change.',
+          };
+        }
+      }
+    }
+  }
   const verdict = parseApprovalReply(text);
   const label = approval.kind === 'plan' ? 'plan' : 'draft';
 

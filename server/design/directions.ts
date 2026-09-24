@@ -523,6 +523,49 @@ export function directionPayload(
   };
 }
 
+/**
+ * Read the owner's reply to the direction ask: `1`, `2`, `3`, or "choose".
+ *
+ * The ask goes out on WhatsApp (the owner is often on the phone), so the reply
+ * has to survive a phone keyboard — a bare number, a number with punctuation, a
+ * spelled-out name, or "you choose". Anything else returns null so the ordinary
+ * verdict path still sees YES / NO / CHANGE: a parser that guesses would turn
+ * "yes" into a direction.
+ *
+ * @param text       what the owner replied
+ * @param chips      the alternates, in the order they were listed
+ * @param proposedId the direction that was proposed as the default
+ */
+export function parseDirectionReply(
+  text: string,
+  chips: ReadonlyArray<{ id: string; name?: string }>,
+  proposedId?: string | null,
+): { id: DirectionId } | { auto: true } | null {
+  const clean = String(text ?? '').trim().toLowerCase().replace(/[.!?,]+$/, '');
+  if (!clean) return null;
+  if (/^(choose|auto|you choose|you pick|wais choose|let wais choose|whatever you think|up to you)$/.test(clean)) {
+    return { auto: true };
+  }
+  const numbered = /^(?:#|option |direction |number )?(\d)$/.exec(clean);
+  if (numbered) {
+    const pick = chips[Number(numbered[1]) - 1];
+    const direction = pick ? directionById(pick.id) : undefined;
+    return direction ? { id: direction.id } : null;
+  }
+  // A name typed out, with or without a leading verb: "kinetic", "go with
+  // kinetic", "use blueprint". Matched against the ids and names of every
+  // direction, so this cannot be talked into something that does not exist.
+  const words = clean.replace(/^(go with|use|do|pick|choose|make it)\s+/, '');
+  const named = DIRECTIONS.find((d) => d.id === words || d.name.toLowerCase() === words);
+  if (named) return { id: named.id };
+  // "the one you said", "the default" — the proposal, said the long way.
+  if (/^(the )?(one you (said|proposed|suggested)|default|first one)$/.test(clean)) {
+    const proposed = directionById(typeof proposedId === 'string' ? proposedId : undefined);
+    return proposed ? { id: proposed.id } : null;
+  }
+  return null;
+}
+
 /** One line for the plan: what the operator reads before any file exists. */
 export function describeDirection(direction: Direction): string {
   return `${direction.name} — ${direction.blurb}`;

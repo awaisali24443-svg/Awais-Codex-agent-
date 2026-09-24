@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   DIRECTIONS,
   directionPayload,
+  parseDirectionReply,
   briefChoseDirection,
   chipDirections,
   describeDirection,
@@ -199,5 +200,52 @@ describe('the payload tells the truth once somebody has answered', () => {
     assert.equal(directionPayload(brief).why, 'the brief points here');
     assert.equal(directionPayload(brief, 'nothing-like-this').id, 'kinetic');
     assert.equal(directionPayload('make me a nice page').why, 'nothing in the brief pointed anywhere, so this is the default');
+  });
+});
+
+describe('reading the answer off a phone keyboard', () => {
+  const chips = [
+    { id: 'atelier', name: 'Atelier' },
+    { id: 'kinetic', name: 'Kinetic' },
+    { id: 'blueprint', name: 'Blueprint' },
+  ];
+
+  test('a bare number picks the alternate that was listed in that place', () => {
+    assert.deepEqual(parseDirectionReply('1', chips, 'nocturne'), { id: 'atelier' });
+    assert.deepEqual(parseDirectionReply('2', chips, 'nocturne'), { id: 'kinetic' });
+    assert.deepEqual(parseDirectionReply(' 3. ', chips, 'nocturne'), { id: 'blueprint' });
+    assert.deepEqual(parseDirectionReply('option 2', chips, 'nocturne'), { id: 'kinetic' });
+    // A number with no alternate behind it is not a choice.
+    assert.equal(parseDirectionReply('4', chips, 'nocturne'), null);
+  });
+
+  test('"choose" keeps the proposal, however it is typed', () => {
+    // "You choose" is the operator declining to choose; naming the proposal is
+    // a different act, and the record keeps them apart.
+    for (const text of ['choose', 'CHOOSE', 'you choose', 'wais choose', 'let wais choose', 'auto', 'up to you']) {
+      assert.deepEqual(parseDirectionReply(text, chips, 'nocturne'), { auto: true }, text);
+    }
+    assert.deepEqual(parseDirectionReply('the default', chips, 'nocturne'), { id: 'nocturne' }, 'named, not declined');
+    assert.deepEqual(parseDirectionReply('the one you proposed', chips, 'nocturne'), { id: 'nocturne' });
+  });
+
+  test('a direction typed by name is understood, with or without a verb', () => {
+    assert.deepEqual(parseDirectionReply('atelier', chips, 'nocturne'), { id: 'atelier' });
+    assert.deepEqual(parseDirectionReply('go with Blueprint', chips, 'nocturne'), { id: 'blueprint' });
+    assert.deepEqual(parseDirectionReply('use kinetic', chips, 'nocturne'), { id: 'kinetic' });
+  });
+
+  test('yes, no and a change note are left alone', () => {
+    // The reason this parser returns null instead of guessing: "yes" belongs to
+    // the approval, and a change note that happens to contain a number must stay
+    // a change note.
+    for (const text of ['yes', 'no', 'approve', 'change: make the hero bigger', '', '   ', 'make it 2 lines shorter']) {
+      assert.equal(parseDirectionReply(text, chips, 'nocturne'), null, text);
+    }
+  });
+
+  test('a name that is not a direction is not invented', () => {
+    assert.equal(parseDirectionReply('brutalist vaporwave', chips, 'nocturne'), null);
+    assert.equal(parseDirectionReply('2', [], 'nocturne'), null, 'no alternates were offered');
   });
 });

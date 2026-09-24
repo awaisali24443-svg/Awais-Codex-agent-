@@ -31,6 +31,7 @@ import {
   type Run,
 } from '../runs.js';
 import type { SecretName } from '../settings.js';
+import { directionPayload } from '../design/directions.js';
 import { saveCreatorId } from './store.js';
 import { WhatsAppPoller } from './poller.js';
 import type { InboundMessage } from './api.js';
@@ -102,12 +103,15 @@ const STEPS: PlanStep[] = [
   { index: 2, total: 2, label: 'Write the summary' },
 ];
 
-async function makeAwaitingPlan(): Promise<Run> {
-  const run = await createRun(db, { prompt: 'Build the thing', kind: 'chat', engine: 'scripted' });
+async function makeAwaitingPlan(prompt = 'Build the thing'): Promise<Run> {
+  const run = await createRun(db, { prompt, kind: 'chat', engine: 'scripted' });
   await saveRunPlan(db, run.id, STEPS);
   await setRunStatus(db, run.id, 'awaiting_plan');
   return (await getRun(db, run.id)) as Run;
 }
+
+/** A prompt the UI gate recognises, so the plan carries the direction ask. */
+const BUILD_PROMPT = 'Build the landing page for my studio with a hero and a gallery';
 
 async function makeDraft(): Promise<string> {
   const run = await createRun(db, { prompt: 'Post on LinkedIn', kind: 'chat', engine: 'scripted' });
@@ -263,6 +267,105 @@ describe('maybeAskDraftApproval', () => {
     assert.ok(platform.sends[0].includes('📝 LinkedIn draft ready'));
     assert.ok(platform.sends[0].includes('Hello LinkedIn'));
     assert.ok(platform.sends[0].includes('YES to publish'));
+  });
+});
+
+describe('the direction ask travels with the plan', () => {
+  test('a build gets the proposal, its alternates, and a way to say you choose', async (t) => {
+    const platform = await fakePlatform();
+    t.after(() => platform.close());
+    await learnCreator();
+
+    const run = await makeAwaitingPlan(BUILD_PROMPT);
+    const ok = await maybeAskPlanApproval(
+      { db, secrets: secrets(TOKEN), baseUrl: platform.url },
+      run,
+      STEPS,
+    );
+    assert.equal(ok, true);
+    const text = platform.sends[0];
+    assert.ok(/🎨 Direction: \w+ — /.test(text), 'the proposal is named, in full');
+    assert.ok(text.includes('1. '), 'and the alternates are numbered for a phone keyboard');
+    assert.ok(text.includes('CHOOSE to keep this one'), 'including the option not to choose');
+    assert.ok(text.includes('YES to approve'), 'and the ask is still an approval');
+  });
+
+  test('a task that is not a build is not asked about its direction', async (t) => {
+    const platform = await fakePlatform();
+    t.after(() => platform.close());
+    await learnCreator();
+
+    const run = await makeAwaitingPlan();
+    await maybeAskPlanApproval({ db, secrets: secrets(TOKEN), baseUrl: platform.url }, run, STEPS);
+    const text = platform.sends[0];
+    assert.ok(!text.includes('🎨 Direction'), 'no direction block on a task that builds nothing');
+    assert.ok(!text.includes('1/2/3'), 'and no numbered reply to confuse the plan steps');
+  });
+
+  test('a number records the direction and does not become a plan edit', async () => {
+    // The order matters: `parseApprovalReply` maps anything that is not yes/no
+    // to CHANGE, so a bare "2" would otherwise be appended to the plan as
+    // "Operator change: 2" and the direction would never be chosen.
+    await learnCreator();
+    const run = await makeAwaitingPlan(BUILD_PROMPT);
+    await db.query(`INSERT INTO wa_approvals (id, kind, ref_id) VALUES ('wap_dir', 'plan', $1)`, [run.id]);
+    const deps = handleDeps();
+
+    const result = await maybeHandleApprovalReply(deps, inbound('2'));
+    assert.equal(result.handled, true);
+    assert.ok(result.reply.includes('🎨 Direction:'), result.reply);
+    assert.ok(result.reply.includes('Reply YES to approve'), 'the approval is still the operator\'s to give');
+    const updated = await getRun(db, run.id);
+    // Asserted against the payload rather than a hard-coded name: what matters
+    // is that the number picks the alternate *listed second*, in the same list
+    // the message carried.
+    assert.equal(
+      updated?.direction,
+      directionPayload(BUILD_PROMPT).chips[1].id,
+      'the second alternate, in the order it was listed',
+    );
+    assert.equal(updated?.status, 'awaiting_plan', 'and nothing was approved');
+    assert.equal(updated?.plan?.length, STEPS.length, 'and the plan was not edited');
+    const events = await db.query<{ type: string; payload: { chosenBy?: string } }>(
+      `SELECT type, payload FROM run_events WHERE run_id = $1 AND type = 'design.direction'`,
+      [run.id],
+    );
+    assert.equal(events[0]?.payload.chosenBy, 'operator');
+  });
+
+  test('CHOOSE keeps the proposal, and says it was not chosen by hand', async () => {
+    await learnCreator();
+    const run = await makeAwaitingPlan(BUILD_PROMPT);
+    await db.query(`INSERT INTO wa_approvals (id, kind, ref_id) VALUES ('wap_dir2', 'plan', $1)`, [run.id]);
+    const result = await maybeHandleApprovalReply(handleDeps(), inbound('choose'));
+    assert.equal(result.handled, true);
+    const updated = await getRun(db, run.id);
+    assert.ok(updated?.direction, 'the proposal is stored');
+    const events = await db.query<{ payload: { chosenBy?: string } }>(
+      `SELECT payload FROM run_events WHERE run_id = $1 AND type = 'design.direction'`,
+      [run.id],
+    );
+    assert.equal(events[0]?.payload.chosenBy, 'auto');
+  });
+
+  test('a change note that contains a number is still a change note', async () => {
+    await learnCreator();
+    const run = await makeAwaitingPlan(BUILD_PROMPT);
+    await db.query(`INSERT INTO wa_approvals (id, kind, ref_id) VALUES ('wap_dir3', 'plan', $1)`, [run.id]);
+    const result = await maybeHandleApprovalReply(handleDeps(), inbound('change: make it 2 lines shorter'));
+    assert.equal(result.handled, true);
+    assert.equal((await getRun(db, run.id))?.direction, null, 'nothing was chosen');
+    assert.equal((await getRun(db, run.id))?.plan?.length, STEPS.length + 1, 'and the note landed on the plan');
+  });
+
+  test('a number on a task that is not a build is not a direction', async () => {
+    await learnCreator();
+    const run = await makeAwaitingPlan();
+    await db.query(`INSERT INTO wa_approvals (id, kind, ref_id) VALUES ('wap_dir4', 'plan', $1)`, [run.id]);
+    const result = await maybeHandleApprovalReply(handleDeps(), inbound('2'));
+    assert.equal(result.handled, true);
+    assert.equal((await getRun(db, run.id))?.direction, null);
+    assert.ok(!result.reply.includes('🎨 Direction:'), result.reply);
   });
 });
 
