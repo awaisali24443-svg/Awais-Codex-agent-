@@ -993,6 +993,25 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
   color: var(--muted); background: var(--surface-2); border-radius: 6px;
 }
+/* Scheduled tasks outgrew the drawer's collapsible inbox: each task is a card
+   on its own page now, with room for the name, the timing, and the actions. */
+.schedule-card {
+  margin: 0 0 var(--space-3); padding: var(--space-3) 14px;
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm); color: var(--ink-soft); line-height: 1.5;
+}
+.schedule-card-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 2px; color: var(--ink); font-size: var(--text-base);
+}
+.schedule-card .tag {
+  display: inline-block; padding: 1px 8px; flex: none;
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); background: var(--surface-2); border-radius: 6px;
+}
+.schedule-card .tag.on { color: var(--paper); background: var(--ok); }
+.schedule-card-meta { margin-bottom: 2px; }
 .memory-forget {
   margin-top: 10px; padding: 7px 10px; width: 100%;
   font: inherit; font-size: 12.5px; color: var(--danger);

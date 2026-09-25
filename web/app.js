@@ -97,10 +97,11 @@ const el = {
   settingsScreen: $('screen-settings'),
   settingsOpen: $('btn-settings'),
   settingsBack: $('btn-settings-back'),
-  schedules: $('schedules'),
+  schedulesScreen: $('screen-schedules'),
   schedulesTitle: $('schedules-title'),
   schedulesBody: $('schedules-body'),
-  schedulesToggle: $('schedules-toggle'),
+  schedulesOpen: $('btn-schedules'),
+  schedulesBack: $('btn-schedules-back'),
   topbarTitle: $('topbar-title'),
   statusDot: $('status-dot'),
   toast: $('toast'),
@@ -212,6 +213,7 @@ function showLogin() {
   switchScreen(() => {
     el.app.hidden = true;
     el.settingsScreen.hidden = true;
+    el.schedulesScreen.hidden = true;
     el.login.hidden = false;
   });
   el.loginKey.value = '';
@@ -222,6 +224,7 @@ function showApp() {
   switchScreen(() => {
     el.login.hidden = true;
     el.settingsScreen.hidden = true;
+    el.schedulesScreen.hidden = true;
     el.app.hidden = false;
   });
 }
@@ -4668,15 +4671,17 @@ function nextIn(iso) {
 function renderScheduled() {
   const tasks = state.scheduled;
   if (!tasks) return;
-  el.schedules.hidden = false;
-  el.schedulesTitle.textContent = tasks.length ? `Scheduled (${tasks.length})` : 'Scheduled';
+  el.schedulesTitle.textContent = tasks.length ? `Scheduled tasks (${tasks.length})` : 'Scheduled tasks';
 
   const rows = tasks.map((task) => `
-    <div class="memory-item">
-      <span class="tag">${task.enabled ? 'on' : 'off'}</span>
-      <b>${escapeHtml(task.name)}</b> — ${escapeHtml(describeTask(task))}
-      → ${task.kind === 'message' ? 'WhatsApp message 💬' : task.deliver === 'whatsapp' ? 'WhatsApp' : 'here'}
-      <span class="memory-note">${task.enabled ? `next ${nextIn(task.nextRunAt)}` : 'paused'}${task.lastRunAt ? ` · last ${relativeTime(task.lastRunAt)}` : ''}</span>
+    <div class="schedule-card">
+      <div class="schedule-card-head">
+        <span class="tag ${task.enabled ? 'on' : ''}">${task.enabled ? 'on' : 'off'}</span>
+        <b>${escapeHtml(task.name)}</b>
+      </div>
+      <div class="schedule-card-meta">${escapeHtml(describeTask(task))}
+        → ${task.kind === 'message' ? 'WhatsApp message 💬' : task.deliver === 'whatsapp' ? 'WhatsApp' : 'here'}</div>
+      <div class="memory-note">${task.enabled ? `next ${nextIn(task.nextRunAt)}` : 'paused'}${task.lastRunAt ? ` · last ${relativeTime(task.lastRunAt)}` : ''}</div>
       <span class="secret-actions">
         <button data-sch-act="toggle" data-id="${escapeHtml(task.id)}">${task.enabled ? 'Pause' : 'Resume'}</button>
         <button class="danger" data-sch-act="delete" data-id="${escapeHtml(task.id)}">Delete</button>
@@ -4855,7 +4860,6 @@ function bindPanel(toggle, body) {
 }
 
 bindPanel(el.memoryToggle, el.memoryBody);
-bindPanel(el.schedulesToggle, el.schedulesBody);
 
 /* Settings is a page of its own, not a drawer section: it is where the keys,
    the WhatsApp link and the account connections live, and a phone user expects
@@ -4890,6 +4894,36 @@ function closeSettings({ fromHistory = false } = {}) {
   if (!fromHistory) history.back();
 }
 
+/* Scheduled tasks got the same treatment Settings got: the drawer's collapsible
+   inbox was too small to read or manage, so it is a page of its own now, with
+   the same back-arrow and back-gesture behaviour. */
+let schedulesOnHistory = false;
+
+function openScheduled() {
+  closeDrawer();
+  void loadScheduled();
+  switchScreen(() => {
+    el.app.hidden = true;
+    el.schedulesScreen.hidden = false;
+  });
+  el.schedulesScreen.scrollTop = 0;
+  if (!schedulesOnHistory) {
+    schedulesOnHistory = true;
+    history.pushState({ wais: 'schedules' }, '');
+  }
+  requestAnimationFrame(() => el.schedulesBack.focus());
+}
+
+function closeScheduled({ fromHistory = false } = {}) {
+  if (!schedulesOnHistory) return;
+  schedulesOnHistory = false;
+  switchScreen(() => {
+    el.schedulesScreen.hidden = true;
+    el.app.hidden = false;
+  });
+  if (!fromHistory) history.back();
+}
+
 // The filter box is part of the shipped shell, but a phone can still be running
 // the previous shell from the service worker's cache for one load after a
 // deploy. `$()` returns null for an element that is not in the document, and an
@@ -4903,12 +4937,22 @@ if (el.settingsSearch) {
 }
 // Leaving the page clears the filter, so coming back never hides rows behind a
 // search the operator has forgotten about.
+// The drawer row used to clear the filter and stop there — the page never
+// opened, because nothing called openSettings(). It does now.
 el.settingsOpen.addEventListener('click', () => {
   if (el.settingsSearch) el.settingsSearch.value = '';
   state.settingsQuery = '';
+  openSettings();
 });
 el.settingsBack.addEventListener('click', () => closeSettings());
-window.addEventListener('popstate', () => closeSettings({ fromHistory: true }));
+el.schedulesOpen.addEventListener('click', () => {
+  openScheduled();
+});
+el.schedulesBack.addEventListener('click', () => closeScheduled());
+window.addEventListener('popstate', () => {
+  closeSettings({ fromHistory: true });
+  closeScheduled({ fromHistory: true });
+});
 /**
  * The Raw switch on every run card's panel head.
  *

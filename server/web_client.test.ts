@@ -842,12 +842,12 @@ describe('the drawer is a front door, not a form', () => {
   test('the tasks come before the plumbing', () => {
     const htmlText = html();
     const convos = htmlText.indexOf('id="convos"');
-    const schedules = htmlText.indexOf('id="schedules"');
+    const schedulesRow = htmlText.indexOf('id="btn-schedules"');
     const settingsRow = htmlText.indexOf('id="btn-settings"');
-    assert.ok(convos > 0 && schedules > 0 && settingsRow > 0, 'all three exist');
-    // Recent tasks are what the drawer is for; they used to sit under two
-    // collapsed panels and a settings row, below the fold on a phone.
-    assert.ok(convos < schedules, 'tasks above Scheduled');
+    assert.ok(convos > 0 && schedulesRow > 0 && settingsRow > 0, 'all three exist');
+    // Recent tasks are what the drawer is for; the rows below them leave the
+    // drawer instead of expanding inside it.
+    assert.ok(convos < schedulesRow, 'tasks above Scheduled tasks');
     assert.ok(convos < settingsRow, 'and above Settings');
   });
 
@@ -859,6 +859,36 @@ describe('the drawer is a front door, not a form', () => {
     // first thing the eye lands on.
     const body = client.slice(client.indexOf('el.schedulesBody.innerHTML'));
     assert.ok(body.indexOf('rows.join') < body.indexOf('sch-new-toggle'), 'rows first, form after');
+  });
+});
+
+describe('scheduled tasks is a page, not a drawer inbox', () => {
+  test('it is a screen with a back control', () => {
+    const page = html();
+    assert.ok(page.includes('id="screen-schedules"'), 'the schedules screen exists');
+    assert.ok(page.includes('id="btn-schedules-back"'), 'and has a way back');
+    assert.ok(page.includes('id="schedules-body"'), 'the body kept its id, so the panel code is unchanged');
+  });
+
+  test('the drawer links to it rather than expanding in place', () => {
+    const page = html();
+    assert.ok(page.includes('id="btn-schedules"'), 'the drawer has the entry point');
+    assert.ok(!page.includes('schedules-toggle'), 'the old collapsible toggle is gone');
+  });
+
+  test('the drawer row opens the page, and back closes it', () => {
+    const client = app();
+    assert.ok(client.includes('function openScheduled'), 'openScheduled exists');
+    assert.ok(client.includes('function closeScheduled'), 'closeScheduled exists');
+    assert.ok(client.includes("history.pushState({ wais: 'schedules' }"), 'opening pushes one history entry');
+  });
+
+  test('the settings row opens its page too', () => {
+    // The drawer row used to clear the filter and stop there — the settings
+    // page never opened, because nothing called openSettings().
+    const client = app();
+    const fn = client.slice(client.indexOf("el.settingsOpen.addEventListener"), client.indexOf("el.settingsBack.addEventListener"));
+    assert.ok(fn.includes('openSettings()'), 'the click handler calls openSettings()');
   });
 });
 
