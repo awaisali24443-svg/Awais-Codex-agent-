@@ -359,6 +359,43 @@ use, which Devin and Cursor justify only with a local desktop WAIS does not have
 
 ---
 
+## 4c. Round twelve — the queue, shipped
+
+The first item on the remaining list, built. The second ask is no longer refused.
+
+**What changed, in the operator's words:** you send a second task while the first
+is running. It used to answer "another task is already running" and that was
+that — the thought was gone. Now the task is accepted, recorded and parked, and
+it starts by itself the moment the first one finishes. On the phone the reply
+says where it sits in the line; on the web the card says "Next in line" and what
+it is waiting behind, with no spinner and no clock, because nothing is working
+yet.
+
+**What was deliberately kept:** one task at a time. One key, one daily
+allowance, one agent — the guard is unchanged, and it is still the database's
+partial unique index that enforces it rather than any application code.
+
+**Verified live** (scripted engine, a local instance): three asks in a row, the
+first running, the other two parked at positions 1 and 2. The line drained by
+itself, in order, with no operator action. The promoted task's own stream opens
+with `run.queued {started: true, position: 1, waitedMs: 36772}` — the wait is on
+the record, and the run's clock restarted at the moment the work did: asked at
+03:06:11, started at 03:06:47.
+
+**Where the queue lives:** `server/queue.ts` (the pump), `server/migrations/024`
+(`'waiting'` as a status outside the single-active predicate),
+`claimWaitingRun` in `server/runs.ts` (one statement: out of the line, clock
+restarted, slot claimed).
+
+**Also fixed, because it was measuring wrong:** `npm test` reported three
+different totals for one unchanged tree — 1040, 1051, 1037 — every one of them
+"0 fail". The parent process held `--test-force-exit`, so a file's results could
+land after it had already exited. The flag now goes to the child processes that
+need it and the parent waits for the reporter to drain; the suite reports the
+same number every run, and refuses to report at all if it ends without a summary.
+
+---
+
 ## 5. Shipped while this audit was being written
 
 Two things on this list are no longer gaps:
@@ -375,9 +412,9 @@ Two things on this list are no longer gaps:
   read in the browser, carried in the request, shown as thumbnails, capped and
   refused in sentences. The pixels are never written to a row.
 
-Still open from the list: the queue, steering, event triggers, deep links and
-the share sheet, cost at a glance, artifact history, projects, the eval loop,
-and connectors.
+Still open from the list: steering, event triggers, deep links and the share
+sheet, cost at a glance, artifact history, projects, the eval loop, and
+connectors. (The queue is closed — see section 4c.)
 
 ---
 
