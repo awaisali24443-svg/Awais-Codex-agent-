@@ -892,4 +892,30 @@ describe('recovery and cancellation', () => {
       (err: EngineError) => err.errorType === 'idle_timeout',
     );
   });
+
+  test('keepalive drips do not keep a dead stream alive', async () => {
+    // A stalled backend that dribbles keepalives: SSE comments and
+    // content-free status frames, but never a word from the model. The
+    // drips keep the socket open; they must not reset the silence timers.
+    fake = await startFake((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      const timer = setInterval(() => {
+        try {
+          res.write(': keep-alive\n\n');
+          res.write(`data: ${JSON.stringify({ interaction: { id: 'int_drip', status: 'running' } })}\n\n`);
+        } catch {
+          // Socket gone — the watchdog already acted.
+        }
+      }, 50);
+      res.on('close', () => clearInterval(timer));
+      // Never ends on its own — the watchdog must act despite the drips.
+    });
+    const engine = engineFor(fake.base, { idleTimeoutMs: 300 });
+    const { ctx } = makeCtx();
+
+    await assert.rejects(
+      () => engine.run('drip', ctx),
+      (err: EngineError) => err.errorType === 'idle_timeout',
+    );
+  });
 });

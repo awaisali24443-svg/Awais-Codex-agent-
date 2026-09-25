@@ -569,18 +569,22 @@ export class AntigravityEngine implements Engine {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        touch();
-        lastWordAt = Date.now();
         buffer += decoder.decode(value, { stream: true });
 
         const blocks = buffer.split(/\r?\n\r?\n/);
         buffer = blocks.pop() ?? '';
 
+        // Only the model saying something counts as alive. Keepalive
+        // comments, whitespace and content-free status frames keep the
+        // socket open but prove nothing — letting them reset the silence
+        // timers is how a stalled stream once read as "thinking" forever.
+        let live = false;
         for (const block of blocks) {
           const parsed = parseSseBlock(block);
           if (!parsed) continue;
 
           const data = parsed as StreamPayload;
+          if (isLiveFrame(data)) live = true;
 
           if (data.error?.message) {
             throw rateLimitOrUpstream(data.error, interactionId);
@@ -677,6 +681,10 @@ export class AntigravityEngine implements Engine {
               if (typeof value === 'string' && value) emit.thinking(value, 'reasoning');
             }
           }
+        }
+        if (live) {
+          touch();
+          lastWordAt = Date.now();
         }
       }
     } catch (err) {
@@ -892,6 +900,32 @@ export function pickLonger(a: string, b: string): string {
  * comment-only block is ignored, and a payload that is not JSON is dropped
  * rather than thrown — one malformed frame must not kill a running mission.
  */
+/**
+ * Whether a parsed stream frame proves the model is actually producing.
+ * Summaries, thought content, tool calls, deltas with text, and stored
+ * output count. Keepalive comments, whitespace, `[DONE]` and content-free
+ * status frames do not — they keep the socket open while saying nothing,
+ * and must not reset the silence timers, or a stalled stream reads as
+ * "thinking" forever.
+ */
+function isLiveFrame(data: StreamPayload): boolean {
+  if (typeof data.step?.summary === 'string' && data.step.summary) return true;
+  if (data.step?.content) return true;
+  if (Array.isArray(data.step?.tool_calls) && data.step.tool_calls.length > 0) return true;
+  const delta = data.delta;
+  if (delta && typeof delta === 'object') {
+    if (typeof delta.text === 'string' && delta.text) return true;
+    if (delta.content) return true;
+    for (const key of ['reasoning', 'thinking', 'thought', 'reasoning_text']) {
+      const value = delta[key];
+      if (typeof value === 'string' && value) return true;
+    }
+  }
+  if (typeof data.interaction?.output_text === 'string' && data.interaction.output_text) return true;
+  if (Array.isArray(data.interaction?.steps) && data.interaction.steps.length > 0) return true;
+  return false;
+}
+
 export function parseSseBlock(block: string): StreamPayload | null {
   if (!block.trim()) return null;
 
