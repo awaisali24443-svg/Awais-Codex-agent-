@@ -489,7 +489,7 @@ describe('whatsapp intake', () => {
     assert.ok(cancelReply.length > 0);
   });
 
-  it('refuses politely when a task is already running', async () => {
+  it('keeps the second thought in line instead of turning it away', async () => {
     engineScript = SLOW;
     scriptSpeed = 1;
     platform.queueUpdate(updateEnvelope([textMessage('first task')], 1));
@@ -500,8 +500,18 @@ describe('whatsapp intake', () => {
     await poller.pollOnce();
 
     const reply = String((platform.to('/messages').at(-1)?.body?.text as { body?: string })?.body);
-    assert.match(reply, /still on this one/);
-    assert.equal((await listRuns(db, 10)).length, 1, 'the second task must not create a run');
+    // The answer from the phone's point of view: the ask was kept, and it says
+    // where in the line it sits. "Still on this one" was the old refusal — the
+    // thought arrived and left again.
+    assert.match(reply, /On it/);
+    assert.match(reply, /In line/);
+    assert.match(reply, /first task/);
+    const runs = await listRuns(db, 10);
+    assert.equal(runs.length, 2, 'the second task is a task, not a rejection');
+    assert.equal(runs.find((r) => r.prompt.startsWith('second task'))?.status, 'waiting');
+
+    // Nothing ran in parallel: the first task still holds the only slot.
+    assert.equal((await getActiveRun(db))?.prompt.startsWith('first task'), true);
 
     await executor.shutdown();
   });

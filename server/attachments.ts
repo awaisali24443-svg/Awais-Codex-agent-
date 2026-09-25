@@ -265,6 +265,22 @@ export function attachmentSummary(attachments: Attachment[]): string {
 }
 
 /**
+ * The operator's own words, recovered from the text the thread shows.
+ *
+ * The stored prompt is the operator's sentence plus a line naming what they
+ * attached. Anything that has to judge *the request itself* — is this a complex
+ * task? is it a build? — must read the sentence, not the attachment notice, or
+ * a 300 KB paste would make every attachment look like a big task.
+ */
+export function stripAttachmentSummary(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*\p{Extended_Pictographic}\s*(Attached|\d+ images?)/u.test(line))
+    .join('\n')
+    .trim();
+}
+
+/**
  * The prompt the engine reads: the operator's words, then the files.
  *
  * Fenced and labelled, because a model handed raw CSV after a sentence will

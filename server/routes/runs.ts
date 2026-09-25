@@ -50,6 +50,7 @@ import {
   emitEvent,
   finishRun,
   getActiveRun,
+  listWaitingRuns,
   getRun,
   listConversations,
   listMessages,
@@ -163,6 +164,20 @@ function sendAccepted(res: Response, result: AcceptResult, config: AppConfig, br
     run: result.run,
     branchId: branchId ?? null,
     budget: { bucket: result.bucket, remaining: result.remaining, limit: config.dailyRunBudget },
+    // Present only when the task was parked. The operator is told where they
+    // are in the line and what they are waiting behind, because "queued" with
+    // no explanation is indistinguishable from "did not start".
+    ...(result.queue
+      ? {
+          queue: {
+            position: result.queue.position,
+            ahead: {
+              id: result.queue.ahead.id,
+              prompt: result.queue.ahead.prompt.slice(0, 80),
+            },
+          },
+        }
+      : {}),
   });
 }
 
@@ -297,6 +312,23 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
   router.get('/runs/active', async (_req: Request, res: Response) => {
     const run = await getActiveRun(db);
     res.json({ run, streaming: run ? executor.isRunning(run.id) : false });
+  });
+
+  /**
+   * The line, oldest first. Read-only and cheap: the queue lives in the
+   * database, so this is a query, not state that has to be kept in step.
+   */
+  router.get('/runs/queue', async (_req: Request, res: Response) => {
+    const waiting = await listWaitingRuns(db);
+    res.json({
+      waiting: waiting.map((run, i) => ({
+        id: run.id,
+        prompt: run.prompt.slice(0, 120),
+        position: i + 1,
+        conversationId: run.conversationId,
+        askedAt: run.startedAt,
+      })),
+    });
   });
 
   router.get('/runs/:id', async (req: Request, res: Response) => {

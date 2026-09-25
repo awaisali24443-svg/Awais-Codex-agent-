@@ -23,11 +23,14 @@ import { migrate } from './migrate.js';
 import { loadConfig } from './config.js';
 import { EventBus } from './events.js';
 import { RunExecutor } from './executor.js';
+import { pumpQueue } from './queue.js';
 import { ScriptedEngine, type ScriptStep } from './engine/scripted.js';
 import type { Engine, EngineContext, EngineResult } from './engine/types.js';
 
 const SECRET = 'test-session-secret-that-is-definitely-long-enough';
 const PASSWORD = 'runs-access-key-for-tests-1234';
+/** The config the app and the queue pump share. Assigned in `before`. */
+let testConfig: ReturnType<typeof loadConfig>;
 
 /** Instant: a run is over before the test connects, which exercises replay. */
 const INSTANT: ScriptStep[] = [
@@ -88,13 +91,26 @@ before(async () => {
   await migrate(db);
 
   bus = new EventBus();
-  executor = new RunExecutor({ db, bus, engine, snapshotIntervalMs: 25 });
+  // The pump is injected the same way production injects it (see main.ts): the
+  // executor knows when a slot frees, and the acceptance path knows how to
+  // start a task. Wiring it here means the queue tests exercise the real
+  // promotion, not a test-only shortcut.
+  executor = new RunExecutor({
+    db,
+    bus,
+    engine,
+    snapshotIntervalMs: 25,
+    onSlotFree: () => {
+      void pumpQueue({ db, executor, config: testConfig }).catch(() => {});
+    },
+  });
 
-  const config = loadConfig({
+  testConfig = loadConfig({
     NODE_ENV: 'test',
     SESSION_SECRET: SECRET,
     ACCESS_KEY: PASSWORD,
   } as NodeJS.ProcessEnv);
+  const config = testConfig;
 
   const app = createApp({
     config,
@@ -153,6 +169,22 @@ async function api(path: string, init: RequestInit = {}): Promise<ApiResult> {
     body: text ? JSON.parse(text) : null,
     headers: res.headers,
   };
+}
+
+/**
+ * Empty the queue and wait for the slot to free.
+ *
+ * These tests share one database and one active-slot guard, so a task parked by
+ * the previous test is a task that changes what this one measures. Draining
+ * first is what makes each case about its own behaviour.
+ */
+async function drainQueue(): Promise<void> {
+  const { body } = await api('/api/runs/queue');
+  for (const run of body.waiting ?? []) await api(`/api/runs/${run.id}/cancel`, { method: 'POST' });
+  await waitFor(async () => {
+    const active = await api('/api/runs/active');
+    return active.body.run ? null : active;
+  }, 10_000);
 }
 
 async function startRun(prompt: string, kind = 'chat'): Promise<ApiResult> {
@@ -251,6 +283,113 @@ describe('attached files', () => {
       return ['completed', 'failed', 'cancelled'].includes(run.body.run.status) ? run : null;
     });
     assert.equal(finished.body.run.status, 'completed');
+  });
+});
+
+describe('a second ask waits its turn instead of hitting a wall', () => {
+  /** Slow enough that the first task is still running when the second arrives. */
+  const SLOW: ScriptStep[] = [
+    { log: 'starting', delayMs: 10 },
+    { text: 'working… ', delayMs: 400 },
+    { text: 'done', delayMs: 10 },
+  ];
+
+  beforeEach(async () => {
+    // Short: the queue tests wait on real wall-clock transitions, so every
+    // second of script is a second of test.
+    useEngine(new ScriptedEngine({ steps: SLOW, speed: 1 }));
+    await drainQueue();
+  });
+
+  test('the second ask is accepted and parked, not refused', async () => {
+    await drainQueue();
+    const first = await startRun('the first task');
+    assert.equal(first.status, 201);
+    await waitFor(async () => {
+      const run = await api(`/api/runs/${first.body.run.id}`);
+      return run.body.run.status === 'running' ? run : null;
+    });
+
+    const second = await startRun('the second task');
+    assert.equal(second.status, 201, 'not a 409: the ask is taken, it just waits');
+    assert.equal(second.body.run.status, 'waiting');
+    assert.equal(second.body.queue.position, 1);
+    assert.ok(second.body.queue.ahead, 'the run in front of it is named');
+
+    // The slot still belongs to exactly one run.
+    const active = await api('/api/runs/active');
+    assert.equal(active.body.run.id, first.body.run.id);
+  });
+
+  test('when the first finishes, the waiting one starts by itself and completes', async () => {
+    await drainQueue();
+    const first = await startRun('the first task');
+    await waitFor(async () => {
+      const run = await api(`/api/runs/${first.body.run.id}`);
+      return run.body.run.status === 'running' ? run : null;
+    });
+    const second = await startRun('the second task');
+    const secondId = second.body.run.id;
+
+    const finished = await waitFor(async () => {
+      const run = await api(`/api/runs/${secondId}`);
+      return run.body.run.status === 'completed' ? run : null;
+    }, 15_000);
+    assert.equal(finished.body.run.status, 'completed');
+
+    // The stream is the record: a wait that happens silently is a wait the
+    // operator cannot tell apart from a task that never started.
+    const streamed = await readStream(secondId, { after: 0, timeoutMs: 2_000 });
+    const names = streamed.frames.map((f) => f.event);
+    assert.ok(names.includes('run.queued'), 'the wait is announced, not silent');
+    assert.ok(names.includes('run.started'), 'and then it actually started');
+
+    // The first task was not disturbed by any of this.
+    const firstAfter = await api(`/api/runs/${first.body.run.id}`);
+    assert.equal(firstAfter.body.run.status, 'completed');
+  });
+
+  test('the queue is first come, first served', async () => {
+    await drainQueue();
+    const first = await startRun('first');
+    await waitFor(async () => {
+      const run = await api(`/api/runs/${first.body.run.id}`);
+      return run.body.run.status === 'running' ? run : null;
+    });
+    const a = await startRun('queued a');
+    const b = await startRun('queued b');
+    assert.equal(a.body.queue.position, 1);
+    assert.equal(b.body.queue.position, 2, 'the second in line is second');
+
+    const order: string[] = [];
+    await waitFor(async () => {
+      for (const id of [a.body.run.id, b.body.run.id]) {
+        const run = await api(`/api/runs/${id}`);
+        if (run.body.run.status === 'running' && !order.includes(id)) order.push(id);
+      }
+      const finished = await api(`/api/runs/${b.body.run.id}`);
+      return finished.body.run.status === 'completed' ? finished : null;
+    }, 20_000);
+    assert.equal(order[0], a.body.run.id, 'the one that asked first ran first');
+  });
+
+  test('cancelling a waiting task takes it out of the line', async () => {
+    await drainQueue();
+    const first = await startRun('first');
+    await waitFor(async () => {
+      const run = await api(`/api/runs/${first.body.run.id}`);
+      return run.body.run.status === 'running' ? run : null;
+    });
+    const queued = await startRun('never mind');
+    const cancelled = await api(`/api/runs/${queued.body.run.id}/cancel`, { method: 'POST' });
+    assert.equal(cancelled.status, 200);
+    assert.equal(cancelled.body.ok, true);
+    const after = await api(`/api/runs/${queued.body.run.id}`);
+    assert.equal(after.body.run.status, 'cancelled', 'a parked task can be called off');
+
+    const list = await api('/api/runs');
+    const waiting = (list.body.runs ?? []).filter((r: { status: string }) => r.status === 'waiting');
+    assert.deepEqual(waiting, [], 'it is not still in the line');
   });
 });
 
@@ -398,24 +537,32 @@ describe('run lifecycle', () => {
     assert.equal(body.messages[1].content, 'Hello world');
   });
 
-  test('a second mission is refused while one is in flight', async () => {
+  test('a second mission waits its turn while one is in flight', async () => {
     useEngine(new ScriptedEngine({ steps: SLOW, speed: 1 }));
+    await drainQueue();
     const first = await startRun('hold the slot');
     assert.equal(first.status, 201);
 
-    const second = await startRun('should be refused');
-    assert.equal(second.status, 409);
-    assert.equal(second.body.error, 'run_in_progress');
-    assert.equal(second.body.activeRunId, first.body.run.id);
+    const second = await startRun('should be parked');
+    // The ask is taken, not refused: 201 with a place in the line. A refusal
+    // here loses the thought the operator had the moment they had it.
+    assert.equal(second.status, 201);
+    assert.equal(second.body.run.status, 'waiting');
+    assert.equal(second.body.queue.position, 1);
+    assert.equal(second.body.queue.ahead.id, first.body.run.id);
 
     executor.cancel(first.body.run.id);
+    executor.cancel(second.body.run.id);
   });
 
   test('the one-at-a-time rule holds even for simultaneous requests', async () => {
     useEngine(new ScriptedEngine({ steps: SLOW, speed: 1 }));
+    await drainQueue();
 
-    // The route's pre-check is only a nicer error message; the partial unique
-    // index is what actually enforces this, so fire them together.
+    // The route's pre-check is only a nicer message; the partial unique index
+    // is what actually enforces this, so fire them together. With the queue,
+    // one wins the slot outright and the others are parked — never a second
+    // runner, and never a lost ask.
     const results = await Promise.all([
       startRun('race a'),
       startRun('race b'),
@@ -423,14 +570,18 @@ describe('run lifecycle', () => {
     ]);
 
     const created = results.filter((r) => r.status === 201);
-    const refused = results.filter((r) => r.status === 409);
-    assert.equal(created.length, 1, `exactly one run must win, got ${created.length}`);
-    assert.equal(refused.length, 2);
+    const active = created.filter((r) => r.body.run.status !== 'waiting');
+    const parked = created.filter((r) => r.body.run.status === 'waiting');
+    assert.equal(created.length, 3, `every ask is taken, got ${created.length}`);
+    assert.equal(active.length, 1, `exactly one run holds the slot, got ${active.length}`);
+    assert.equal(parked.length, 2, 'the other two are in the line');
 
     const { body } = await api('/api/runs/active');
-    assert.equal(body.run.id, created[0].body.run.id);
-
-    executor.cancel(created[0].body.run.id);
+    assert.equal(body.run.id, active[0].body.run.id);
+    // Every one of them is accounted for, and none is running alongside.
+    const { body: line } = await api('/api/runs/queue');
+    assert.equal(line.waiting.length, 2);
+    for (const r of created) executor.cancel(r.body.run.id);
   });
 
   test('events are numbered from 1 with no gaps', async () => {

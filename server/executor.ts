@@ -161,6 +161,16 @@ export interface ExecutorDeps {
    */
   masterKey?: string;
   secrets?: SecretsStore;
+  /**
+   * Take a parked task out of the line and start it.
+   *
+   * Called when a run settles and the slot is free. Injected rather than
+   * implemented here because starting a task means the whole acceptance path —
+   * budget, planning, approval — and the executor is deliberately the thing
+   * that knows nothing about any of it. Absent in tests that do not care about
+   * the queue.
+   */
+  onSlotFree?: () => void;
 }
 
 /** Longest a planning pass may take before it is aborted. */
@@ -1140,11 +1150,21 @@ export class RunExecutor {
    */
   private afterTerminal(run: Run, outcome: TerminalStatus): void {
     const hook = this.deps.onTerminal;
-    if (!hook) return;
+    if (hook) {
+      try {
+        hook(run, outcome);
+      } catch (err) {
+        console.error(`[executor] onTerminal hook failed for ${run.id}:`, (err as Error).message);
+      }
+    }
+    // The slot is free: whatever is waiting in line gets its turn. Fire and
+    // forget on purpose — the pump belongs to the next task's own path, and a
+    // queued task that somehow fails to start must not fail *this* one after it
+    // has already been recorded.
     try {
-      hook(run, outcome);
+      this.deps.onSlotFree?.();
     } catch (err) {
-      console.error(`[executor] onTerminal hook failed for ${run.id}:`, (err as Error).message);
+      console.error(`[executor] queue pump failed after ${run.id}:`, (err as Error).message);
     }
   }
 

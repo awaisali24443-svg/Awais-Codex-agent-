@@ -39,6 +39,11 @@ export async function recoverOrphanedRuns(
   executor: { start(run: Run): void },
 ): Promise<RecoveryResult> {
   const result: RecoveryResult = { resumed: 0, failed: 0, resumedRunId: null };
+  // 'waiting' is deliberately absent: a parked task is not an orphan. It
+  // never started, so there is nothing to resume and nothing to fail — it is
+  // simply still in line, and the queue's pump will reach it. Failing it here
+  // would throw away the operator's ask on every deploy, which is the worst
+  // possible moment to lose it.
   const orphans = await db.query<OrphanRow>(
     `SELECT r.id, r.status, r.started_at,
             (SELECT COUNT(*)::text FROM mission_steps s

@@ -21,8 +21,9 @@ import {
   createScheduledTask,
   fireDueScheduledTasks,
   getScheduledTask,
+  MAX_SCHEDULES_IN_LINE,
 } from './scheduler.js';
-import { getRun } from './runs.js';
+import { getRun, listWaitingRuns } from './runs.js';
 
 let db: Db;
 let config: AppConfig;
@@ -103,7 +104,7 @@ describe('scheduled task firing', () => {
     assert.equal(iso.slice(11, 16), '04:00'); // 09:00+05:00 in UTC
   });
 
-  test('a task that cannot start is deferred, never dropped', async () => {
+  test('a schedule that fires during a task joins the line instead of missing its time', async () => {
     const task = await createScheduledTask(db, {
       name: 'Busy test',
       prompt: 'do a thing',
@@ -121,13 +122,51 @@ describe('scheduled task firing', () => {
       { db, executor: stubExecutor as never, config },
       () => {},
     );
+    // Fired — and parked. A deferred schedule is a schedule that did not run at
+    // the time it was asked to; the queue is how "not this instant, but yes"
+    // is expressed, and the task keeps its place instead of losing a turn.
+    assert.equal(summary.fired.length, 1);
+    const waited = await listWaitingRuns(db);
+    assert.equal(waited.length, 1, 'the fired task is in the line');
+    assert.equal(waited[0].prompt, 'do a thing');
+    await db.query(`DELETE FROM runs WHERE id = 'run_stuck'`);
+    await db.query(`DELETE FROM runs WHERE id <> 'run_stuck'`);
+  });
+
+  test('but a full line defers rather than piling up a run per tick', async () => {
+    // Ordinary tasks already waiting, from the operator's own asks.
+    for (let i = 0; i < MAX_SCHEDULES_IN_LINE; i += 1) {
+      await db.query(
+        `INSERT INTO runs (id, kind, prompt, status, engine) VALUES ($1, 'chat', $2, 'waiting', 'x')`,
+        [`run_line_${i}`, `already waiting ${i}`],
+      );
+    }
+    await db.query(
+      `INSERT INTO runs (id, kind, prompt, status, engine) VALUES ('run_stuck', 'chat', 'stuck', 'running', 'x')`,
+    );
+    const task = await createScheduledTask(db, {
+      name: 'Monitor',
+      prompt: 'check the thing',
+      cadence: 'interval',
+      intervalMinutes: 5,
+    });
+    await db.query(`UPDATE scheduled_tasks SET next_run_at = now() - interval '1 minute' WHERE id = $1`, [
+      task.id,
+    ]);
+
+    const summary = await fireDueScheduledTasks(
+      { db, executor: stubExecutor as never, config },
+      () => {},
+    );
+
     assert.equal(summary.fired.length, 0);
     assert.equal(summary.deferred.length, 1);
-    assert.equal(summary.deferred[0].reason, 'another task is running');
+    assert.equal(summary.deferred[0].reason, 'the queue is full');
     const after = await getScheduledTask(db, task.id);
     const retryIn = new Date(after!.nextRunAt).getTime() - Date.now();
     assert.ok(retryIn > 0 && retryIn <= 6 * 60_000, 'retries in about five minutes');
-    await db.query(`DELETE FROM runs WHERE id = 'run_stuck'`);
+
+    await db.query(`DELETE FROM runs`);
   });
 });
 

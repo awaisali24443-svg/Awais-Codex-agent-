@@ -19,7 +19,7 @@
  * at it every 15 minutes and due tasks fire even overnight. See DEPLOY.md.
  */
 import type { Db } from './db.js';
-import { newId } from './runs.js';
+import { listWaitingRuns, newId } from './runs.js';
 import { acceptRun, type AcceptDeps } from './accept.js';
 import { WhatsAppClient } from './whatsapp/api.js';
 import { WhatsAppSender } from './whatsapp/sender.js';
@@ -68,6 +68,16 @@ export interface CreateTaskInput {
   /** Defaults to 'task'; 'message' sends the prompt as a WhatsApp note. */
   kind?: TaskKind;
 }
+
+/**
+ * How many scheduled runs may sit in the line before a schedule defers instead.
+ *
+ * A schedule that fires while one task runs joins the queue — it asked to run at
+ * this time and this is how "not this instant, but yes" is expressed. The cap is
+ * about cadence: a monitor firing every five minutes behind a long task would
+ * otherwise queue a run per tick and spend the day's budget waiting for a slot.
+ */
+export const MAX_SCHEDULES_IN_LINE = 2;
 
 export const MAX_TASK_NAME_CHARS = 80;
 export const MAX_TASK_PROMPT_CHARS = 2000;
@@ -564,6 +574,24 @@ export async function fireDueScheduledTasks(
       continue;
     }
     try {
+      // A schedule that fires while another task is running joins the line
+      // rather than waiting for the next tick: the operator asked for it to run
+      // at this time, and the queue is exactly the mechanism for "yes, but not
+      // this instant". The one guard is the length of the line — an every-five-
+      // minutes monitor behind a long task would otherwise queue a run per tick
+      // and spend the day's budget doing it.
+      const inLine = (await listWaitingRuns(db)).length;
+      if (inLine >= MAX_SCHEDULES_IN_LINE) {
+        await deferTask(db, task.id);
+        summary.deferred.push({
+          taskId: task.id,
+          taskName: task.name,
+          reason: 'the queue is full',
+        });
+        log(`[scheduler] deferred "${task.name}" (${inLine} already in line)`);
+        continue;
+      }
+
       const result = await acceptRun(deps, {
         prompt: task.prompt,
         kind: 'api',

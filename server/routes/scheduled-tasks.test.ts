@@ -16,7 +16,7 @@ import { loadConfig, type AppConfig } from '../config.js';
 import { EventBus } from '../events.js';
 import { RunExecutor } from '../executor.js';
 import { ScriptedEngine } from '../engine/scripted.js';
-import { getRun, createRun } from '../runs.js';
+import { getRun, createRun, listWaitingRuns } from '../runs.js';
 
 const SECRET = 'test-session-secret-that-is-definitely-long-enough';
 const ACCESS_KEY = 'sched-access-key-for-tests';
@@ -254,12 +254,12 @@ describe('tick', () => {
     assert.equal(ticked.body.fired.length, 0);
   });
 
-  test('a busy agent defers the task instead of dropping it', async () => {
-    // Park an active run so acceptRun refuses with in_progress.
+  test('a schedule fired during a task keeps its place in the line', async () => {
+    // A task holds the slot, so the schedule cannot start right now.
     await createRun(db, { prompt: 'blocking', kind: 'api', engine: 'scripted' });
 
     const created = await post('/api/scheduled-tasks', {
-      name: 'Deferred',
+      name: 'In line',
       prompt: 'say ok',
       cadence: 'interval',
       intervalMinutes: 60,
@@ -268,16 +268,13 @@ describe('tick', () => {
     await db.query(`UPDATE scheduled_tasks SET next_run_at = now() - interval '1 minute' WHERE id = $1`, [id]);
 
     const ticked = await post('/api/scheduled-tasks/tick', {});
-    assert.equal(ticked.body.fired.length, 0);
-    assert.equal(ticked.body.deferred.length, 1);
-    assert.equal(ticked.body.deferred[0].taskId, id);
-
-    // Retries in minutes, not in a full hour.
-    const rows = await db.query<{ next_run_at: Date }>(
-      `SELECT next_run_at FROM scheduled_tasks WHERE id = $1`,
-      [id],
-    );
-    const retryIn = new Date(rows[0].next_run_at).getTime() - Date.now();
-    assert.ok(retryIn > 0 && retryIn < 10 * 60_000, `retry in ${retryIn}ms`);
+    // Fired, and parked: it counts as having run at its time. Deferring is for
+    // a full line (see the scheduler's own tests), not for an ordinary busy
+    // moment — a schedule deferred often enough never runs at all.
+    assert.equal(ticked.body.fired.length, 1);
+    assert.equal(ticked.body.deferred.length, 0);
+    const waiting = await listWaitingRuns(db);
+    assert.equal(waiting.length, 1);
+    assert.equal(waiting[0].prompt, 'say ok');
   });
 });

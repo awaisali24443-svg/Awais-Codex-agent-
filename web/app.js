@@ -852,6 +852,63 @@ async function ensureLiveRun({ attempts = 2, announce = true } = {}) {
   return false;
 }
 
+/**
+ * Attach to a task that was promoted out of the queue when the slot freed.
+ *
+ * Deliberately quiet: it announces nothing (the task's own card says what it
+ * is), and it does nothing when the browser is already watching a live run.
+ */
+async function adoptNextInLine() {
+  if (liveRun()) return;
+  try {
+    const { run } = await api('/api/runs/active');
+    if (!run) return;
+    // The parked card is keyed by this run id, so the promoted task continues
+    // in its own place in the thread instead of appearing twice.
+    attachLiveRun(run);
+    loadConversations();
+  } catch {
+    // A sleeping instance or a dropped connection: the next foreground check
+    // runs the same recovery. Nothing to report to the operator here.
+  }
+}
+
+/**
+ * A task the server has parked, drawn in the thread as itself.
+ *
+ * It is not the running card, and pretending it is would be the lie that makes
+ * a queue useless: no spinner, no timer, no stream — a name, where it is in the
+ * line, and what it is waiting behind. The card is keyed by run id, so when the
+ * task is eventually promoted the running card replaces it in place rather than
+ * stacking a second copy of the same request.
+ */
+function renderQueuedCard(run, queue) {
+  const card = document.createElement('div');
+  card.className = 'run queued-run';
+  card.dataset.runId = run.id;
+
+  const head = document.createElement('div');
+  head.className = 'queued-head';
+  const chip = document.createElement('span');
+  chip.className = 'queued-chip';
+  chip.textContent =
+    queue.position === 1 ? 'Next in line' : `${queue.position} in line`;
+  const label = document.createElement('span');
+  label.className = 'queued-label';
+  label.textContent = queue.ahead?.prompt
+    ? `Waiting behind “${queue.ahead.prompt}”`
+    : 'Waiting for the task ahead to finish';
+  head.append(chip, label);
+
+  const note = document.createElement('p');
+  note.className = 'queued-note';
+  note.textContent =
+    'It started on its own the moment that one finished — nothing to press.';
+  card.append(head, note);
+  el.thread.append(card);
+  return card;
+}
+
 /** Put a run the server says is live on screen, in its own card. */
 function attachLiveRun(run) {
   state.conversationId = run.conversationId;
@@ -2248,6 +2305,10 @@ function handleEvent(card, event, data) {
     case 'run.completed':
       card.usage = data?.usage ?? null;
       finishCard(card, 'done');
+      // Something may have been waiting for this slot. The server starts it by
+      // itself; the browser has to notice, or the promoted task looks abandoned
+      // until the operator reloads the page.
+      void adoptNextInLine();
       // The agent filed a LinkedIn draft: one tap publishes, nothing auto-posts.
       if (data.linkedInDraft) card.answer.append(linkedInPublishButton(data.linkedInDraft));
       break;
@@ -4029,7 +4090,7 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
   const pending = pendingRunNotice();
 
   try {
-    const { run, budget } = await api('/api/runs', {
+    const { run, budget, queue } = await api('/api/runs', {
       method: 'POST',
       body: JSON.stringify({
         prompt,
@@ -4043,6 +4104,18 @@ async function submitPrompt(prompt, { notifyWhatsapp = false, deepResearch = fal
     });
     state.conversationId = run.conversationId;
     if (budget) note(`${budget.remaining} of ${budget.limit} runs left today`);
+    if (queue) {
+      // Parked. One task at a time is the rule, and the queue is how the second
+      // ask keeps its place instead of being refused. No spinner and no timer:
+      // nothing is working yet, and showing a clock for a task that has not
+      // started is exactly the kind of number this app refuses to print.
+      const ahead = queue.ahead?.prompt ? ` — behind “${queue.ahead.prompt}”` : '';
+      note(`In line${queue.position === 1 ? ' — next' : ` — ${queue.position} waiting`}${ahead}. It starts by itself.`);
+      renderQueuedCard(run, queue);
+      scrollToEnd(true);
+      loadConversations();
+      return;
+    }
     if (run.status === 'awaiting_plan') {
       // The task waits for plan approval — nothing is running yet. The stream
       // replays 'run.plan_ready' and the card renders Approve / Edit.

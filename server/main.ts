@@ -13,6 +13,7 @@ import { migrate } from './migrate.js';
 import { createApp } from './app.js';
 import { EventBus } from './events.js';
 import { RunExecutor } from './executor.js';
+import { pumpQueue } from './queue.js';
 import { ScriptedEngine } from './engine/scripted.js';
 import { AntigravityEngine } from './engine/antigravity.js';
 import type { Engine } from './engine/types.js';
@@ -143,8 +144,23 @@ async function boot(): Promise<void> {
     onTerminal: (run, outcome) => {
       void sendDonePing({ db, secrets }, run, outcome);
     },
+    // The queue's pump: the moment this task's slot frees, the next task in
+    // line starts. Injected because starting a task is the whole acceptance
+    // path, which the executor deliberately knows nothing about.
+    onSlotFree: () => {
+      void pumpQueue({ db, executor, config }).catch((err: Error) => {
+        console.error('[queue] pump failed:', err.message);
+      });
+    },
   });
   console.log(`[boot] engine: ${config.engineName}`);
+
+  // A task can be waiting when the service restarts. The orphan sweep leaves
+  // parked runs exactly where they are, so boot has to move the line itself or
+  // a queue can outlive the process that would have started it.
+  await pumpQueue({ db, executor, config }).catch((err: Error) => {
+    console.error('[queue] boot pump failed:', err.message);
+  });
 
   const recovery = await recoverOrphanedRuns(db, executor);
   orphaned = recovery.resumed + recovery.failed;
@@ -320,6 +336,17 @@ async function boot(): Promise<void> {
   };
   const maintenanceTimer = setInterval(() => void runMaintenance(), 60 * 60_000);
   maintenanceTimer.unref?.();
+
+  // The safety tick. The hook above promotes instantly in the normal case; this
+  // is what keeps the line moving when the normal case did not happen — a
+  // settle path that never fired, a slot freed by a boot sweep, a bug in the
+  // hook. It is cheap: one indexed read that finds nothing, most times.
+  const queueTimer = setInterval(() => {
+    void pumpQueue({ db, executor, config }).catch((err: Error) => {
+      console.error('[queue] safety pump failed:', err.message);
+    });
+  }, 30_000);
+  queueTimer.unref?.();
   console.log('[boot] maintenance: on (hourly retention sweep)');
 
   const server = app.listen(config.port, '0.0.0.0', () => {

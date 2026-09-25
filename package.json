@@ -14,7 +14,7 @@
     "lint": "npm run lint:server && npm run lint:web",
     "lint:server": "tsc --noEmit",
     "lint:web": "tsc --noEmit -p tsconfig.web.json",
-    "test": "node --import tsx --test --test-force-exit server/*.test.ts server/*/*.test.ts",
+    "test": "node --import tsx scripts/test.mjs",
     "verify": "tsx scripts/verify-integrations.ts",
     "db:migrate": "tsx server/migrate-cli.ts",
     "icons": "node scripts/make-icons.mjs"

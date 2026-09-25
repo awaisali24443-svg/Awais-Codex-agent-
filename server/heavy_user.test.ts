@@ -680,9 +680,14 @@ describe('a heavy user walks the app', () => {
       const runId = ((await first.json()) as { run: { id: string } }).run.id;
 
       const second = await accept('and another');
-      assert.equal(second.status, 409, 'the second task is refused while the first is running');
-      const refusal = (await second.json()) as { message: string; activeRunId: string };
-      assert.equal(refusal.activeRunId, runId, 'and the refusal names the task that is in the way');
+      assert.equal(second.status, 201, 'the second ask is taken, not refused');
+      const parked = (await second.json()) as {
+        run: { id: string; status: string };
+        queue: { position: number; ahead: { id: string } };
+      };
+      assert.notEqual(parked.run.id, runId, 'it is its own task, not a second view of the first');
+      assert.equal(parked.run.status, 'waiting', 'parked, because one task at a time still holds');
+      assert.equal(parked.queue.ahead.id, runId, 'and it names the task it is waiting behind');
 
       const active = (await (await fetch(`${slow.base}/api/runs/active`, { headers: { cookie } })).json()) as {
         run: { id: string } | null;

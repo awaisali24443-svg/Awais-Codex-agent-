@@ -67,6 +67,31 @@ describe('the run timer is one clock in three places', () => {
   });
 });
 
+describe('a parked task looks parked', () => {
+  test('the client believes the queue instead of inventing a spinner', () => {
+    const client = app();
+    assert.ok(client.includes('const { run, budget, queue } = await api('), 'the answer carries the queue');
+    assert.ok(client.includes('renderQueuedCard(run, queue)'), 'and the card is drawn from it');
+    assert.ok(client.includes("queue.position === 1 ? 'Next in line'"), 'position, in words');
+    assert.ok(client.includes("Waiting behind “${queue.ahead.prompt}”"), 'and what it waits behind');
+    assert.ok(client.includes('It started on its own the moment that one finished'), 'and that nothing needs pressing');
+    // No spinner, no timer: a parked task is not working, and the card must not
+    // imply that it is while leaving the number at zero.
+    const card = client.slice(client.indexOf('function renderQueuedCard'), client.indexOf('function attachLiveRun'));
+    assert.ok(!card.includes('spinner'), 'no spinner on a parked card');
+    assert.ok(!card.includes('startRunClock'), 'and no clock counting a wait');
+    assert.ok(css().includes('.queued-run'), 'and it is styled as itself, not as a running card');
+  });
+
+  test('the queue keeps its place when the task in front finishes', () => {
+    const client = app();
+    assert.ok(client.includes('void adoptNextInLine();'), 'a finished task checks for the next in line');
+    assert.ok(client.includes('async function adoptNextInLine()'));
+    assert.ok(client.includes('if (liveRun()) return;'), 'and never fights the run already on screen');
+    assert.ok(client.includes('if (!run) return;'), 'nothing to adopt is not an error');
+  });
+});
+
 describe('a picture in the composer', () => {
   test('the picker offers images, and the client carries them as base64', () => {
     assert.ok(html().includes('image/*'), 'the file picker offers pictures');

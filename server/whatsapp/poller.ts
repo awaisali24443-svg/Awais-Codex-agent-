@@ -632,9 +632,17 @@ export class WhatsAppPoller {
     // for it, and nothing depends on the platform's buffer any more.
     await this.deps.sender.markRead(message.id, { typing: true });
 
+    // A task that had to wait its turn says so. The operator who sent the second
+    // thought the moment they had it needs to know it was kept — "On it" while
+    // something else is still running would be a small lie about the order of
+    // things, and the order is the whole feature.
+    const line = result.queue
+      ? `\n\n📥 In line${result.queue.position === 1 ? ' — next' : ` — ${result.queue.position} waiting`}` +
+        `, behind "${truncate(result.queue.ahead.prompt, 90)}". It starts by itself.`
+      : '';
     const ack = fresh
-      ? `🆕 On it — "${truncate(result.run.prompt, 140)}"\n\nFresh sandbox: this task starts with no memory of earlier ones. I will reply here when it is done.`
-      : `On it — "${truncate(result.run.prompt, 140)}"\n\nI will reply here when it is done. (${result.remaining} tasks left today)`;
+      ? `🆕 On it — "${truncate(result.run.prompt, 140)}"\n\nFresh sandbox: this task starts with no memory of earlier ones. I will reply here when it is done.${line}`
+      : `On it — "${truncate(result.run.prompt, 140)}"\n\nI will reply here when it is done. (${result.remaining} tasks left today)${line}`;
     // Deliberately not marked processed here: "done" means the user has been
     // told the *outcome*, and that only happens when the relay sends the
     // closing message. Marking it on the acknowledgement would quietly lose

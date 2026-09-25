@@ -23,6 +23,13 @@ import { parseVerification, type VerificationCheck } from './mission_verify.js';
 export type RunKind = 'chat' | 'whatsapp' | 'api';
 export type RunStatus =
   | 'queued'
+  /**
+   * Accepted, recorded, charged — parked behind the task that holds the slot.
+   *
+   * Deliberately *not* part of the single-active predicate: any number of tasks
+   * may wait, exactly one may run. See 024_run_queue.sql.
+   */
+  | 'waiting'
   /** The planning pass is drafting the plan; nothing runs until it lands. */
   | 'planning'
   | 'running'
@@ -221,6 +228,67 @@ export async function getActiveRun(db: Db): Promise<Run | null> {
   return rows[0] ? mapRun(rows[0]) : null;
 }
 
+/**
+ * Tasks parked behind the one that holds the slot, oldest first.
+ *
+ * The order is the promise the queue makes: the operator queued them in this
+ * order, so they run in this order.
+ */
+export async function listWaitingRuns(db: Db): Promise<Run[]> {
+  const rows = await db.query<RunRow>(
+    `SELECT ${RUN_COLUMNS} FROM runs WHERE status = 'waiting' ORDER BY started_at ASC, id ASC`,
+  );
+  return rows.map(mapRun);
+}
+
+/**
+ * Where a parked task sits in the line: 1 means it is next.
+ *
+ * Counted from the row rather than remembered in memory, because a queue that
+ * only exists in one process's head is a queue that loses its place on restart.
+ */
+export async function waitingPosition(db: Db, id: string): Promise<number> {
+  const rows = await db.query<{ position: string }>(
+    `SELECT COUNT(*)::text AS position
+       FROM runs
+      WHERE status = 'waiting'
+        AND (started_at, id) <= (SELECT started_at, id FROM runs WHERE id = $1)`,
+    [id],
+  );
+  return Number(rows[0]?.position ?? 1) || 1;
+}
+
+/**
+ * Take a parked task out of the line and claim the slot for it.
+ *
+ * One statement, because it is doing three things that must not be separable:
+ *
+ *   1. **Claim.** `AND status = 'waiting'` means exactly one caller can ever
+ *      win, even if two pumps run at the same instant — the loser updates zero
+ *      rows and is told so. A read-then-write would let both callers believe
+ *      they had claimed the same task and start it twice.
+ *   2. **Leave the line.** The status moves to 'queued', which is the state the
+ *      single-active partial index covers — so if some other task already holds
+ *      the slot, this update is refused by the database, not by this code.
+ *   3. **Restart the clock.** `started_at` becomes now, so the run timer reports
+ *      work rather than waiting: a task that queued for eight minutes and ran
+ *      for two took two minutes. The queue order was already decided by the
+ *      value this replaces.
+ *
+ * Returns false when the task was not in the line any more (cancelled, or
+ * already promoted by someone else).
+ */
+export async function claimWaitingRun(db: Db, id: string): Promise<boolean> {
+  const rows = await db.query<{ id: string }>(
+    `UPDATE runs
+        SET status = 'queued', started_at = now()
+      WHERE id = $1 AND status = 'waiting'
+      RETURNING id`,
+    [id],
+  );
+  return rows.length > 0;
+}
+
 export async function getRun(db: Db, id: string): Promise<Run | null> {
   const rows = await db.query<RunRow>(`SELECT ${RUN_COLUMNS} FROM runs WHERE id = $1`, [id]);
   return rows[0] ? mapRun(rows[0]) : null;
@@ -323,6 +391,11 @@ export interface CreateRunInput {
   enginePrompt?: string | null;
   /** Pictures attached to this task. Never stored; see `Run.images`. */
   images?: ImageAttachment[] | null;
+  /**
+   * True when a task already holds the slot: this one is inserted as 'waiting'
+   * instead of 'queued', so it never contends for the single-active index.
+   */
+  queued?: boolean;
 }
 
 /**
@@ -365,12 +438,13 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
         `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine,
                            previous_interaction_id, environment_id, notify_whatsapp,
                            deep_research, research_budget_minutes)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           id,
           conversationId,
           kind,
           prompt,
+          input.queued ? 'waiting' : 'queued',
           input.engine,
           continuation?.interactionId ?? null,
           continuation?.environmentId ?? null,

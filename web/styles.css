@@ -474,6 +474,28 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   .thinking-head .phase { display: none; }
 }
 
+/* ------------------------------------------------- a task waiting its turn ---
+   Deliberately the quietest card on the thread: no spinner, no clock, no
+   progress bar. Nothing is working yet, and a card that looks busy while it
+   waits is the one thing a queue must never do. What it does say is where it
+   is in the line and what it is waiting behind. */
+
+.queued-run {
+  border: 1px dashed var(--line); border-radius: var(--radius-sm);
+  padding: 10px 12px; background: color-mix(in srgb, var(--surface-2) 40%, var(--surface));
+}
+.queued-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.queued-chip {
+  flex: none; padding: 1px 7px; border-radius: var(--radius-xs);
+  font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line);
+}
+.queued-label {
+  flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.queued-note { margin: 6px 0 0; font-size: var(--text-xs); color: var(--muted); }
+
 /* ------------------------------------- choosing the direction of a build ---
    The ask sits inside the plan card, above Approve, because that is the last
    moment a direction can be chosen without rewriting anything. It is part of

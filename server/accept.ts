@@ -36,7 +36,17 @@ import {
   type ImageAttachment,
 } from './attachments.js';
 import { maybeAskPlanApproval } from './whatsapp/approvals.js';
-import { RunConflictError, createRun, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
+import {
+  RunConflictError,
+  createRun,
+  getActiveRun,
+  getRun,
+  saveRunPlan,
+  setRunStatus,
+  waitingPosition,
+  type Run,
+  type RunKind,
+} from './runs.js';
 
 export const BUCKET_FOR_KIND: Record<RunKind, BudgetBucket> = {
   chat: 'web',
@@ -97,6 +107,12 @@ export type AcceptResult =
        * await it so an assertion can be made about the outcome.
        */
       planning?: Promise<void>;
+      /**
+       * Set when the task was parked rather than started. `ahead` is the task
+       * holding the slot, so the operator is told what they are waiting behind
+       * instead of being told to try later.
+       */
+      queue?: { position: number; ahead: Run };
     }
   | { ok: false; reason: 'in_progress'; active: Run }
   | {
@@ -182,6 +198,41 @@ export function budgetResetsAt(now = Date.now()): string {
 }
 
 /**
+ * Hand an accepted run to the executor, or start its planning pass.
+ *
+ * Shared by the two ways a run can become the active one: it was accepted into
+ * an empty slot, or it was promoted out of the queue when the task in front of
+ * it settled. The decision — plan first, or start — must be the same in both
+ * paths, or a promoted task would quietly skip the approval step the operator
+ * gets on every other complex ask.
+ */
+export async function launchRun(
+  deps: AcceptDeps,
+  run: Run,
+  /**
+   * Whether this task earns a planning pass. Passed in rather than derived
+   * here, because the run's `prompt` is the *wire* text — the operator's
+   * sentence with file contents and an attachment notice folded in — and
+   * "is this a complex task?" must be asked of the sentence, not the files.
+   */
+  planFirst = false,
+): Promise<void> {
+  const { db, executor } = deps;
+  if (planFirst) {
+    // A promoted task is already 'running' (it is what holds the slot); the
+    // planning pass turns it into the visible 'planning' state the client
+    // already knows how to draw.
+    await setRunStatus(db, run.id, 'planning');
+    await executor.announce(run.id, 'run.plan_started', {});
+    const held = await getRun(db, run.id);
+    void draftPlan(deps, { ...(held ?? run), images: run.images });
+    console.log(`[run] ${run.id} planning pass started in the background`);
+    return;
+  }
+  executor.start(run);
+}
+
+/**
  * Take a task and start it, or explain why it did not start.
  *
  * Never throws for the two ordinary refusals — in-progress and out-of-budget —
@@ -195,10 +246,11 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
 
   const bucket = BUCKET_FOR_KIND[input.kind];
 
-  // Optimisation for a readable message — the partial unique index is what
-  // actually prevents two tasks from running at once.
+  // One task holds the single-active slot; everything else waits in line. The
+  // partial unique index is what actually enforces it — this read is for the
+  // answer, not for the guard.
   const active = await getActiveRun(db);
-  if (active) return { ok: false, reason: 'in_progress', active };
+  const parked = active !== null;
 
   const attachments = input.attachments ?? [];
   const images = input.images ?? [];
@@ -206,6 +258,10 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
   let run: Run;
   try {
     run = await createRun(db, {
+      // A second ask is parked, not refused: the status is decided here, at the
+      // insert, so the row exists in the line from the moment the operator
+      // presses send and the single-active guard never has to be argued with.
+      queued: parked,
       // The thread shows the operator's words plus a line naming the files; the
       // engine gets the words plus the files themselves.
       prompt: prompt + attachmentSummary(attachments) + imageSummary(images),
@@ -222,29 +278,59 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       conversationTitle: input.conversationTitle ?? null,
     });
   } catch (err) {
-    if (err instanceof RunConflictError) {
-      const winner = await getActiveRun(db);
-      // The row we lost to may not be readable a millisecond later; fall back
-      // to a stub so the caller can still name the task in flight.
-      return {
-        ok: false,
-        reason: 'in_progress',
-        active:
-          winner ??
-          ({
-            id: err.activeRunId ?? 'unknown',
-            prompt: 'Another task',
-          } as Run),
-      };
+    if (!(err instanceof RunConflictError)) throw err;
+    // Between our read and our insert, another request took the slot — the
+    // race the partial unique index exists to catch. The ask is not refused for
+    // being a millisecond late: it is parked, exactly as a task that arrived a
+    // second later would have been. (The insert is transactional, so the failed
+    // attempt left nothing behind but the conflict.)
+    try {
+      run = await createRun(db, {
+        prompt: prompt + attachmentSummary(attachments) + imageSummary(images),
+        enginePrompt: withImageNote(withAttachments(prompt, attachments), images),
+        images,
+        kind: input.kind,
+        engine: config.engineName,
+        conversationId: input.conversationId ?? null,
+        branchId: input.branchId ?? null,
+        fresh: input.fresh ?? false,
+        notifyWhatsapp: input.notifyWhatsapp ?? false,
+        deepResearch: input.deepResearch === true,
+        researchBudgetMinutes: input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
+        conversationTitle: input.conversationTitle ?? null,
+        queued: true,
+      });
+    } catch (retryErr) {
+      if (retryErr instanceof RunConflictError) {
+        const winner = await getActiveRun(db);
+        return {
+          ok: false,
+          reason: 'in_progress',
+          active: winner ?? ({ id: err.activeRunId ?? 'unknown', prompt: 'Another task' } as Run),
+        };
+      }
+      throw retryErr;
     }
-    throw err;
   }
 
   // Spend only once the run exists. A refused task is closed immediately, so
-  // the engine never sees the prompt and the day is not charged.
+  // the engine never sees the prompt and the day is not charged. A parked task
+  // is charged like any other: it is a real task that will run today, and
+  // discovering the day's limit at promotion time — after the operator has
+  // walked away — would be a worse moment to find out.
   try {
     const used = await consumeRunBudget(db, bucket, config.dailyRunBudget);
     const remaining = Math.max(0, config.dailyRunBudget - used);
+
+    // Parked behind the task that holds the slot. Nothing else happens here:
+    // the executor pumps the line when that task settles, which is the only
+    // place that knows the slot is free.
+    if (run.status === 'waiting') {
+      const position = await waitingPosition(db, run.id);
+      const ahead = active ?? (await getActiveRun(db));
+      console.log(`[queue] ${run.id} waiting (position ${position}, ${remaining} left today)`);
+      return { ok: true, run, remaining, bucket, queue: { position, ahead: ahead ?? run } };
+    }
 
     // Complex web missions pause for plan approval. One short planning pass
     // asks the engine for its step-by-step plan; the run then waits in
@@ -271,7 +357,7 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
       return { ok: true, run: held ?? run, remaining, bucket, planning };
     }
 
-    executor.start(run);
+    await launchRun(deps, run, input.kind === 'chat' && looksComplex(prompt));
     // `run.prompt` now holds the wire prompt, file contents and all. Nothing
     // outside this process should ever see that, so the caller gets the row.
     run = (await getRun(db, run.id)) ?? run;
