@@ -92,6 +92,56 @@ describe('a parked task looks parked', () => {
   });
 });
 
+describe('correcting a task while it runs', () => {
+  test('the composer asks which it means before it sends', () => {
+    // A running task is the one state where the text is ambiguous: a new ask,
+    // or a correction to the thing in flight? The chip is how the operator
+    // answers, and it exists only while there is something to correct.
+    assert.ok(html().includes('id="btn-steer"'), 'the chip is in the composer');
+    assert.ok(html().includes('aria-pressed="false"'), 'and starts off');
+    const client = app();
+    assert.ok(client.includes('function refreshSteerChip()'), 'it knows when it applies');
+    assert.ok(client.includes('const live = state.running && !!state.runId;'), 'only while a task runs');
+    assert.ok(client.includes("state.steerArmed ? 'Correcting the task' : 'Correct this task'"), 'and says which mode it is in');
+    assert.ok(client.includes('function setSteerArmed(on)'), 'on and off are one state, set in one place');
+  });
+
+  test('a running task still offers the send button', () => {
+    // The bug this guards: hiding send while a task ran left the operator with
+    // a text field and no way to use it — neither a correction nor a second ask.
+    const client = app();
+    assert.ok(client.includes('el.send.hidden = micHasSlot;'), 'send keeps the corner while typing');
+    assert.ok(client.includes('refreshSteerChip();'), 'and the chip comes and goes with the run');
+    assert.ok(!client.includes('el.send.disabled = state.running'), 'and is not switched off by running');
+    assert.ok(!client.includes('if (!prompt || state.running) return;'), 'the submit path no longer refuses to send');
+  });
+
+  test('the chip decides, and the correction goes to the live run', () => {
+    const client = app();
+    assert.ok(client.includes('if (state.running && state.steerArmed && state.runId)'), 'armed: the chip routes the submit');
+    assert.ok(client.includes('`/api/runs/${state.runId}/steer`'), 'to the steer route');
+    assert.ok(
+      client.includes("note('Correcting the task — it keeps what it has done so far.')"),
+      'and says what that means before the answer moves',
+    );
+    // Off, the same submit is a new ask, which the server parks in the line.
+    assert.ok(client.includes('renderQueuedCard(run, queue)'), 'unarmed: the ask takes its place in the line');
+  });
+
+  test('the correction is drawn on the card it corrected', () => {
+    const client = app();
+    assert.ok(client.includes("case 'run.steered':"), 'the event has a place in the trace');
+    assert.ok(client.includes('markSteered(card, data.note, data.count)'), 'drawn on the task it changed');
+    assert.ok(
+      client.includes("count && count > 1 ? `You corrected this task (${count})` : 'You corrected this task'"),
+      'labelled as the operator\'s own correction',
+    );
+    assert.ok(client.includes("'run.steered',"), 'durable, so a reload replays it');
+    assert.ok(css().includes('.steer-mark'), 'styled as a mark on the task, not as a chat bubble');
+    assert.ok(!client.includes('renderAsk(noteText)'), 'and never as a second copy of the ask in the thread');
+  });
+});
+
 describe('a picture in the composer', () => {
   test('the picker offers images, and the client carries them as base64', () => {
     assert.ok(html().includes('image/*'), 'the file picker offers pictures');
@@ -416,7 +466,10 @@ describe('the composer is one card, like every chat app that got this right', ()
     assert.ok(client.includes('function setupStopButton()'), 'the stop button moves into the composer');
     assert.ok(client.includes('function updateTrailingAction()'), 'and the slot is managed in one place');
     assert.ok(client.includes('const micHasSlot = micUsable && !typing && !state.running;'), 'the mic holds the slot only while there is nothing to send');
-    assert.ok(client.includes('el.send.hidden = state.running || micHasSlot;'), 'so typing brings the send button out, where it used to vanish');
+    assert.ok(
+      client.includes('el.send.hidden = micHasSlot;'),
+      'so typing brings the send button out, where it used to vanish — including on a running task, where it is the only way to correct it or queue the next ask',
+    );
     // The old line hid the button *because* the operator was typing. It was
     // covered by a test that asserted the same wrong sentence, which is how a
     // missing send button survived a round of its own bug fixes.

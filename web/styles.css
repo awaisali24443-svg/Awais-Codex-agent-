@@ -496,6 +496,35 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .queued-note { margin: 6px 0 0; font-size: var(--text-xs); color: var(--muted); }
 
+/* ------------------------------------------------ correcting a live task ---
+   The chip is a mode, so it looks like one: quiet until it is on, accented when
+   it is. The mark on the card uses the same colour, so the two read as one act
+   — a correction made mid-flight, in the task's own trace. */
+.steer-chip {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  min-height: 30px; padding: 0 9px; border-radius: var(--radius-pill);
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink-soft); font-size: var(--text-xs); cursor: pointer;
+}
+.steer-chip svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.steer-chip.armed {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.send.steering { background: var(--accent); }
+
+.steer-mark {
+  margin: 8px 0; padding: 7px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 70%, var(--line));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.steer-mark-head {
+  display: block; font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.steer-mark-note { margin: 3px 0 0; font-size: var(--text-sm); color: var(--ink); }
+
 /* ------------------------------------- choosing the direction of a build ---
    The ask sits inside the plan card, above Approve, because that is the last
    moment a direction can be chosen without rewriting anything. It is part of

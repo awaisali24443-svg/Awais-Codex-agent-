@@ -220,6 +220,16 @@ try {
           <span id="mode-label">Standard</span>
           <svg class="mode-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
+        <!-- While a task is running, "send" needs a meaning: it is either a new
+             ask that takes its place in the line, or a correction to the task in
+             flight. One tap says which, before the send button is pressed — a
+             composer cannot guess, and guessing wrong throws away work. -->
+        <button type="button" class="steer-chip" id="btn-steer" hidden
+                aria-pressed="false" aria-label="Correct the task that is running"
+                title="Correct the task that is running — it keeps its work">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h16M4 6h10M4 12h13"/><circle cx="18" cy="12" r="2"/></svg>
+          <span id="steer-label">Correct this task</span>
+        </button>
         <span class="composer-gap"></span>
         <button type="submit" class="send" id="btn-send" aria-label="Send" disabled>
           <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>

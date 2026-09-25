@@ -537,6 +537,10 @@ export class AntigravityEngine implements Engine {
   ): Promise<EngineResult> {
     let interactionId: string | undefined;
     let environmentId: string | undefined;
+    // What has already been handed to the executor, so the hook fires on the
+    // change rather than on every frame of a stream that mentions the ids.
+    let announcedInteraction: string | undefined;
+    let announcedEnvironment: string | undefined;
     let streamed = '';
     let authoritative = '';
     let tokensIn: number | undefined;
@@ -600,6 +604,18 @@ export class AntigravityEngine implements Engine {
 
           if (data.interaction?.id) interactionId = data.interaction.id;
           if (data.interaction?.environment_id) environmentId = data.interaction.environment_id;
+          // Both ids are on the wire within the first seconds of a task, and
+          // they are what make the sandbox resumable. Handing them over here —
+          // not only with the final result — is what lets a steer or a crash
+          // mid-task continue in the same workspace rather than a new one.
+          if (
+            (interactionId && interactionId !== announcedInteraction) ||
+            (environmentId && environmentId !== announcedEnvironment)
+          ) {
+            announcedInteraction = interactionId;
+            announcedEnvironment = environmentId;
+            ctx.continuation?.({ interactionId, environmentId });
+          }
           if (data.interaction?.status === 'completed') sawTerminal = true;
           if (data.status === 'completed') sawTerminal = true;
 

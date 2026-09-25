@@ -128,6 +128,8 @@ const el = {
   modeChip: $('btn-mode'),
   modeLabel: $('mode-label'),
   modeTray: $('composer-tray'),
+  steerChip: $('btn-steer'),
+  steerLabel: $('steer-label'),
   modeClose: $('mode-close'),
   modeStandard: $('mode-standard'),
   modeResearch: $('mode-research'),
@@ -137,6 +139,10 @@ const state = {
   conversationId: null,
   branchId: null,
   runId: null,
+  // Whether the composer's next message corrects the running task (`true`) or
+  // starts a new one that takes its place in the line (`false`). Only meaningful
+  // while something is running, and cleared whenever nothing is.
+  steerArmed: false,
   // Which chat the live run belongs to. The header says "Working…" while a run
   // is in flight, and the operator is free to open another chat to read
   // something while it works — knowing whose run this is keeps the two linked.
@@ -907,6 +913,32 @@ function renderQueuedCard(run, queue) {
   card.append(head, note);
   el.thread.append(card);
   return card;
+}
+
+/**
+ * Draw a correction on the card of the task it corrected.
+ *
+ * It is not a chat bubble: the operator said it *to the task*, mid-flight, and
+ * the card is where the task lives. Amber and marked "You corrected this task",
+ * so a reader of the finished answer can see why it changed direction.
+ */
+function markSteered(card, noteText, count) {
+  if (!card || !noteText) return;
+  const block = document.createElement('div');
+  block.className = 'steer-mark';
+  const head = document.createElement('span');
+  head.className = 'steer-mark-head';
+  head.textContent = count && count > 1 ? `You corrected this task (${count})` : 'You corrected this task';
+  const body = document.createElement('p');
+  body.className = 'steer-mark-note';
+  body.textContent = noteText;
+  block.append(head, body);
+  // Above the answer and above the steps that follow it: the correction is
+  // read before what it changed.
+  const answer = card.querySelector('.answer, .run-answer');
+  if (answer && answer.parentElement === card) card.insertBefore(block, answer);
+  else card.append(block);
+  return block;
 }
 
 /** Put a run the server says is live on screen, in its own card. */
@@ -2211,6 +2243,12 @@ function handleEvent(card, event, data) {
       break;
     }
 
+    case 'run.steered':
+      // Where the correction landed, not somewhere else on the page: the card
+      // is the task, and a steer is an event in its life like any other.
+      markSteered(card, data.note, data.count);
+      break;
+
     case 'run.environment':
       if (data.environmentId) {
         // What the operator needs to know is whether the agent kept its
@@ -3470,6 +3508,9 @@ function attach(runId, after = 0) {
   const durable = [
     'run.started', 'log', 'tool.call', 'tool.result',
     'thinking.snapshot', 'text.snapshot', 'run.environment',
+    // A correction is part of what the task was told, so a reload replays it
+    // into the trace where it happened.
+    'run.steered',
     // A decision is part of what the task did, so a reconnect replays it onto
     // the trace instead of losing the reason behind steps already on screen.
     'decision',
@@ -3599,7 +3640,11 @@ function setRunning(on) {
   el.topbarTitle.textContent = on
     ? (state.runStatus === 'planning' ? 'Planning…' : 'Working…')
     : (state.conversations.find((c) => c.id === state.conversationId)?.title ?? 'WAIS');
-  el.send.disabled = on || !el.prompt.value.trim();
+  // Send stays live while a task runs: a second ask is allowed — it takes its
+  // place in the line — and a correction is allowed too. Hiding the button was
+  // hiding both.
+  el.send.disabled = !el.prompt.value.trim();
+  refreshSteerChip();
   // While a task runs the trailing control is Stop — in the composer's own
   // corner, where the thumb already is, rather than only in the top bar.
   el.stop.hidden = !on;
@@ -3625,7 +3670,7 @@ el.stop.addEventListener('click', async () => {
 
 el.prompt.addEventListener('input', () => {
   autoGrow();
-  el.send.disabled = state.running || !el.prompt.value.trim();
+  el.send.disabled = !el.prompt.value.trim();
   updateTrailingAction();
 });
 
@@ -3717,6 +3762,80 @@ function setupStopButton() {
   if (el.stop.parentElement !== el.send.parentElement) el.send.after(el.stop);
 }
 
+/**
+ * The steer affordance, and the rule that makes it honest.
+ *
+ * A running task is the one state where the composer can mean two things, so
+ * the operator says which: off, the text is a new ask and takes its place in
+ * the line; on, the text is a correction to the task in flight. The chip exists
+ * only while something is running, and it clears itself the moment nothing is —
+ * a mode that cannot apply to the current state is a trap.
+ */
+function refreshSteerChip() {
+  const live = state.running && !!state.runId;
+  el.steerChip.hidden = !live;
+  if (!live) setSteerArmed(false);
+  el.steerChip.setAttribute('aria-pressed', state.steerArmed ? 'true' : 'false');
+  el.steerChip.classList.toggle('armed', state.steerArmed);
+  el.steerLabel.textContent = state.steerArmed ? 'Correcting the task' : 'Correct this task';
+  el.send.classList.toggle('steering', state.steerArmed);
+  el.send.setAttribute(
+    'aria-label',
+    state.steerArmed ? 'Send this correction to the running task' : 'Send',
+  );
+}
+
+function setSteerArmed(on) {
+  if (state.steerArmed === on) return;
+  state.steerArmed = on;
+  if (el.steerChip) {
+    el.steerChip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    el.steerChip.classList.toggle('armed', on);
+    el.steerLabel.textContent = on ? 'Correcting the task' : 'Correct this task';
+    el.send.classList.toggle('steering', on);
+  }
+}
+
+el.steerChip.addEventListener('click', () => {
+  const on = !state.steerArmed;
+  setSteerArmed(on);
+  note(
+    on
+      ? 'The next message corrects the running task — it keeps its work and its sandbox.'
+      : '',
+  );
+});
+
+/**
+ * Send a correction to the task in flight.
+ *
+ * Deliberately not a new run: the server stops the pass that is running and
+ * starts a fresh one inside the same run, with the same sandbox, the same
+ * answer so far and the same charge against the day's budget.
+ */
+async function steerLiveRun(noteText) {
+  el.prompt.value = '';
+  autoGrow();
+  el.send.disabled = true;
+  updateTrailingAction();
+  setSteerArmed(false);
+  // No second bubble and no optimistic mark: the correction belongs *in* the
+  // card of the task it corrected, and the server announces exactly one
+  // `run.steered` for it. Two drawings of one correction is the kind of thing
+  // that makes a trace untrustworthy.
+  scrollToEnd(true);
+  try {
+    await api(`/api/runs/${state.runId}/steer`, {
+      method: 'POST',
+      body: JSON.stringify({ note: noteText }),
+    });
+    note('Correcting the task — it keeps what it has done so far.');
+  } catch (err) {
+    note('');
+    toast(err.message || 'Could not correct the task.');
+  }
+}
+
 function setupVoiceInput() {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -3756,8 +3875,10 @@ function updateTrailingAction() {
   const micHasSlot = micUsable && !typing && !state.running;
   if (el.mic) el.mic.hidden = !micHasSlot;
   // The bug this line was: `|| typing` hid the send button exactly when it was
-  // needed, so a typed task had no visible way out of the field.
-  el.send.hidden = state.running || micHasSlot;
+  // needed, so a typed task had no visible way out of the field. A running task
+  // is no different — stop and send share the corner, because "say something
+  // about this task" and "stop it" are both live choices.
+  el.send.hidden = micHasSlot;
 }
 
 /** Per-answer Listen/Stop button for assistant messages. */
@@ -4034,7 +4155,13 @@ el.fileInput.addEventListener('change', async () => {
 el.composer.addEventListener('submit', async (event) => {
   event.preventDefault();
   const prompt = el.prompt.value.trim();
-  if (!prompt || state.running) return;
+  if (!prompt) return;
+  // While a task runs, the chip decides what the text means. Both answers are
+  // real: a new ask joins the line, a correction goes to the task in flight.
+  if (state.running && state.steerArmed && state.runId) {
+    await steerLiveRun(prompt);
+    return;
+  }
   const notifyWhatsapp = el.pingCheck.checked;
   // Read before the reset below clears the picker.
   const deepResearch = el.researchCheck.checked;

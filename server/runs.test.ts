@@ -25,7 +25,7 @@ import { EventBus } from './events.js';
 import { RunExecutor } from './executor.js';
 import { pumpQueue } from './queue.js';
 import { ScriptedEngine, type ScriptStep } from './engine/scripted.js';
-import type { Engine, EngineContext, EngineResult } from './engine/types.js';
+import { EngineAbortedError, type Engine, type EngineContext, type EngineResult } from './engine/types.js';
 
 const SECRET = 'test-session-secret-that-is-definitely-long-enough';
 const PASSWORD = 'runs-access-key-for-tests-1234';
@@ -390,6 +390,213 @@ describe('a second ask waits its turn instead of hitting a wall', () => {
     const list = await api('/api/runs');
     const waiting = (list.body.runs ?? []).filter((r: { status: string }) => r.status === 'waiting');
     assert.deepEqual(waiting, [], 'it is not still in the line');
+  });
+});
+
+describe('steering a live task', () => {
+  /**
+   * An engine that records every prompt it is handed and takes its time, so a
+   * steer has something live to interrupt.
+   */
+  class SteeringEngine implements Engine {
+    readonly name = 'steering-test';
+    readonly prompts: string[] = [];
+    /** What each pass was handed to continue from — the sandbox proof. */
+    readonly handed: { interactionId: string | null; environmentId: string | null }[] = [];
+    private release: (() => void) | null = null;
+    private stopped = 0;
+
+    /**
+     * Every pass waits to be released or aborted, which is what makes these
+     * tests deterministic: nothing finishes because it was fast, only because
+     * the test said so or because a stop arrived.
+     */
+    async run(prompt: string, ctx: EngineContext): Promise<EngineResult> {
+      this.prompts.push(prompt);
+      const mine = this.prompts.length;
+      this.handed.push({
+        interactionId: ctx.previousInteractionId ?? null,
+        environmentId: ctx.environmentId ?? null,
+      });
+      // The real engine announces its handles mid-stream; this one does too,
+      // which is what makes the executor's continuation seam testable here.
+      ctx.continuation?.({ interactionId: `int_${mine}`, environmentId: `env_${mine}` });
+      ctx.text(`pass ${mine} starting. `);
+      await new Promise<void>((resolve) => {
+        this.release = resolve;
+        ctx.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      this.release = null;
+      if (ctx.signal.aborted) {
+        this.stopped += 1;
+        throw new EngineAbortedError();
+      }
+      ctx.text(`pass ${mine} done. `);
+      return { text: `pass ${mine} done. `, interactionId: `int_${mine}`, environmentId: `env_${mine}` } as EngineResult;
+    }
+
+    /** Let the pass in flight finish normally. */
+    finish(): void {
+      this.release?.();
+    }
+
+    get stoppedCount(): number {
+      return this.stopped;
+    }
+
+    get passCount(): number {
+      return this.prompts.length;
+    }
+  }
+
+  test('a steered pass resumes the sandbox the first pass opened', async () => {
+    // The handles are announced seconds into a task, so a steer must use the
+    // ones the stopped pass learned — not the ones the run started with.
+    await drainQueue();
+    const engine = new SteeringEngine();
+    useEngine(engine);
+
+    const started = await startRun('build it in the wrong folder');
+    const runId = started.body.run.id;
+    await waitFor(async () => (engine.passCount >= 1 ? true : null));
+    await api(`/api/runs/${runId}/steer`, { method: 'POST', body: JSON.stringify({ note: 'use apps/web' }) });
+    await waitFor(async () => (engine.passCount >= 2 ? true : null));
+
+    // The run started with no sandbox, so the first pass got nothing. The
+    // second was handed the handles the first announced mid-stream — which is
+    // the whole point of steering instead of starting over.
+    assert.deepEqual(engine.handed[0], { interactionId: null, environmentId: null });
+    assert.deepEqual(engine.handed[1], { interactionId: 'int_1', environmentId: 'env_1' });
+    // And the live handle is on the record, so a crash mid-steer can reattach.
+    const row = await api(`/api/runs/${runId}`);
+    assert.equal(row.body.run.interactionId, 'int_2');
+    assert.equal(row.body.run.environmentId, 'env_2');
+    engine.finish();
+    await waitFor(async () => {
+      const run = await api(`/api/runs/${runId}`);
+      return ['completed', 'failed', 'cancelled'].includes(run.body.run.status) ? run : null;
+    }, 10_000);
+  });
+
+  test('a note stops the pass and continues the same task with it', async () => {
+    await drainQueue();
+    const engine = new SteeringEngine();
+    useEngine(engine);
+
+    const started = await startRun('build the thing in the wrong folder');
+    const runId = started.body.run.id;
+    await waitFor(async () => (engine.passCount >= 1 ? true : null));
+
+    const steered = await api(`/api/runs/${runId}/steer`, {
+      method: 'POST',
+      body: JSON.stringify({ note: 'wrong folder — use apps/web instead' }),
+    });
+    assert.equal(steered.status, 200, JSON.stringify(steered.body));
+    await waitFor(async () => (engine.passCount >= 2 ? true : null), 8_000);
+    engine.finish();
+
+    const finished = await waitFor(async () => {
+      const run = await api(`/api/runs/${runId}`);
+      return ['completed', 'failed', 'cancelled'].includes(run.body.run.status) ? run : null;
+    }, 10_000);
+
+    // The task finished rather than being cancelled or restarted.
+    assert.equal(finished.body.run.status, 'completed');
+    assert.equal(engine.passCount, 2, 'a second pass ran');
+    assert.equal(engine.stoppedCount, 1, 'and the first one was stopped, not left running');
+
+    // The note reached the model, phrased as a correction that wins.
+    const second = engine.prompts[1];
+    assert.ok(second.includes('wrong folder — use apps/web instead'), 'the note is on the wire');
+    assert.ok(/steered this task/i.test(second), 'and is labelled as a steer');
+    assert.ok(/newer than the request/i.test(second), 'with the note winning over the original ask');
+    assert.ok(second.includes('build the thing in the wrong folder'), 'the original request still rides along');
+
+    // The operator can see it happened, where it happened.
+    const events = await api(`/api/runs/${runId}`);
+    const steeredEvents = (events.body.events as { type: string; payload: { note?: string } }[]).filter(
+      (e) => e.type === 'run.steered',
+    );
+    assert.equal(steeredEvents.length, 1);
+    assert.equal(steeredEvents[0].payload.note, 'wrong folder — use apps/web instead');
+
+    // Same run, one answer: what the first pass produced is still there, which
+    // is what makes this a correction rather than a restart. The final snapshot
+    // is the record the operator reads.
+    const finals = (events.body.events as { type: string; payload: { text?: string; final?: boolean } }[]).filter(
+      (e) => e.type === 'text.snapshot' && e.payload.final,
+    );
+    assert.equal(finals.length, 1, 'the answer is closed exactly once');
+    const answer = finals[0].payload.text ?? '';
+    assert.ok(answer.includes('pass 1 starting'), `the first pass is still in the answer: ${JSON.stringify(answer)}`);
+    assert.ok(answer.includes('pass 2 done'), 'and the second joined it');
+    useEngine(new ScriptedEngine({ steps: INSTANT, speed: 0 }));
+  });
+
+  test('cancelling during a steer is still a cancel', async () => {
+    await drainQueue();
+    const engine = new SteeringEngine();
+    useEngine(engine);
+    const started = await startRun('stop me mid-flight');
+    const runId = started.body.run.id;
+    await waitFor(async () => (engine.passCount >= 1 ? true : null));
+
+    // Stop arrives while the steered pass is live: the stop wins, and the task
+    // does not come back to life with one more pass.
+    await api(`/api/runs/${runId}/steer`, {
+      method: 'POST',
+      body: JSON.stringify({ note: 'actually, do something else' }),
+    });
+    await waitFor(async () => (engine.passCount >= 2 ? true : null), 8_000);
+    await api(`/api/runs/${runId}/cancel`, { method: 'POST' });
+
+    const finished = await waitFor(async () => {
+      const run = await api(`/api/runs/${runId}`);
+      return ['completed', 'failed', 'cancelled'].includes(run.body.run.status) ? run : null;
+    }, 10_000);
+    assert.equal(finished.body.run.status, 'cancelled');
+    assert.equal(engine.passCount, 2, 'nothing continued after the stop');
+    assert.equal(engine.stoppedCount, 2, 'both live passes were stopped');
+    useEngine(new ScriptedEngine({ steps: INSTANT, speed: 0 }));
+  });
+
+  test('refusals are sentences: nothing running, no note, or a note that is a brief', async () => {
+    await drainQueue();
+    const started = await startRun('finished before you steer it');
+    const runId = started.body.run.id;
+    await waitFor(async () => {
+      const run = await api(`/api/runs/${runId}`);
+      return ['completed', 'failed', 'cancelled'].includes(run.body.run.status) ? run : null;
+    });
+
+    const gone = await api(`/api/runs/${runId}/steer`, {
+      method: 'POST',
+      body: JSON.stringify({ note: 'too late' }),
+    });
+    assert.equal(gone.status, 409);
+    assert.match(gone.body.message, /follow-up message/i);
+
+    assert.equal((await api('/api/runs/run_nope/steer', { method: 'POST', body: JSON.stringify({ note: 'x' }) })).status, 404);
+
+    // A task that is genuinely mid-pass, so the validation cases are tested
+    // against a live run rather than against whatever happened to be running.
+    const liveEngine = new SteeringEngine();
+    useEngine(liveEngine);
+    const live = await startRun('steer me');
+    const liveId = live.body.run.id;
+    await waitFor(async () => (liveEngine.passCount >= 1 ? true : null));
+
+    const empty = await api(`/api/runs/${liveId}/steer`, { method: 'POST', body: JSON.stringify({ note: '   ' }) });
+    assert.equal(empty.status, 400);
+    assert.match(empty.body.message, /what to change/i);
+    const essay = await api(`/api/runs/${liveId}/steer`, {
+      method: 'POST',
+      body: JSON.stringify({ note: 'x'.repeat(601) }),
+    });
+    assert.equal(essay.status, 400);
+    assert.match(essay.body.message, /under 600 characters/i);
+    await api(`/api/runs/${liveId}/cancel`, { method: 'POST' });
+    useEngine(new ScriptedEngine({ steps: INSTANT, speed: 0 }));
   });
 });
 

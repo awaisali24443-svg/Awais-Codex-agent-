@@ -350,7 +350,8 @@ same clock in the top bar and the tab (`6720649`), and pictures in the composer
   and send to someone. Everything else improves the middle. That is the item I
   would argue hardest for after the queue.
 
-**Next three, in order:** the queue (1) → steering (2) → deploy a built page to a
+**Next three, in order:** the queue (1, shipped — section 4c) → steering (2, shipped
+— section 4d) → deploy a built page to a
 live URL (6).
 
 **Still deliberately out:** teams, seats, SSO, org analytics, audit exports, a
@@ -396,6 +397,59 @@ same number every run, and refuses to report at all if it ends without a summary
 
 ---
 
+## 4d. Round thirteen — steering a live task, shipped
+
+The second item on the remaining list. Until now a task in flight had exactly two
+fates: let it finish, or kill it and start over. Deviations had no expression —
+the operator watched a task go the wrong way and had the choice of waiting for a
+wrong answer or losing the work already done.
+
+**What a steer is, precisely:** the same run, continuing. The pass in flight is
+stopped, a new pass starts inside the same run, with the same sandbox, the same
+answer so far, the same trace and the same charge against the day's allowance.
+The note rides on the wire only — the stored prompt stays exactly what the
+operator wrote — and it is labelled as newer than the original request, with an
+explicit instruction to keep what is already done rather than begin again.
+
+**Why the sandbox survives.** A steer only works if the second pass inherits the
+first one's handles, and those are announced seconds into a task, not at the end
+of it. The engine now hands `{interactionId, environmentId}` to the executor the
+moment it learns them (`EngineContext.continuation`), the executor keeps them in
+memory for the next pass and on the row for a crash, and the pass after a steer
+is handed the *live* pair rather than the null the run started with. Without
+that seam a "steer" would quietly become a second task in someone else's
+workspace.
+
+**What the operator sees.** A chip in the composer appears while a task runs:
+off, the text is a new ask and takes its place in the line (round twelve); on,
+the same text corrects the task in flight. That is the one state where the
+composer is genuinely ambiguous, so the operator says which — the composer never
+guesses, because guessing wrong is how work gets thrown away. On the card, the
+correction is drawn where it happened, above whatever it changed, marked "You
+corrected this task" with the second one counted.
+
+**Verified live** (scripted engine, a local instance, task slowed 10x):
+
+* one ask, steered 4 seconds in — `run.steered {note, count: 1}` lands between
+  the thinking snapshots, the run stays `running` on the same id, and it
+  completes 20 seconds later with one final answer;
+* two steers on one run — counts 1 then 2, in order, on one card;
+* a second ask sent while that run was live — parked as `waiting` at position 1,
+  promoted by itself after the steered task finished, and completed; queue and
+  steering coexist;
+* a steer against a finished run answers 409 with a sentence ("That task is not
+  running any more. Send a follow-up message instead."), not a silent no-op;
+* stop beats steer: a cancel after a steer clears the pending note, and the pass
+  that was live stays stopped (`server/runs.test.ts`, "cancelling during a steer
+  is still a cancel").
+
+**Where it lives:** `Executor.steer()` / `takeSteerNotes()` (a steer is
+abort-with-a-note; a stop clears the notes on its way out, so a stop always
+wins), the pass loop in `execute()`, `steerPreamble()` on the wire,
+`POST /runs/:id/steer`, and `refreshSteerChip()` / `markSteered()` on the client.
+
+---
+
 ## 5. Shipped while this audit was being written
 
 Two things on this list are no longer gaps:
@@ -412,7 +466,7 @@ Two things on this list are no longer gaps:
   read in the browser, carried in the request, shown as thumbnails, capped and
   refused in sentences. The pixels are never written to a row.
 
-Still open from the list: steering, event triggers, deep links and the share
+Still open from the list: event triggers, deep links and the share
 sheet, cost at a glance, artifact history, projects, the eval loop, and
 connectors. (The queue is closed — see section 4c.)
 

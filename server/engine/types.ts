@@ -60,6 +60,17 @@ export interface EngineContext {
    * engine) should not have to stub one out.
    */
   artifact?(path: string): void;
+
+  /**
+   * The handles for this sandbox, the moment the engine learns them.
+   *
+   * They arrive mid-stream, long before the pass returns — and knowing them at
+   * the start rather than at the end is the difference between a task that can
+   * be steered or recovered mid-flight and one that has to be restarted from
+   * scratch. Optional, like `artifact` above: the executor takes them when the
+   * engine offers them and behaves exactly as before when it does not.
+   */
+  continuation?(handles: { interactionId?: string; environmentId?: string }): void;
 }
 
 export type LogLevel = 'info' | 'warn' | 'error';

@@ -176,6 +176,15 @@ export interface ExecutorDeps {
 /** Longest a planning pass may take before it is aborted. */
 const PLAN_TIMEOUT_MS = 60_000;
 
+/**
+ * How much of a steering note reaches the model.
+ *
+ * The note is a correction, not a second brief: "use the other folder", "stop
+ * styling it, it is a data bug". Long enough for a real sentence with a path in
+ * it, short enough that a pasted essay cannot become the task.
+ */
+export const MAX_STEER_NOTE_CHARS = 600;
+
 /** One thing the planning pass wants the world to know, as it happens. */
 export interface PlanPassEvent {
   type: 'plan.milestone' | 'log';
@@ -291,8 +300,32 @@ class FieldBuffer {
   }
 }
 
+/**
+ * What a steered pass is told.
+ *
+ * The task is mid-flight and the operator has corrected it. The instruction has
+ * to do three things at once: win the argument with the original request, keep
+ * the work already done, and leave no doubt about which of the two is newer.
+ */
+function steerPreamble(notes: readonly string[]): string {
+  const list = notes.map((note, i) => `${i + 1}. ${note}`).join('\n');
+  return (
+    `[The operator steered this task while it was running. The note below is newer ` +
+    `than the request at the top, and wins wherever the two disagree. Continue the ` +
+    `work you had already started — do not begin again from nothing — and bring it ` +
+    `into line with this:]\n${list}`
+  );
+}
+
 export class RunExecutor {
   private readonly active = new Map<string, AbortController>();
+  /**
+   * Notes the operator sent to a live task, waiting for the pass to stop.
+   *
+   * Kept beside the controller because they are the same mechanism: a steer is
+   * an abort that is *not* a cancel, and the difference lives here.
+   */
+  private readonly steerNotes = new Map<string, string[]>();
   /** One durable writer per run, so announcements are numbered in order. */
   private readonly writers = new Map<string, DurableWriter>();
   private readonly snapshotIntervalMs: number;
@@ -343,8 +376,41 @@ export class RunExecutor {
   cancel(runId: string): boolean {
     const controller = this.active.get(runId);
     if (!controller) return false;
+    // A cancel outranks a steer: whatever notes were pending are dropped, so a
+    // task that is being stopped cannot come back to life with one more pass.
+    this.steerNotes.delete(runId);
     controller.abort();
     return true;
+  }
+
+  /**
+   * Steer a live task: "no, the other folder."
+   *
+   * The task keeps its run, its sandbox, its place in the day's budget and its
+   * answer so far — the current engine pass is stopped and a new one starts in
+   * the same workspace with the note appended. That is deliberately not what
+   * cancel-then-retry does: cancelling throws the pass away and a retry is a
+   * *new* task, a new charge, and a fresh sandbox with no memory of the work.
+   *
+   * @returns true when the note was taken (a live run exists for this id).
+   */
+  steer(runId: string, note: string): boolean {
+    const controller = this.active.get(runId);
+    if (!controller) return false;
+    const trimmed = note.trim();
+    if (!trimmed) return false;
+    const notes = this.steerNotes.get(runId) ?? [];
+    notes.push(trimmed.slice(0, MAX_STEER_NOTE_CHARS));
+    this.steerNotes.set(runId, notes);
+    controller.abort();
+    return true;
+  }
+
+  /** Notes waiting to be handed to a pass, and consumed by it. */
+  private takeSteerNotes(runId: string): string[] {
+    const notes = this.steerNotes.get(runId) ?? [];
+    this.steerNotes.delete(runId);
+    return notes;
   }
 
   /**
@@ -462,8 +528,20 @@ export class RunExecutor {
 
   private async execute(run: Run): Promise<void> {
     const { bus, engine } = this.deps;
-    const controller = new AbortController();
+    let controller = new AbortController();
     this.active.set(run.id, controller);
+
+    /**
+     * The sandbox handles, kept current from the moment the engine learns them.
+     *
+     * A steered pass has to continue in the *same* workspace, and the pass that
+     * learned the handles may be the one the operator just stopped — so they are
+     * mirrored here rather than only read from the run row.
+     */
+    const handles: { previousInteractionId: string | null; environmentId: string | null } = {
+      previousInteractionId: run.previousInteractionId,
+      environmentId: run.environmentId,
+    };
 
     /* Where this run has looked, as it looks: deduped, bounded, and durable so
        a reconnect rebuilds the same rail. Kept next to the writer because it
@@ -547,11 +625,24 @@ export class RunExecutor {
       // exact text rather than by pattern.
       const saidWhy: string[] = [];
 
-      const ctx: EngineContext = {
+      // A factory, not a literal: a steered pass needs a *live* signal, and the
+      // callbacks close over the same writer and buffers, so the second pass
+      // appends to the same answer and the same trace instead of starting a new
+      // document.
+      const makeCtx = (): EngineContext => ({
         runId: run.id,
         signal: controller.signal,
-        previousInteractionId: run.previousInteractionId,
-        environmentId: run.environmentId,
+        previousInteractionId: handles.previousInteractionId,
+        environmentId: handles.environmentId,
+        // The engine says which sandbox it got as soon as it knows, which is
+        // seconds into the task rather than at the end of it. Persisting that
+        // immediately is what makes a steer — or a crash — mid-task continue in
+        // the same workspace.
+        continuation: (announced) => {
+          if (announced.interactionId) handles.previousInteractionId = announced.interactionId;
+          if (announced.environmentId) handles.environmentId = announced.environmentId;
+          void this.persistContinuation(run.id, handles.previousInteractionId, handles.environmentId);
+        },
         // Pictures the operator attached. In memory only — a run resumed after a
         // restart has none, which is the same fate the folded-in file text has.
         images: run.images,
@@ -634,9 +725,20 @@ export class RunExecutor {
               console.warn(`[executor] artifact record failed for ${run.id}:`, err.message);
             });
         },
-      };
+      });
 
-      let result;
+      let result: EngineResult | null = null;
+      // Passes of one task. Normally one; more when the operator steered it —
+      // a steer stops the pass and continues the task, in this run, in this
+      // sandbox, with the note appended.
+      let steers = 0;
+      /** Every note this task was steered with, in order. */
+      const steerLog: string[] = [];
+      for (;;) {
+        // Built per pass: a steered pass needs a live signal, and the callbacks
+        // close over the same writer and buffers, so the second pass appends to
+        // the same answer and the same trace instead of starting a new one.
+        const ctx = makeCtx();
       try {
         // The planning contract rides on the wire only: the stored prompt
         // stays exactly what the operator wrote, and simple questions never
@@ -694,12 +796,23 @@ export class RunExecutor {
             ),
             googleConnected,
           );
+        // A pass after a steer carries the note. Wire-only: the stored prompt
+        // stays the operator's original words, and the note itself is announced
+        // on the run's own stream so the card can show it where it happened.
+        const steered = steers > 0 ? `${mission}\n\n${steerPreamble(steerLog)}` : mission;
+        // The pass resumes the *current* handles, not the ones the run started
+        // with — that is what keeps a steered task in the same sandbox.
+        const passRun = {
+          ...run,
+          previousInteractionId: handles.previousInteractionId,
+          environmentId: handles.environmentId,
+        };
         result =
           run.deepResearch && (run.researchBudgetMinutes ?? 0) > 0
-            ? await this.runDeepResearch(run, mission, ctx, controller, writer, text, thinking, saidWhy)
+            ? await this.runDeepResearch(passRun, steered, ctx, controller, writer, text, thinking, saidWhy)
             : await this.runWithGoogleReads(
-                run,
-                mission,
+                passRun,
+                steered,
                 ctx,
                 controller,
                 writer,
@@ -708,6 +821,12 @@ export class RunExecutor {
                 googleConnected,
                 saidWhy,
               );
+      } catch (err) {
+        // A stop is not a failure. The engine reports the abort as an error
+        // because that is how a fetch dies, so it is caught here and the loop
+        // below decides what it means: a steer continues the task, a cancel
+        // settles it, and anything else is a real error and keeps travelling.
+        if (!(err instanceof EngineAbortedError) && !controller.signal.aborted) throw err;
       } finally {
         // Runs even on failure: whatever the engine produced is still worth
         // keeping, and the closing event must not overtake it.
@@ -718,7 +837,38 @@ export class RunExecutor {
 
       // A cancelled run is cancelled even if the engine returned normally.
       if (controller.signal.aborted) {
-        await this.settle(run, 'cancelled', text.text, null, null);
+        // Aborted with notes waiting means the operator steered the task;
+        // aborted with none means they stopped it. `cancel()` clears the notes
+        // on its way out, so a stop always beats a steer in a race.
+        const notes = this.takeSteerNotes(run.id);
+        if (notes.length === 0) {
+          await this.settle(run, 'cancelled', text.text, null, null);
+          return;
+        }
+        steers += 1;
+        steerLog.push(...notes);
+        // Durable and structured: the note is part of what this task was told,
+        // so a reconnecting client replays it in the right place in the trace.
+        await writer.write('run.steered', {
+          note: notes.join('\n'),
+          count: steers,
+          at: new Date().toISOString(),
+        });
+        // A fresh signal, because the old one is spent — and the same buffers,
+        // so the second pass appends to the same answer and the same trace.
+        controller = new AbortController();
+        this.active.set(run.id, controller);
+        console.log(`[run] ${run.id} steered (${steers}): ${notes.join(' / ').slice(0, 120)}`);
+        continue;
+      }
+      break;
+      } // passes of one task
+
+      if (!result) {
+        // The loop only leaves after a pass has produced something, so this is
+        // unreachable in practice. It is here because the type cannot know that,
+        // and because a run that ends without a result must still end.
+        await this.settle(run, 'failed', text.text, 'no_result', 'The task produced no output.');
         return;
       }
 
@@ -768,8 +918,9 @@ export class RunExecutor {
         environmentId: result.environmentId ?? null,
         // Whether this run inherited the workspace or was handed a new one. The
         // client renders that sentence; the id itself is a 32-character hex
-        // string that means nothing to the operator and reads like a bug.
-        continued: run.previousInteractionId !== null,
+        // string that means nothing to the operator and reads like a bug. A run
+        // steered mid-flight inherited one from itself, which counts.
+        continued: handles.previousInteractionId !== null || run.previousInteractionId !== null,
       });
       // Prove-it's-done: re-check the output against the durable record
       // before the run is marked done. Deterministic only — no engine calls,

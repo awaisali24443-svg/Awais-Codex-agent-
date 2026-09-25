@@ -36,7 +36,7 @@ import { Router, type Request, type Response } from 'express';
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { EventBus, StreamEvent } from '../events.js';
-import type { RunExecutor } from '../executor.js';
+import { MAX_STEER_NOTE_CHARS, type RunExecutor } from '../executor.js';
 import type { SecretsStore } from '../settings.js';
 import { budgetSnapshot } from '../budget.js';
 import { listArtifacts } from '../artifacts.js';
@@ -354,6 +354,55 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         downloadUrl: `/api/artifacts/${artifact.id}/download`,
       })),
     });
+  });
+
+  /**
+   * Steer a live task: "no, the other folder."
+   *
+   * Not a cancel and not a new task. The run keeps its id, its sandbox, its
+   * answer so far and its place in the day's budget; the pass in flight is
+   * stopped and a new one starts with the note appended. The route only
+   * validates and hands over — the executor owns what happens next, because
+   * only it knows whether a pass is actually live.
+   */
+  router.post('/runs/:id/steer', async (req: Request, res: Response) => {
+    const run = await getRun(db, req.params.id);
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    if (!executor.isRunning(run.id)) {
+      // A finished task is not steerable — that is what a follow-up message is
+      // for. Saying so is better than silently doing nothing.
+      res.status(409).json({
+        error: 'not_running',
+        message: 'That task is not running any more. Send a follow-up message instead.',
+      });
+      return;
+    }
+
+    const raw = (req.body as { note?: unknown })?.note;
+    if (typeof raw !== 'string' || !raw.trim()) {
+      res.status(400).json({ error: 'note_required', message: 'Say what to change.' });
+      return;
+    }
+    if (raw.trim().length > MAX_STEER_NOTE_CHARS) {
+      res.status(400).json({
+        error: 'note_too_long',
+        message: `Keep the note under ${MAX_STEER_NOTE_CHARS} characters — it is a correction, not a second brief.`,
+      });
+      return;
+    }
+
+    const taken = executor.steer(run.id, raw);
+    if (!taken) {
+      res.status(409).json({
+        error: 'not_running',
+        message: 'That task is not running any more. Send a follow-up message instead.',
+      });
+      return;
+    }
+    res.json({ ok: true, note: raw.trim().slice(0, MAX_STEER_NOTE_CHARS) });
   });
 
   router.post('/runs/:id/cancel', async (req: Request, res: Response) => {
