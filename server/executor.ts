@@ -321,6 +321,10 @@ export class RunExecutor {
               errorType: 'executor_crashed',
               errorMessage: (err.message ?? 'executor failed before the run settled').slice(0, 500),
             });
+            // This close bypasses execute()'s own settle, so fire the
+            // terminal hook here: listeners (done-ping, queue drain) treat
+            // this run as finished, because it is.
+            this.afterTerminal(run, 'failed');
           }
         } catch {
           // Best effort — the original failure is already logged loudly above.

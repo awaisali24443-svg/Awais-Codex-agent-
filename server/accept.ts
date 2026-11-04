@@ -28,7 +28,18 @@ import { looksLikeUiMission } from './design.js';
 import { directionPayload } from './design/directions.js';
 import { attachmentSummary, withAttachments, type Attachment } from './attachments.js';
 import { maybeAskPlanApproval } from './whatsapp/approvals.js';
-import { RunConflictError, createRun, getActiveRun, getRun, saveRunPlan, setRunStatus, type Run, type RunKind } from './runs.js';
+import {
+  RunConflictError,
+  createRun,
+  getActiveRun,
+  getRun,
+  listWaitingRuns,
+  promoteWaitingRun,
+  saveRunPlan,
+  setRunStatus,
+  type Run,
+  type RunKind,
+} from './runs.js';
 
 export const BUCKET_FOR_KIND: Record<RunKind, BudgetBucket> = {
   chat: 'web',
@@ -87,6 +98,12 @@ export type AcceptResult =
        * await it so an assertion can be made about the outcome.
        */
       planning?: Promise<void>;
+      /**
+       * True when the run did not start but was queued behind the same
+       * conversation's active run (status 'waiting'). It spends no budget
+       * until the drain promotes it.
+       */
+      queued?: boolean;
     }
   | { ok: false; reason: 'in_progress'; active: Run }
   | {
@@ -158,6 +175,9 @@ async function draftPlan(deps: AcceptDeps, run: Run): Promise<void> {
     });
     await refundRunBudget(db, BUCKET_FOR_KIND[run.kind]);
     console.error(`[run] ${run.id} planning pass failed:`, (err as Error).message);
+    // This failure freed the slot: a message queued behind this run gets its
+    // chance now, not whenever some unrelated future run happens to end.
+    await drainQueue(deps).catch(() => {});
   }
 }
 
@@ -187,8 +207,76 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
 
   // Optimisation for a readable message — the partial unique index is what
   // actually prevents two tasks from running at once.
-  const active = await getActiveRun(db);
-  if (active) return { ok: false, reason: 'in_progress', active };
+  let active = await getActiveRun(db);
+  if (!active && (await listWaitingRuns(db)).length > 0) {
+    // The slot freed a breath ago (a terminal flip whose fire-and-forget
+    // drain has not run yet): queued messages have first claim on it, so a
+    // fresh acceptance cannot jump the queue by arriving in that window.
+    await drainQueue(deps).catch(() => {});
+    active = await getActiveRun(db);
+  }
+  if (active) {
+    // The per-conversation queue: a message to the conversation that is
+    // already running is not refused — it waits. The run row is inserted in
+    // the 'waiting' status, which holds no active slot, spends no budget,
+    // and starts only when the drain promotes it after the current run
+    // finishes. A message to any OTHER conversation (or with no conversation
+    // at all) keeps the plain refusal: other conversations are unaffected.
+    //
+    // Web chat only. WhatsApp has its own designed answer to a busy agent —
+    // a polite "still on this one" refusal the operator can act on — and no
+    // queue UI to show a waiting message in; silently turning a WhatsApp
+    // text into a later mission would break that contract. API/scheduled
+    // callers likewise keep the refusal they already handle.
+    if (input.kind === 'chat' && input.conversationId && active.conversationId === input.conversationId) {
+      const attachments = input.attachments ?? [];
+      try {
+        const waitingRun = await createRun(db, {
+          prompt: prompt + attachmentSummary(attachments),
+          // Note: the engine prompt (with attachment contents folded in) is
+          // not stored, by design — so a queued message's attachments reach
+          // the engine as their summary line only. The operator's words,
+          // which are the message, always arrive whole.
+          enginePrompt: null,
+          kind: input.kind,
+          engine: config.engineName,
+          conversationId: input.conversationId,
+          branchId: input.branchId ?? null,
+          fresh: false,
+          notifyWhatsapp: input.notifyWhatsapp ?? false,
+          deepResearch: input.deepResearch === true,
+          researchBudgetMinutes: input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
+          conversationTitle: input.conversationTitle ?? null,
+          waiting: true,
+        });
+        // Race: the active run may have finished while this insert was in
+        // flight, and its drain may already have swept past an empty queue.
+        // If the slot is free NOW, drain immediately — this message (or an
+        // older waiting one) starts instead of stranding.
+        if (!(await getActiveRun(db))) {
+          const drained = await drainQueue(deps).catch(() => null);
+          if (drained?.ok && drained.run.id === waitingRun.id) return drained;
+        }
+        const used = await peekDayTotal(db);
+        console.log(
+          `[queue] ${waitingRun.id} queued behind ${active.id} in conversation ${waitingRun.conversationId ?? 'none'}`,
+        );
+        return {
+          ok: true,
+          run: (await getRun(db, waitingRun.id)) ?? waitingRun,
+          remaining: Math.max(0, config.dailyRunBudget - used),
+          bucket,
+          queued: true,
+        };
+      } catch (err) {
+        // A waiting insert should never conflict (it takes no slot); if the
+        // storage layer says otherwise, fall back to the honest refusal
+        // rather than a 500.
+        if (!(err instanceof RunConflictError)) throw err;
+      }
+    }
+    return { ok: false, reason: 'in_progress', active };
+  }
 
   const attachments = input.attachments ?? [];
 
@@ -228,6 +316,27 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
     throw err;
   }
 
+  return launchRun(deps, run, bucket, looksComplex(prompt));
+}
+
+/**
+ * Spend one run of budget for an existing run row and put it to work:
+ * straight to the executor, or — for a complex web mission — into the
+ * background planning pass that pauses it in 'awaiting_plan'.
+ *
+ * Shared by `acceptRun` (a fresh run) and `drainQueue` (a promoted one): the
+ * two paths must spend and launch identically, or the queue becomes a fork
+ * with its own budget rules — exactly what this module exists to prevent.
+ */
+async function launchRun(
+  deps: AcceptDeps,
+  initialRun: Run,
+  bucket: BudgetBucket,
+  complex: boolean,
+): Promise<AcceptResult> {
+  const { db, executor, config } = deps;
+  let run = initialRun;
+
   // Spend only once the run exists. A refused task is closed immediately, so
   // the engine never sees the prompt and the day is not charged.
   try {
@@ -239,8 +348,11 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
     // 'awaiting_plan' and the mission executes only after the operator
     // approves (or edits then approves). WhatsApp and API missions have no
     // approval UI, so they keep the direct path; simple questions never pay
-    // for a planning call.
-    if (input.kind === 'chat' && looksComplex(prompt)) {
+    // for a planning call. `complex` is judged on the OPERATOR's words (the
+    // stored prompt), never the wire prompt: attachments folded into the
+    // wire prompt add lines and bulk that would make a one-line question
+    // "look complex" and divert it into a planning pass it never asked for.
+    if (run.kind === 'chat' && complex) {
       // The root of "it takes minutes and shows nothing": this used to be an
       // awaited, non-streamed engine call *inside* the request. The operator
       // waited up to a minute for an HTTP response, had nothing to attach to,
@@ -260,7 +372,7 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
     // `run.prompt` now holds the wire prompt, file contents and all. Nothing
     // outside this process should ever see that, so the caller gets the row.
     run = (await getRun(db, run.id)) ?? run;
-    console.log(`[run] ${run.id} queued (${input.kind}, ${remaining} left today)`);
+    console.log(`[run] ${run.id} queued (${run.kind}, ${remaining} left today)`);
     return { ok: true, run, remaining, bucket };
   } catch (err) {
     if (err instanceof BudgetExceededError) {
@@ -292,6 +404,61 @@ export async function acceptRun(deps: AcceptDeps, input: AcceptInput): Promise<A
   }
 }
 
+/**
+ * Start the next queued message, if the single-active slot is free.
+ *
+ * Called whenever a run reaches a terminal state (the executor's onTerminal
+ * hook in main.ts, and the orphan-cancel route). The drain is deliberately
+ * conservative: it re-checks the slot itself, promotes the OLDEST waiting
+ * run (FIFO across conversations; per-conversation order is preserved
+ * because a conversation's messages queue in send order), and launches it
+ * through the exact same spend-and-launch path as a fresh acceptance. If
+ * another conversation's run is active, or the promotion loses the race for
+ * the slot, the message keeps waiting for the next drain.
+ *
+ * Returns the launch result, or null when nothing was started.
+ */
+export async function drainQueue(deps: AcceptDeps): Promise<AcceptResult | null> {
+  const { db, config } = deps;
+
+  let last: AcceptResult | null = null;
+  // Normally one round: a successful launch holds the slot and ends the
+  // drain. The loop exists for the launch that FAILS after promotion (the
+  // run is closed by launchRun's own cleanup, the slot is free again): the
+  // next waiting message still gets its chance in this same drain instead
+  // of waiting for a future terminal event that may never come. Capped so a
+  // pathological queue cannot spin here.
+  for (let round = 0; round < 8; round++) {
+    if (await getActiveRun(db)) return last;
+
+    // Budget known to be spent: leave the queue waiting. Promoting a
+    // message only for launchRun to fail it on the cap would destroy a
+    // message the operator sent in good faith; tomorrow's budget (or the
+    // next drain after it) starts it instead.
+    if ((await peekDayTotal(db)) >= config.dailyRunBudget) return last;
+
+    const [next] = await listWaitingRuns(db);
+    if (!next) return last;
+
+    const promoted = await promoteWaitingRun(db, next.id);
+    if (!promoted) return last;
+
+    console.log(
+      `[queue] ${promoted.id} promoted — queued message for conversation ${promoted.conversationId ?? 'none'} starting`,
+    );
+    try {
+      last = await launchRun(deps, promoted, BUCKET_FOR_KIND[promoted.kind], looksComplex(promoted.prompt));
+    } catch (err) {
+      console.error('[queue] launch of promoted run failed:', (err as Error).message);
+      continue;
+    }
+    // ok: the slot is now held by the promoted run — drain complete.
+    // !ok (budget raced past the peek): launchRun closed that one run;
+    // stop here so the rest of the queue is not failed one by one.
+    return last;
+  }
+  return last;
+}
 /**
  * Pre-flight cost estimate for a mission, shown in the composer before the
  * run starts. Two ingredients: the operator's own history (average tokens of

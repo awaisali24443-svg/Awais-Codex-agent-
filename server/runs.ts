@@ -27,6 +27,12 @@ export type RunStatus =
   | 'running'
   | 'paused'
   | 'awaiting_plan'
+  /**
+   * Queued behind the same conversation's active run. Holds NO active slot —
+   * deliberately outside `runs_single_active_idx` — and is promoted to
+   * 'queued' by the drain when the slot frees.
+   */
+  | 'waiting'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -289,6 +295,13 @@ export interface CreateRunInput {
   branchId?: string | null;
   /** Skip automatic continuation and start a fresh sandbox. */
   fresh?: boolean;
+  /**
+   * Insert in the 'waiting' status instead of 'queued': the per-conversation
+   * queue. A waiting run holds no active slot and resolves its continuation
+   * at promotion time, not now — the run it waits behind has not finished
+   * yet, and its sandbox is the one worth continuing.
+   */
+  waiting?: boolean;
   /** Opt-in: one WhatsApp "done" ping when a web-started run finishes. */
   notifyWhatsapp?: boolean;
   /**
@@ -344,7 +357,7 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
     branchId = await ensureMainBranch(db, conversationId);
   }
 
-  const continuation = input.fresh ? null : await resolveContinuation(db, conversationId);
+  const continuation = input.fresh || input.waiting ? null : await resolveContinuation(db, conversationId);
 
   const id = newId('run');
   try {
@@ -353,7 +366,7 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
         `INSERT INTO runs (id, conversation_id, kind, prompt, status, engine,
                            previous_interaction_id, environment_id, notify_whatsapp,
                            deep_research, research_budget_minutes)
-         VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10)`,
+         VALUES ($1, $2, $3, $4, $11, $5, $6, $7, $8, $9, $10)`,
         [
           id,
           conversationId,
@@ -365,6 +378,7 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
           input.notifyWhatsapp === true,
           input.deepResearch === true,
           input.deepResearch === true ? (input.researchBudgetMinutes ?? null) : null,
+          input.waiting === true ? 'waiting' : 'queued',
         ],
       );
       await tx.query(
@@ -387,6 +401,53 @@ export async function createRun(db: Db, input: CreateRunInput): Promise<Run> {
   // The caller passes this object straight to the executor; the database row it
   // was read from keeps the operator's own words.
   return enginePrompt ? { ...run, prompt: enginePrompt } : run;
+}
+
+/** Every run waiting in a conversation queue, oldest first (FIFO). */
+export async function listWaitingRuns(db: Db): Promise<Run[]> {
+  const rows = await db.query<RunRow>(
+    `SELECT ${RUN_COLUMNS} FROM runs
+      WHERE status = 'waiting'
+      ORDER BY started_at ASC`,
+  );
+  return rows.map(mapRun);
+}
+
+/**
+ * Promote a waiting run into the active slot: 'waiting' → 'queued', with its
+ * continuation resolved NOW — the run it waited behind has finished, and
+ * that run's sandbox is the one a follow-up should inherit.
+ *
+ * Returns null when the promotion did not happen: the run is no longer
+ * waiting, or the single-active slot was taken between the caller's check
+ * and this update (the unique index rejects the UPDATE; the row stays
+ * 'waiting' for the next drain).
+ */
+export async function promoteWaitingRun(db: Db, id: string): Promise<Run | null> {
+  const waiting = await getRun(db, id);
+  if (!waiting || waiting.status !== 'waiting') return null;
+
+  const continuation = waiting.conversationId
+    ? await resolveContinuation(db, waiting.conversationId)
+    : null;
+
+  try {
+    const rows = await db.query<{ id: string }>(
+      `UPDATE runs
+          SET status = 'queued',
+              previous_interaction_id = $2,
+              environment_id = $3
+        WHERE id = $1 AND status = 'waiting'
+        RETURNING id`,
+      [id, continuation?.interactionId ?? null, continuation?.environmentId ?? null],
+    );
+    if (!rows[0]) return null;
+  } catch (err) {
+    if (isActiveConflict(err)) return null;
+    throw err;
+  }
+
+  return getRun(db, id);
 }
 
 export async function setRunStatus(

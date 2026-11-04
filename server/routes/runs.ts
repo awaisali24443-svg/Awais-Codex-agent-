@@ -40,7 +40,7 @@ import type { RunExecutor } from '../executor.js';
 import type { SecretsStore } from '../settings.js';
 import { budgetSnapshot } from '../budget.js';
 import { listArtifacts } from '../artifacts.js';
-import { BUCKET_FOR_KIND, acceptRun, estimateRunCost, type AcceptResult } from '../accept.js';
+import { BUCKET_FOR_KIND, acceptRun, drainQueue, estimateRunCost, type AcceptResult } from '../accept.js';
 import { looksLikeUiMission } from '../design.js';
 import { directionById, directionPayload } from '../design/directions.js';
 import {
@@ -161,6 +161,9 @@ function sendAccepted(res: Response, result: AcceptResult, config: AppConfig, br
 
   res.status(201).json({
     run: result.run,
+    // A queued acceptance is not a started run: say so on the wire, or the
+    // client can only guess from the status string.
+    queued: result.queued ?? false,
     branchId: branchId ?? null,
     budget: { bucket: result.bucket, remaining: result.remaining, limit: config.dailyRunBudget },
   });
@@ -344,6 +347,12 @@ export function createRunRoutes(deps: RunRouteDeps): Router {
         type: 'run.cancelled',
         payload: { status: 'cancelled', errorType: 'orphaned' },
       });
+      // Closing an orphan frees the slot outside the executor, so the
+      // executor's terminal hook never fires for it: drain the queue here
+      // instead, or a queued message would wait for a run that never ends.
+      void drainQueue({ db, executor, config, secrets }).catch((err: Error) =>
+        console.error('[queue] drain after orphan cancel failed:', err.message),
+      );
     }
     res.json({ ok: true, signalled });
   });

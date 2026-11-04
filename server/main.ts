@@ -16,7 +16,7 @@ import { RunExecutor } from './executor.js';
 import { ScriptedEngine } from './engine/scripted.js';
 import { AntigravityEngine } from './engine/antigravity.js';
 import type { Engine } from './engine/types.js';
-import { acceptRun } from './accept.js';
+import { acceptRun, drainQueue } from './accept.js';
 import { WhatsAppService } from './whatsapp/lifecycle.js';
 import { sendDonePing } from './whatsapp/doneping.js';
 import { claimDueReminders, markReminderFired, releaseReminder } from './reminders.js';
@@ -139,6 +139,14 @@ async function boot(): Promise<void> {
     // module never throws, and the executor guards the hook anyway.
     onTerminal: (run, outcome) => {
       void sendDonePing({ db, secrets }, run, outcome);
+      // A finished run frees the single-active slot: start the next queued
+      // message, if any is waiting. drainQueue re-checks the slot itself and
+      // no-ops when nothing waits or the slot was retaken. Fire-and-forget —
+      // a drain failure must never break the completion path; the next
+      // terminal event retries it.
+      void drainQueue({ db, executor, config, secrets }).catch((err: Error) =>
+        console.error('[queue] drain after terminal failed:', err.message),
+      );
     },
   });
   console.log(`[boot] engine: ${config.engineName}`);
@@ -150,6 +158,23 @@ async function boot(): Promise<void> {
       `[boot] orphans: ${recovery.resumed} resumed, ${recovery.failed} marked interrupted`,
     );
   }
+
+  // Queue sweep: the per-conversation queue drains on every terminal event,
+  // but a few slot-freeing paths live outside the executor (boot recovery
+  // above, WhatsApp-side closes, a crash between status flip and hook). A
+  // slow sweep is the backstop that makes "queued messages always start"
+  // true anyway: every minute, if the slot is free and a message waits,
+  // start it. drainQueue re-checks everything itself, so the tick is a
+  // no-op in the common case.
+  void drainQueue({ db, executor, config, secrets }).catch((err: Error) =>
+    console.error('[queue] boot drain failed:', err.message),
+  );
+  const queueSweep = setInterval(() => {
+    void drainQueue({ db, executor, config, secrets }).catch((err: Error) =>
+      console.error('[queue] sweep drain failed:', err.message),
+    );
+  }, 60_000);
+  queueSweep.unref?.();
 
   // ---- WhatsApp -----------------------------------------------------------
   // Polling is driven by the credential, not by a variable: the service starts
