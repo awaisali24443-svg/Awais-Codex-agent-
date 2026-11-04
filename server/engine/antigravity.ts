@@ -625,9 +625,34 @@ export class AntigravityEngine implements Engine {
             }
           }
 
+          // Does this block narrate itself? A step summary, a thought step's
+          // own text, or a thought_summary delta each feed the Thinking
+          // panel from this same block. The tool loop below needs to know:
+          // a block that already narrates gets no synthetic line (that
+          // would duplicate it), and a block with tools but no narration
+          // gets one, so the panel never sits silent through tool work.
+          const stepType = typeof data.step?.type === 'string' ? data.step.type.toLowerCase() : '';
+          const stepThoughtText =
+            !data.step?.summary && (stepType === 'thought' || stepType === 'thought_summary')
+              ? extractContentText(data.step?.content)
+              : '';
+          const deltaThoughtText =
+            data.delta?.type === 'thought_summary'
+              ? extractContentText(data.delta.content) ||
+                (typeof data.delta.text === 'string' ? data.delta.text : '')
+              : '';
+          const blockNarrated = Boolean(data.step?.summary) || Boolean(stepThoughtText) || Boolean(deltaThoughtText);
+
           for (const call of data.step?.tool_calls ?? []) {
             if (!call?.name) continue;
             emit.tool(call.name, call.arguments ?? {});
+            if (!blockNarrated) {
+              // Synthetic narration: the upstream sent the tool call with
+              // nothing to say about it, so the engine says the true, small
+              // thing — which tool is being used — in the same channel real
+              // narration uses.
+              emit.thinking(`Using ${call.name}…\n`, 'narration');
+            }
             const artifact = findArtifact(call.arguments);
             if (artifact && !artifacts.has(artifact)) {
               artifacts.add(artifact);
@@ -641,23 +666,18 @@ export class AntigravityEngine implements Engine {
           // step.start events carry a typed step object. A thought step may hold
           // its text as Content parts rather than a summary — that is the
           // thinking channel too. (Tool-call steps reach the tool panel through
-          // the generic tool_calls loop below, for every event name.)
-          const stepType = typeof data.step?.type === 'string' ? data.step.type.toLowerCase() : '';
-          if (!data.step?.summary && (stepType === 'thought' || stepType === 'thought_summary')) {
-            const stepThought = extractContentText(data.step?.content);
-            if (stepThought && stepThought !== lastThought) {
-              lastThought = stepThought;
-              emit.thinking(stepThought, 'reasoning');
-            }
+          // the generic tool_calls loop above, for every event name.) The
+          // text itself was extracted before the tool loop (see blockNarrated).
+          if (stepThoughtText && stepThoughtText !== lastThought) {
+            lastThought = stepThoughtText;
+            emit.thinking(stepThoughtText, 'reasoning');
           }
 
           if (data.delta) {
             if (data.delta.type === 'thought_summary') {
               // Live reasoning deltas: the text lives in a Content object
-              // (parts[]), not under a `text` key.
-              const thought =
-                extractContentText(data.delta.content) ||
-                (typeof data.delta.text === 'string' ? data.delta.text : '');
+              // (parts[]), not under a `text` key. Extracted once, above.
+              const thought = deltaThoughtText;
               if (thought && thought !== lastThought) {
                 lastThought = thought;
                 emit.thinking(thought, 'reasoning');

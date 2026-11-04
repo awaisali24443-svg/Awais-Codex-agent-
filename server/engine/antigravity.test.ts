@@ -811,6 +811,110 @@ describe('live thinking summaries', () => {
   });
 });
 
+describe('synthetic thinking for tool calls', () => {
+  test('a tool block with no narration still produces a Thinking line', async () => {
+    fake = await startFake((_req, res) =>
+      sse(res, [
+        { event: 'interaction.start', data: { interaction: { id: 'int_toolonly' } } },
+        {
+          event: 'step',
+          data: {
+            step: {
+              tool_calls: [
+                { name: 'create_file', arguments: { TargetFile: 'x.txt' } },
+                { name: 'run_tests', arguments: {} },
+              ],
+            },
+          },
+        },
+        {
+          event: 'interaction.complete',
+          data: { interaction: { id: 'int_toolonly', status: 'completed', output_text: 'done' } },
+        },
+      ]),
+    );
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    await engine.run('quiet tools', ctx);
+
+    assert.deepEqual(seen.tools, ['create_file', 'run_tests']);
+    assert.ok(
+      seen.thinking.includes('Using create_file…'),
+      `thinking panel got: ${JSON.stringify(seen.thinking)}`,
+    );
+    assert.ok(
+      seen.thinking.includes('Using run_tests…'),
+      `thinking panel got: ${JSON.stringify(seen.thinking)}`,
+    );
+  });
+
+  test('a tool block WITH narration gets no duplicate synthetic line', async () => {
+    fake = await startFake((_req, res) =>
+      sse(res, [
+        { event: 'interaction.start', data: { interaction: { id: 'int_narrated' } } },
+        {
+          event: 'step',
+          data: {
+            step: {
+              summary: 'Creating the file now',
+              tool_calls: [{ name: 'create_file', arguments: { TargetFile: 'x.txt' } }],
+            },
+          },
+        },
+        {
+          event: 'interaction.complete',
+          data: { interaction: { id: 'int_narrated', status: 'completed', output_text: 'done' } },
+        },
+      ]),
+    );
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    await engine.run('narrated tools', ctx);
+
+    assert.deepEqual(seen.tools, ['create_file']);
+    assert.ok(seen.thinking.includes('Creating the file now'));
+    assert.ok(
+      !seen.thinking.includes('Using create_file'),
+      `synthetic line duplicated narration: ${JSON.stringify(seen.thinking)}`,
+    );
+  });
+
+  test('a tool block narrated by a thought step gets no synthetic line either', async () => {
+    fake = await startFake((_req, res) =>
+      sse(res, [
+        { event: 'interaction.start', data: { interaction: { id: 'int_thoughtblock' } } },
+        {
+          event: 'step.start',
+          data: {
+            step: {
+              type: 'thought',
+              content: { parts: [{ text: 'Checking the build config' }] },
+              tool_calls: [{ name: 'run_tests', arguments: {} }],
+            },
+          },
+        },
+        {
+          event: 'interaction.complete',
+          data: { interaction: { id: 'int_thoughtblock', status: 'completed', output_text: 'done' } },
+        },
+      ]),
+    );
+    const engine = engineFor(fake.base);
+    const { ctx, seen } = makeCtx();
+
+    await engine.run('thought plus tools', ctx);
+
+    assert.deepEqual(seen.tools, ['run_tests']);
+    assert.ok(seen.thinking.includes('Checking the build config'));
+    assert.ok(
+      !seen.thinking.includes('Using run_tests'),
+      `synthetic line duplicated thought narration: ${JSON.stringify(seen.thinking)}`,
+    );
+  });
+});
+
 describe('recovery and cancellation', () => {
   test('a cut stream recovers the stored interaction instead of truncating', async () => {
     fake = await startFake((req, res) => {
