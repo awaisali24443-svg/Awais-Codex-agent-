@@ -56,6 +56,7 @@ import {
   verificationPassed,
   type VerificationCheck,
 } from './mission_verify.js';
+import { verifyRunClosure } from './run_verify.js';
 
 /** How often the full text so far is written to Postgres while streaming. */
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 750;
@@ -325,6 +326,9 @@ export class RunExecutor {
             // terminal hook here: listeners (done-ping, queue drain) treat
             // this run as finished, because it is.
             this.afterTerminal(run, 'failed');
+            // And verify the closure like any other close: it will honestly
+            // record that this path left no terminal event in the log.
+            await this.verifyClosure(run, false);
           }
         } catch {
           // Best effort — the original failure is already logged loudly above.
@@ -793,6 +797,7 @@ export class RunExecutor {
             .map((c) => `${c.name} — ${c.evidence}`)
             .join('; ')}.`,
           verification,
+          extractUrls(finalText).length > 0,
         );
         return;
       }
@@ -841,6 +846,7 @@ export class RunExecutor {
           usage: { tokensIn: result.tokensIn ?? null, tokensOut: result.tokensOut ?? null },
         },
       });
+      await this.verifyClosure(run, extractUrls(finalText).length > 0);
       this.afterTerminal(run, 'completed');
       console.log(
         `[run] ${run.id} completed (${finalText.length} chars, ${thinking.text.length} chars thinking)`,
@@ -1130,6 +1136,39 @@ export class RunExecutor {
   }
 
   /**
+   * Closure verification (ECC pilot Phase 3a): after a run's terminal event
+   * is durably recorded, prove the closure itself — terminal event present
+   * in the log, source check recorded when the answer cited sources, and
+   * the run no longer holding the single-active slot — and record the
+   * verdict as a `run.verified` / `run.verification_failed` event.
+   *
+   * Best-effort by design: this runs AFTER the run is already closed, so a
+   * failure here changes nothing about the run; it only leaves evidence.
+   */
+  private async verifyClosure(run: Run, hadUrls: boolean): Promise<void> {
+    try {
+      const checks = await verifyRunClosure(this.deps.db, run.id, { hadUrls });
+      const passed = checks.every((c) => c.passed);
+      const type = passed ? 'run.verified' : 'run.verification_failed';
+      const payload = {
+        checked: checks.length,
+        passed: checks.filter((c) => c.passed).length,
+        failed: checks.filter((c) => !c.passed).map((c) => c.name),
+        checks,
+      };
+      const seq = await emitEvent(this.deps.db, run.id, type, payload);
+      this.deps.bus.publish(run.id, { seq, type, payload });
+      if (!passed) {
+        console.error(
+          `[run] ${run.id} closure verification failed: ${payload.failed.join(', ')}`,
+        );
+      }
+    } catch (err) {
+      console.error(`[run] ${run.id} closure verification errored:`, (err as Error).message);
+    }
+  }
+
+  /**
    * A hook that runs after a terminal state is fully recorded. Wrapped so a
    * buggy listener can log loudly but never take the executor down with it.
    */
@@ -1157,6 +1196,7 @@ export class RunExecutor {
     errorType: string | null,
     errorMessage: string | null,
     verification: VerificationCheck[] | null = null,
+    hadUrls = false,
   ): Promise<void> {
     const runId = run.id;
     const text = inMemoryText || (await this.snapshotOf(runId));
@@ -1173,6 +1213,9 @@ export class RunExecutor {
         type: `run.${status}`,
         payload: { status, errorType, verification },
       });
+      // Same order as the completed path: verify the closure first, then
+      // fire the terminal hook (which may start the next mission).
+      await this.verifyClosure(run, hadUrls);
       this.afterTerminal(run, status);
       console.log(`[run] ${runId} ${status}${errorMessage ? `: ${errorMessage}` : ''}`);
     } catch (err) {
